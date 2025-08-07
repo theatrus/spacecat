@@ -4,7 +4,7 @@
       "GlobalTriggers": [
         {
           "Status": "CREATED",
-          "TimeToFlip": 4.251316006583333,
+          "TimeToFlip": 1.43899854025,
           "Name": "Meridian Flip_Trigger"
         },
         {
@@ -22,31 +22,31 @@
         {
           "Status": "CREATED",
           "TargetTemperature": 5,
-          "DeltaTemperature": 0,
+          "DeltaTemperature": 0.2,
           "Name": "AF After Temperature Change_Trigger"
         }
       ]
     },
     {
-      "Status": "CREATED",
+      "Status": "FINISHED",
       "Items": [
         {
-          "Status": "CREATED",
+          "Status": "FINISHED",
           "Items": [
             {
-              "Status": "CREATED",
+              "Status": "FINISHED",
               "Text": "This set of instructions will be executed in parallel and prepare your equipment to start a sequence. Add or remove items based on your requirements.",
               "Name": "Annotation"
             },
             {
-              "Status": "CREATED",
+              "Status": "FINISHED",
               "MinCoolingTime": 0,
               "Temperature": -10,
               "Name": "Cool Camera"
             },
             {
               "Name": "Unpark Scope",
-              "Status": "CREATED"
+              "Status": "FINISHED"
             }
           ],
           "Triggers": [],
@@ -59,28 +59,28 @@
       "Name": "Start_Container"
     },
     {
-      "Status": "CREATED",
+      "Status": "RUNNING",
       "Items": [
         {
-          "Status": "CREATED",
+          "Status": "RUNNING",
           "Items": [
             {
-              "Status": "CREATED",
+              "Status": "FINISHED",
               "Text": "A typical sequence that will center on a specific target and takes a specific amount of exposures for certain filters.",
               "Name": "Annotation"
             },
             {
-              "Status": "CREATED",
+              "Status": "FINISHED",
               "Text": "First a few steps will be executed one after another, to first center the target, bring it to the specified rotation, run an autofocus, start the guiding and then finally start the actual exposures.",
               "Name": "Annotation"
             },
             {
-              "Status": "CREATED",
+              "Status": "FINISHED",
               "Text": "Add or remove items based on your requirements.",
               "Name": "Annotation"
             },
             {
-              "Status": "CREATED",
+              "Status": "FINISHED",
               "Coordinates": {
                 "RA": 20.201944444666665,
                 "RAString": "20:12:07",
@@ -89,46 +89,46 @@
                 "DecString": "38° 21' 18\"",
                 "Epoch": "J2000",
                 "DateTime": {
-                  "Now": "2025-08-06T20:30:17.1093212-07:00",
-                  "UtcNow": "2025-08-07T03:30:17.1093306Z"
+                  "Now": "2025-08-06T22:49:25.5025095-07:00",
+                  "UtcNow": "2025-08-07T05:49:25.5025176Z"
                 }
               },
               "Name": "Slew, center and rotate"
             },
             {
               "Name": "Run Autofocus",
-              "Status": "CREATED"
+              "Status": "FINISHED"
             },
             {
               "ForceCalibration": false,
-              "Status": "CREATED",
+              "Status": "FINISHED",
               "Name": "Start Guiding"
             },
             {
-              "Status": "CREATED",
+              "Status": "RUNNING",
               "Items": [
                 {
-                  "Status": "CREATED",
+                  "Status": "FINISHED",
                   "Text": "The following sets will take 20 exposures for a specific filter.",
                   "Name": "Annotation"
                 },
                 {
-                  "Status": "CREATED",
+                  "Status": "FINISHED",
                   "Text": "While this set is running, the triggers above will be evaluated after each step and executed when required.",
                   "Name": "Annotation"
                 },
                 {
-                  "Status": "CREATED",
+                  "Status": "RUNNING",
                   "Items": [
                     {
-                      "Status": "CREATED",
+                      "Status": "RUNNING",
                       "Iterations": 12,
                       "Type": "LIGHT",
                       "ExposureTime": 300,
-                      "DitherProgressExposures": 0,
+                      "DitherProgressExposures": 1,
                       "DitherTargetExposures": 3,
                       "Gain": -1,
-                      "ExposureCount": 0,
+                      "ExposureCount": 1,
                       "Binning": {
                         "Name": "1x1",
                         "X": 1,
@@ -143,7 +143,7 @@
                       "Iterations": 12,
                       "Type": "LIGHT",
                       "ExposureTime": 300,
-                      "DitherProgressExposures": 0,
+                      "DitherProgressExposures": 1,
                       "DitherTargetExposures": 3,
                       "Gain": -1,
                       "ExposureCount": 0,
@@ -161,7 +161,7 @@
                       "Iterations": 12,
                       "Type": "LIGHT",
                       "ExposureTime": 300,
-                      "DitherProgressExposures": 0,
+                      "DitherProgressExposures": 1,
                       "DitherTargetExposures": 3,
                       "Gain": -1,
                       "ExposureCount": 0,
@@ -179,16 +179,16 @@
                     {
                       "TargetExposures": 3,
                       "Status": "CREATED",
-                      "Exposures": 0,
+                      "Exposures": 1,
                       "Name": "Dither after Exposures_Trigger"
                     }
                   ],
                   "Conditions": [
                     {
-                      "CurrentAltitude": 46.94,
+                      "CurrentAltitude": 73.55,
                       "Status": "CREATED",
                       "Altitude": 0,
-                      "ExpectedTime": "03:40",
+                      "ExpectedTime": "03:39",
                       "Name": "Loop while Altitude Above Horizon_Condition"
                     }
                   ],

@@ -2,6 +2,17 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
+pub struct ImageResponse {
+    pub response: String, // Base64 encoded image data
+    pub error: String,
+    pub status_code: i32,
+    pub success: bool,
+    #[serde(rename = "Type")]
+    pub response_type: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
 pub struct ImageHistoryResponse {
     pub response: Vec<ImageMetadata>,
     pub error: String,

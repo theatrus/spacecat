@@ -43,6 +43,7 @@ pub struct Coordinates {
     pub dec: f64,
     pub dec_string: String,
     pub epoch: String,
+    #[serde(rename = "DateTime")]
     pub date_time: DateTime,
 }
 
@@ -136,6 +137,34 @@ pub struct StartGuiding {
 pub struct Annotation {
     pub status: String,
     pub text: String,
+    pub name: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct WarmCamera {
+    pub status: String,
+    pub min_warming_time: i32,
+    pub name: String,
+}
+
+// Additional trigger types seen in the updated JSON
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct DitherTrigger {
+    pub status: String,
+    pub target_exposures: i32,
+    pub exposures: i32,
+    pub name: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct AltitudeCondition {
+    pub status: String,
+    pub current_altitude: f64,
+    pub altitude: f64,
+    pub expected_time: String,
     pub name: String,
 }
 
