@@ -11,7 +11,7 @@ pub struct EventHistoryResponse {
     pub response_type: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct Event {
     pub time: String,
@@ -20,7 +20,7 @@ pub struct Event {
     pub details: Option<EventDetails>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum EventDetails {
     FilterWheelChange {
@@ -32,7 +32,7 @@ pub enum EventDetails {
     // Add other event details as needed
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct FilterInfo {
     pub name: String,

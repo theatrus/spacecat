@@ -1,13 +1,16 @@
 mod api;
 mod config;
 mod events;
+mod poller;
 mod sequence;
 
 use api::SpaceCatApiClient;
 use config::Config;
 use events::EventHistoryResponse;
+use poller::EventPoller;
 use sequence::SequenceResponse;
 use std::fs;
+use std::time::Duration;
 
 #[tokio::main]
 async fn main() {
@@ -74,6 +77,69 @@ async fn main() {
             }
         }
     }
+
+    println!("\n--- Event Polling Demo ---");
+
+    // Demonstrate the event poller
+    match demo_event_polling().await {
+        Ok(_) => println!("Polling demo completed"),
+        Err(e) => println!("Polling demo failed: {}", e),
+    }
+}
+
+async fn demo_event_polling() -> Result<(), Box<dyn std::error::Error>> {
+    // Load configuration and create client
+    let config = Config::load_or_default();
+    let client = SpaceCatApiClient::new(config.api)?;
+
+    // Create event poller with 2-second interval
+    let mut poller = EventPoller::new(client, Duration::from_secs(2));
+
+    println!("Starting event polling demo (will run for 10 seconds)...");
+    println!("Poll interval: {:?}", poller.poll_interval());
+
+    // Poll for new events a few times
+    for i in 1..=5 {
+        println!("Poll #{}", i);
+
+        match poller.poll_new_events().await {
+            Ok(result) => {
+                println!("  {}", result.summary());
+
+                if result.has_new_events() {
+                    println!("  New events found:");
+                    for event in &result.new_events {
+                        println!("    {} at {}", event.event, event.time);
+                    }
+
+                    // Show specific event types
+                    let image_saves = result.get_events_by_type("IMAGE-SAVE");
+                    if !image_saves.is_empty() {
+                        println!("    → {} image saves in this batch", image_saves.len());
+                    }
+
+                    let filter_changes = result.get_events_by_type("FILTERWHEEL-CHANGED");
+                    if !filter_changes.is_empty() {
+                        println!(
+                            "    → {} filter changes in this batch",
+                            filter_changes.len()
+                        );
+                    }
+                } else {
+                    println!("  No new events since last poll");
+                }
+
+                println!("  Total events seen: {}", poller.seen_event_count());
+            }
+            Err(e) => {
+                println!("  Poll failed: {}", e);
+            }
+        }
+
+        println!();
+    }
+
+    Ok(())
 }
 
 fn load_sequence(filename: &str) -> Result<SequenceResponse, Box<dyn std::error::Error>> {
