@@ -1,5 +1,6 @@
 use crate::config::ApiConfig;
 use crate::events::EventHistoryResponse;
+use crate::images::ImageHistoryResponse;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -183,5 +184,23 @@ impl SpaceCatApiClient {
     /// Version request with retry logic
     async fn version_request_with_retry(&self) -> Result<VersionResponse, ApiError> {
         self.generic_request_with_retry("/version", &[]).await
+    }
+
+    /// Fetch image history from the /image-history endpoint
+    pub async fn get_image_history(&self) -> Result<ImageHistoryResponse, ApiError> {
+        self.get_image_history_with_params(&[]).await
+    }
+
+    /// Fetch image history with custom query parameters
+    pub async fn get_image_history_with_params(
+        &self,
+        params: &[(&str, &str)],
+    ) -> Result<ImageHistoryResponse, ApiError> {
+        self.generic_request_with_retry("/image-history", params).await
+    }
+
+    /// Fetch all image history (equivalent to ?all=true parameter)
+    pub async fn get_all_image_history(&self) -> Result<ImageHistoryResponse, ApiError> {
+        self.get_image_history_with_params(&[("all", "true")]).await
     }
 }
