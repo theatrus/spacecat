@@ -1,0 +1,12 @@
+{
+  "api": {
+    "base_url": "http://192.168.0.82:1888",
+    "timeout_seconds": 30,
+    "retry_attempts": 3
+  },
+  "logging": {
+    "level": "info",
+    "enable_file_logging": false,
+    "log_file": "spacecat.log"
+  }
+}
