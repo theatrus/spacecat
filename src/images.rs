@@ -11,6 +11,13 @@ pub struct ImageResponse {
     pub response_type: String,
 }
 
+#[derive(Debug)]
+pub struct ThumbnailResponse {
+    pub data: Vec<u8>, // Raw JPG image data
+    pub content_type: String,
+    pub status_code: u16,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct ImageHistoryResponse {

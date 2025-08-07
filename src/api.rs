@@ -1,6 +1,6 @@
 use crate::config::ApiConfig;
 use crate::events::EventHistoryResponse;
-use crate::images::{ImageHistoryResponse, ImageResponse};
+use crate::images::{ImageHistoryResponse, ImageResponse, ThumbnailResponse};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -217,5 +217,85 @@ impl SpaceCatApiClient {
     ) -> Result<ImageResponse, ApiError> {
         let endpoint = format!("/image/{}", index);
         self.generic_request_with_retry(&endpoint, params).await
+    }
+
+    /// Fetch a thumbnail for a specific image by index
+    pub async fn get_thumbnail(&self, index: u32) -> Result<ThumbnailResponse, ApiError> {
+        self.get_thumbnail_with_params(index, &[]).await
+    }
+
+    /// Fetch a thumbnail for a specific image by index with custom parameters
+    pub async fn get_thumbnail_with_params(
+        &self,
+        index: u32,
+        params: &[(&str, &str)],
+    ) -> Result<ThumbnailResponse, ApiError> {
+        let endpoint = format!("/image/thumbnail/{}", index);
+        
+        for attempt in 0..self.retry_attempts {
+            let mut url = format!("{}/v2/api{}", self.base_url, endpoint);
+            
+            if !params.is_empty() {
+                let query_params = params
+                    .iter()
+                    .map(|(k, v)| format!("{}={}", k, v))
+                    .collect::<Vec<_>>()
+                    .join("&");
+                url = format!("{}?{}", url, query_params);
+            }
+
+            let response = match self.client.get(&url).send().await {
+                Ok(resp) => resp,
+                Err(e) => {
+                    if attempt < self.retry_attempts - 1 {
+                        tokio::time::sleep(Duration::from_millis(1000 * (attempt + 1) as u64)).await;
+                        continue;
+                    }
+                    return Err(ApiError::Network(e));
+                }
+            };
+
+            let status_code = response.status().as_u16();
+            let content_type = response
+                .headers()
+                .get("content-type")
+                .and_then(|ct| ct.to_str().ok())
+                .unwrap_or("application/octet-stream")
+                .to_string();
+
+            if response.status().is_success() {
+                let data = match response.bytes().await {
+                    Ok(bytes) => bytes.to_vec(),
+                    Err(e) => {
+                        if attempt < self.retry_attempts - 1 {
+                            tokio::time::sleep(Duration::from_millis(1000 * (attempt + 1) as u64)).await;
+                            continue;
+                        }
+                        return Err(ApiError::Network(e));
+                    }
+                };
+
+                return Ok(ThumbnailResponse {
+                    data,
+                    content_type,
+                    status_code,
+                });
+            } else {
+                let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+                if attempt < self.retry_attempts - 1 {
+                    tokio::time::sleep(Duration::from_millis(1000 * (attempt + 1) as u64)).await;
+                    continue;
+                }
+                return Err(ApiError::Http {
+                    status: status_code,
+                    message: error_text,
+                });
+            }
+        }
+
+        Err(ApiError::Http {
+            status: 500,
+            message: "All retry attempts exhausted".to_string(),
+        })
     }
 }

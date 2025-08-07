@@ -59,6 +59,18 @@ enum Commands {
         #[arg(short, long)]
         params: Vec<String>,
     },
+    /// Get a thumbnail for a specific image by index
+    GetThumbnail {
+        /// Image index to retrieve thumbnail for
+        #[arg(default_value = "0")]
+        index: u32,
+        /// Output file path for the thumbnail
+        #[arg(short, long, default_value = "thumbnail.jpg")]
+        output: String,
+        /// Image type filter (LIGHT, FLAT, DARK, BIAS, SNAPSHOT)
+        #[arg(long)]
+        image_type: Option<String>,
+    },
     /// Poll for new events in real-time
     Poll {
         /// Poll interval in seconds
@@ -100,6 +112,12 @@ async fn main() {
         Commands::GetImage { index, params } => {
             if let Err(e) = cmd_get_image(index, &params).await {
                 eprintln!("GetImage command failed: {}", e);
+                std::process::exit(1);
+            }
+        }
+        Commands::GetThumbnail { index, output, image_type } => {
+            if let Err(e) = cmd_get_thumbnail(index, &output, image_type.as_deref()).await {
+                eprintln!("GetThumbnail command failed: {}", e);
                 std::process::exit(1);
             }
         }
@@ -201,6 +219,7 @@ async fn cmd_images(local: bool, file: &str) -> Result<(), Box<dyn std::error::E
                     images.response.len()
                 );
                 display_image_statistics(&images);
+                display_last_images(&images, 3);
             }
             Err(e) => {
                 return Err(format!("Failed to load image history from file: {}", e).into());
@@ -215,6 +234,7 @@ async fn cmd_images(local: bool, file: &str) -> Result<(), Box<dyn std::error::E
                     images.response.len()
                 );
                 display_image_statistics(&images);
+                display_last_images(&images, 3);
             }
             Err(e) => {
                 return Err(format!("Failed to load images from API: {}", e).into());
@@ -300,6 +320,59 @@ async fn cmd_get_image(index: u32, params: &[String]) -> Result<(), Box<dyn std:
         }
         Err(e) => {
             return Err(format!("Failed to get image: {}", e).into());
+        }
+    }
+    
+    Ok(())
+}
+
+async fn cmd_get_thumbnail(
+    index: u32, 
+    output_path: &str, 
+    image_type: Option<&str>
+) -> Result<(), Box<dyn std::error::Error>> {
+    println!("Getting thumbnail for image at index {} from API...", index);
+    
+    let config = Config::load_or_default();
+    let client = SpaceCatApiClient::new(config.api)?;
+    
+    // Build parameters
+    let mut params = vec![];
+    if let Some(img_type) = image_type {
+        params.push(("imageType", img_type));
+    }
+    
+    match client.get_thumbnail_with_params(index, &params).await {
+        Ok(thumbnail_response) => {
+            println!("Successfully retrieved thumbnail:");
+            println!("  Status Code: {}", thumbnail_response.status_code);
+            println!("  Content Type: {}", thumbnail_response.content_type);
+            println!("  Data Size: {} bytes", thumbnail_response.data.len());
+            
+            // Save the thumbnail to disk
+            match std::fs::write(output_path, &thumbnail_response.data) {
+                Ok(()) => {
+                    println!("  Thumbnail saved to: {}", output_path);
+                    
+                    // Try to detect image format from first few bytes
+                    if thumbnail_response.data.len() >= 4 {
+                        let header = &thumbnail_response.data[0..4];
+                        if header.starts_with(&[0xFF, 0xD8, 0xFF]) {
+                            println!("  Format: JPEG");
+                        } else if header.starts_with(b"\x89PNG") {
+                            println!("  Format: PNG"); 
+                        } else {
+                            println!("  Format: Unknown (header: {:02x?})", header);
+                        }
+                    }
+                }
+                Err(e) => {
+                    return Err(format!("Failed to save thumbnail to {}: {}", output_path, e).into());
+                }
+            }
+        }
+        Err(e) => {
+            return Err(format!("Failed to get thumbnail: {}", e).into());
         }
     }
     
@@ -400,6 +473,9 @@ async fn cmd_all() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\n=== Get Image Demo ===");
     cmd_get_image(0, &[]).await?;
+
+    println!("\n=== Get Thumbnail Demo ===");
+    cmd_get_thumbnail(0, "demo_thumbnail.jpg", None).await?;
 
     println!("\n=== Polling Demo ===");
     cmd_poll(2, 5).await?;
@@ -554,5 +630,41 @@ fn display_image_statistics(images: &ImageHistoryResponse) {
         let min_temp = temperatures.iter().fold(f64::INFINITY, |a, &b| a.min(b));
         let max_temp = temperatures.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
         println!("Temperature range: {:.1}°C to {:.1}°C", min_temp, max_temp);
+    }
+}
+
+fn display_last_images(images: &ImageHistoryResponse, count: usize) {
+    println!("\n=== Last {} Images ===", count);
+    
+    if images.response.is_empty() {
+        println!("No images available");
+        return;
+    }
+    
+    // Get the last N images (images are typically in chronological order)
+    let last_images: Vec<_> = images.response.iter()
+        .enumerate()
+        .rev()  // Reverse to get most recent first
+        .take(count)
+        .collect();
+    
+    if last_images.is_empty() {
+        println!("No images to display");
+        return;
+    }
+    
+    for (index, image) in last_images.iter().rev() {  // Reverse again to show in chronological order
+        println!("\nImage Index {}: ", index);
+        println!("  Date: {}", image.date);
+        println!("  Type: {}", image.image_type);
+        println!("  Filter: {}", image.filter);
+        println!("  Exposure: {:.1}s", image.exposure_time);
+        println!("  Temperature: {:.1}°C", image.temperature);
+        println!("  Camera: {}", image.camera_name);
+        println!("  Telescope: {}", image.telescope_name);
+        println!("  Gain: {}, Offset: {}", image.gain, image.offset);
+        println!("  Stars: {}, HFR: {:.2}", image.stars, image.hfr);
+        println!("  Mean: {:.1}, Median: {:.1}, StDev: {:.1}", 
+                image.mean, image.median, image.st_dev);
     }
 }
