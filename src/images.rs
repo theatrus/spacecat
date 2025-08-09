@@ -106,7 +106,11 @@ impl ImageHistoryResponse {
     }
 
     /// Get images in a temperature range
-    pub fn get_images_in_temperature_range(&self, min_temp: f64, max_temp: f64) -> Vec<&ImageMetadata> {
+    pub fn get_images_in_temperature_range(
+        &self,
+        min_temp: f64,
+        max_temp: f64,
+    ) -> Vec<&ImageMetadata> {
         self.response
             .iter()
             .filter(|image| image.temperature >= min_temp && image.temperature <= max_temp)
@@ -144,13 +148,15 @@ impl ImageHistoryResponse {
         let total_images = self.response.len();
         let light_frames = self.get_light_frames().len();
         let calibration_frames = self.get_calibration_frames().len();
-        
-        let total_exposure_time: f64 = self.get_light_frames()
+
+        let total_exposure_time: f64 = self
+            .get_light_frames()
             .iter()
             .map(|img| img.exposure_time)
             .sum();
-        
-        let unique_filters: std::collections::HashSet<_> = self.response
+
+        let unique_filters: std::collections::HashSet<_> = self
+            .response
             .iter()
             .map(|img| img.filter.as_str())
             .collect();

@@ -29,7 +29,10 @@ impl DualPoller {
         }
     }
 
-    pub fn with_discord_webhook(mut self, webhook_url: &str) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn with_discord_webhook(
+        mut self,
+        webhook_url: &str,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         self.discord_webhook = Some(DiscordWebhook::new(webhook_url.to_string())?);
         Ok(self)
     }
@@ -56,22 +59,26 @@ impl DualPoller {
                         // Skip filterwheel changed events where the filter didn't actually change
                         // This can happen when the filterwheel reports its position without actually moving
                         if event.event == "FILTERWHEEL-CHANGED" {
-                            if let Some(crate::events::EventDetails::FilterWheelChange { ref new, ref previous }) = event.details {
+                            if let Some(crate::events::EventDetails::FilterWheelChange {
+                                ref new,
+                                ref previous,
+                            }) = event.details
+                            {
                                 if new.name == previous.name {
                                     continue; // Skip this redundant event
                                 }
                             }
                         }
-                        
+
                         let key = self.event_key(&event);
                         if self.event_seen.insert(key) {
                             self.print_new_event(&event);
-                            
+
                             // Handle autofocus-finished events
                             if event.event == event_types::AUTOFOCUS_FINISHED {
                                 self.handle_autofocus_finished(&event).await;
                             }
-                            
+
                             if let Some(webhook) = &self.discord_webhook {
                                 self.send_event_to_discord(webhook, &event).await;
                             }
@@ -110,7 +117,11 @@ impl DualPoller {
             // Skip filterwheel changed events where the filter didn't actually change
             // This can happen when the filterwheel reports its position without actually moving
             if event.event == "FILTERWHEEL-CHANGED" {
-                if let Some(crate::events::EventDetails::FilterWheelChange { ref new, ref previous }) = event.details {
+                if let Some(crate::events::EventDetails::FilterWheelChange {
+                    ref new,
+                    ref previous,
+                }) = event.details
+                {
                     if new.name == previous.name {
                         continue; // Skip this redundant event
                     }
@@ -132,12 +143,7 @@ impl DualPoller {
     }
 
     fn event_key(&self, event: &Event) -> String {
-        format!(
-            "{}|{}|{:?}",
-            event.time,
-            event.event,
-            event.details
-        )
+        format!("{}|{}|{:?}", event.time, event.event, event.details)
     }
 
     fn image_key(&self, image: &ImageMetadata) -> String {
@@ -165,7 +171,10 @@ impl DualPoller {
         println!("  Temperature: {:.1}°C", image.temperature);
         println!("  Stars: {}, HFR: {:.2}", image.stars, image.hfr);
         println!("  RMS: {}", image.rms_text);
-        println!("  Mean: {:.1}, Median: {:.1}, StDev: {:.1}", image.mean, image.median, image.st_dev);
+        println!(
+            "  Mean: {:.1}, Median: {:.1}, StDev: {:.1}",
+            image.mean, image.median, image.st_dev
+        );
         println!("  Telescope: {}", image.telescope_name);
 
         println!();
@@ -203,7 +212,12 @@ impl DualPoller {
         }
     }
 
-    async fn send_image_to_discord(&self, webhook: &DiscordWebhook, image: &ImageMetadata, index: usize) {
+    async fn send_image_to_discord(
+        &self,
+        webhook: &DiscordWebhook,
+        image: &ImageMetadata,
+        index: usize,
+    ) {
         let color = match image.image_type.as_str() {
             "LIGHT" => colors::GREEN,
             "DARK" => colors::GRAY,
@@ -238,8 +252,15 @@ impl DualPoller {
         // Try to download and attach the thumbnail
         match self.client.get_thumbnail(index as u32).await {
             Ok(thumbnail_data) => {
-                let filename = format!("thumbnail_{}_{}.jpg", image.filter, image.date.replace(':', "-").replace(' ', "_"));
-                if let Err(e) = webhook.execute_with_file(None, Some(embed), &thumbnail_data.data, &filename).await {
+                let filename = format!(
+                    "thumbnail_{}_{}.jpg",
+                    image.filter,
+                    image.date.replace(':', "-").replace(' ', "_")
+                );
+                if let Err(e) = webhook
+                    .execute_with_file(None, Some(embed), &thumbnail_data.data, &filename)
+                    .await
+                {
                     eprintln!("Failed to send image with thumbnail to Discord: {}", e);
                 }
             }
@@ -259,21 +280,29 @@ impl DualPoller {
                 let new_target = extract_current_target(&sequence);
                 // Check if target changed
                 if new_target != self.current_target {
-                    if let (Some(old_target), Some(new_target_name)) = (&self.current_target, &new_target) {
+                    if let (Some(old_target), Some(new_target_name)) =
+                        (&self.current_target, &new_target)
+                    {
                         println!("[TARGET CHANGE] {} -> {}", old_target, new_target_name);
                         if let Some(webhook) = &self.discord_webhook {
-                            self.send_target_change_to_discord(webhook, old_target, new_target_name).await;
+                            self.send_target_change_to_discord(
+                                webhook,
+                                old_target,
+                                new_target_name,
+                            )
+                            .await;
                         }
                     } else if let Some(new_target_name) = &new_target {
                         println!("[TARGET START] {}", new_target_name);
                         if let Some(webhook) = &self.discord_webhook {
-                            self.send_target_start_to_discord(webhook, new_target_name).await;
+                            self.send_target_start_to_discord(webhook, new_target_name)
+                                .await;
                         }
                     }
-                    
+
                     self.current_target = new_target;
                 }
-                
+
                 self.current_sequence = Some(sequence);
             }
             Err(e) => {
@@ -285,8 +314,12 @@ impl DualPoller {
         }
     }
 
-
-    async fn send_target_change_to_discord(&self, webhook: &DiscordWebhook, old_target: &str, new_target: &str) {
+    async fn send_target_change_to_discord(
+        &self,
+        webhook: &DiscordWebhook,
+        old_target: &str,
+        new_target: &str,
+    ) {
         let embed = Embed::new()
             .title("🎯 Target Change")
             .color(colors::CYAN)
@@ -314,14 +347,15 @@ impl DualPoller {
     async fn handle_autofocus_finished(&self, event: &Event) {
         println!("[AUTOFOCUS FINISHED] {}", event.time);
         println!("Fetching autofocus results...");
-        
+
         match self.client.get_last_autofocus().await {
             Ok(autofocus_data) => {
                 self.display_autofocus_results(&autofocus_data);
-                
+
                 // Send to Discord if configured
                 if let Some(webhook) = &self.discord_webhook {
-                    self.send_autofocus_to_discord(webhook, &autofocus_data).await;
+                    self.send_autofocus_to_discord(webhook, &autofocus_data)
+                        .await;
                 }
             }
             Err(e) => {
@@ -339,44 +373,51 @@ impl DualPoller {
 
         let af_data = &af.response;
         let success_indicator = if af.is_successful() { "✅" } else { "⚠️" };
-        
+
         println!("{} Autofocus Summary", success_indicator);
         println!("  Filter: {}", af_data.filter);
         println!("  Method: {}", af_data.method);
         println!("  Temperature: {:.1}°C", af_data.temperature);
         println!("  Duration: {}", af_data.duration);
-        
+
         println!("Focus Results:");
-        println!("  Initial Position: {}", af_data.initial_focus_point.position);
-        println!("  Calculated Position: {} (HFR: {:.3})", 
-                af_data.calculated_focus_point.position, 
-                af_data.calculated_focus_point.value);
-        println!("  Position Change: {}", 
-                af_data.calculated_focus_point.position - af_data.initial_focus_point.position);
-        
+        println!(
+            "  Initial Position: {}",
+            af_data.initial_focus_point.position
+        );
+        println!(
+            "  Calculated Position: {} (HFR: {:.3})",
+            af_data.calculated_focus_point.position, af_data.calculated_focus_point.value
+        );
+        println!(
+            "  Position Change: {}",
+            af_data.calculated_focus_point.position - af_data.initial_focus_point.position
+        );
+
         println!("Quality Metrics:");
         println!("  Measurement Points: {}", af_data.measure_points.len());
         println!("  Best R-squared: {:.4}", af.get_best_r_squared());
-        
+
         let (min_pos, max_pos) = af_data.get_focus_range();
         println!("  Focus Range: {} - {}", min_pos, max_pos);
-        
+
         if let Some(best_hfr) = af_data.get_best_measured_hfr() {
             println!("  Best Measured HFR: {:.3}", best_hfr);
         }
     }
 
     async fn send_autofocus_to_discord(&self, webhook: &DiscordWebhook, af: &AutofocusResponse) {
-        let color = if af.is_successful() { 
-            colors::GREEN 
-        } else { 
-            colors::ORANGE 
+        let color = if af.is_successful() {
+            colors::GREEN
+        } else {
+            colors::ORANGE
         };
-        
+
         let af_data = &af.response;
         let success_indicator = if af.is_successful() { "✅" } else { "⚠️" };
-        
-        let position_change = af_data.calculated_focus_point.position - af_data.initial_focus_point.position;
+
+        let position_change =
+            af_data.calculated_focus_point.position - af_data.initial_focus_point.position;
         let position_change_text = if position_change > 0 {
             format!("+{}", position_change)
         } else {
@@ -389,12 +430,32 @@ impl DualPoller {
             .field("Filter", &af_data.filter, true)
             .field("Method", &af_data.method, true)
             .field("Duration", &af_data.duration, true)
-            .field("Temperature", &format!("{:.1}°C", af_data.temperature), true)
-            .field("Focus Position", &af_data.calculated_focus_point.position.to_string(), true)
+            .field(
+                "Temperature",
+                &format!("{:.1}°C", af_data.temperature),
+                true,
+            )
+            .field(
+                "Focus Position",
+                &af_data.calculated_focus_point.position.to_string(),
+                true,
+            )
             .field("Position Change", &position_change_text, true)
-            .field("HFR", &format!("{:.3}", af_data.calculated_focus_point.value), true)
-            .field("R-squared", &format!("{:.4}", af.get_best_r_squared()), true)
-            .field("Measurements", &af_data.measure_points.len().to_string(), true)
+            .field(
+                "HFR",
+                &format!("{:.3}", af_data.calculated_focus_point.value),
+                true,
+            )
+            .field(
+                "R-squared",
+                &format!("{:.4}", af.get_best_r_squared()),
+                true,
+            )
+            .field(
+                "Measurements",
+                &af_data.measure_points.len().to_string(),
+                true,
+            )
             .footer(&format!("Focuser: {}", af_data.auto_focuser_name), None)
             .timestamp(&chrono::Utc::now().to_rfc3339());
 

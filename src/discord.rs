@@ -157,7 +157,9 @@ impl std::fmt::Display for DiscordError {
         match self {
             DiscordError::Network(e) => write!(f, "Network error: {}", e),
             DiscordError::Parse(e) => write!(f, "Parse error: {}", e),
-            DiscordError::Http { status, message } => write!(f, "HTTP error {}: {}", status, message),
+            DiscordError::Http { status, message } => {
+                write!(f, "HTTP error {}: {}", status, message)
+            }
             DiscordError::InvalidWebhookUrl => write!(f, "Invalid webhook URL"),
         }
     }
@@ -180,8 +182,9 @@ impl From<serde_json::Error> for DiscordError {
 impl DiscordWebhook {
     pub fn new(webhook_url: String) -> Result<Self, DiscordError> {
         // Basic validation of webhook URL
-        if !webhook_url.starts_with("https://discord.com/api/webhooks/") 
-            && !webhook_url.starts_with("https://discordapp.com/api/webhooks/") {
+        if !webhook_url.starts_with("https://discord.com/api/webhooks/")
+            && !webhook_url.starts_with("https://discordapp.com/api/webhooks/")
+        {
             return Err(DiscordError::InvalidWebhookUrl);
         }
 
@@ -205,7 +208,7 @@ impl DiscordWebhook {
         params: Option<HashMap<&str, &str>>,
     ) -> Result<(), DiscordError> {
         let mut url = self.webhook_url.clone();
-        
+
         // Add query parameters if provided
         if let Some(params) = params {
             let query_string = params
@@ -216,7 +219,8 @@ impl DiscordWebhook {
             url = format!("{}?{}", url, query_string);
         }
 
-        let response = self.client
+        let response = self
+            .client
             .post(&url)
             .header("Content-Type", "application/json")
             .json(message)
@@ -225,7 +229,10 @@ impl DiscordWebhook {
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(DiscordError::Http {
                 status,
                 message: error_text,
@@ -249,11 +256,15 @@ impl DiscordWebhook {
             attachments: None,
             flags: None,
         };
-        
+
         self.execute(&message).await
     }
 
-    pub async fn execute_with_embed(&self, content: Option<&str>, embed: Embed) -> Result<(), DiscordError> {
+    pub async fn execute_with_embed(
+        &self,
+        content: Option<&str>,
+        embed: Embed,
+    ) -> Result<(), DiscordError> {
         let message = WebhookMessage {
             content: content.map(|s| s.to_string()),
             username: None,
@@ -267,7 +278,7 @@ impl DiscordWebhook {
             attachments: None,
             flags: None,
         };
-        
+
         self.execute(&message).await
     }
 
@@ -279,12 +290,12 @@ impl DiscordWebhook {
         filename: &str,
     ) -> Result<(), DiscordError> {
         let mut form = reqwest::multipart::Form::new();
-        
+
         // Add the file
-        let file_part = reqwest::multipart::Part::bytes(file_data.to_vec())
-            .file_name(filename.to_string());
+        let file_part =
+            reqwest::multipart::Part::bytes(file_data.to_vec()).file_name(filename.to_string());
         form = form.part("file", file_part);
-        
+
         // Create the payload
         let message = WebhookMessage {
             content: content.map(|s| s.to_string()),
@@ -299,12 +310,13 @@ impl DiscordWebhook {
             attachments: None,
             flags: None,
         };
-        
+
         // Add the payload as JSON
         let payload_json = serde_json::to_string(&message)?;
         form = form.text("payload_json", payload_json);
-        
-        let response = self.client
+
+        let response = self
+            .client
             .post(&self.webhook_url)
             .multipart(form)
             .send()
@@ -312,7 +324,10 @@ impl DiscordWebhook {
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(DiscordError::Http {
                 status,
                 message: error_text,
@@ -363,12 +378,12 @@ impl Embed {
             value: value.to_string(),
             inline: Some(inline),
         };
-        
+
         match &mut self.fields {
             Some(fields) => fields.push(field),
             None => self.fields = Some(vec![field]),
         }
-        
+
         self
     }
 

@@ -200,7 +200,8 @@ impl SpaceCatApiClient {
         &self,
         params: &[(&str, &str)],
     ) -> Result<ImageHistoryResponse, ApiError> {
-        self.generic_request_with_retry("/image-history", params).await
+        self.generic_request_with_retry("/image-history", params)
+            .await
     }
 
     /// Fetch all image history (equivalent to ?all=true parameter)
@@ -218,12 +219,14 @@ impl SpaceCatApiClient {
         &self,
         params: &[(&str, &str)],
     ) -> Result<SequenceResponse, ApiError> {
-        self.generic_request_with_retry("/sequence/json", params).await
+        self.generic_request_with_retry("/sequence/json", params)
+            .await
     }
 
     /// Fetch a specific image by index with autoPrepare=true by default
     pub async fn get_image(&self, index: u32) -> Result<ImageResponse, ApiError> {
-        self.get_image_with_params(index, &[("autoPrepare", "true")]).await
+        self.get_image_with_params(index, &[("autoPrepare", "true")])
+            .await
     }
 
     /// Fetch a specific image by index with custom parameters
@@ -248,10 +251,10 @@ impl SpaceCatApiClient {
         params: &[(&str, &str)],
     ) -> Result<ThumbnailResponse, ApiError> {
         let endpoint = format!("/image/thumbnail/{}", index);
-        
+
         for attempt in 0..self.retry_attempts {
             let mut url = format!("{}/v2/api{}", self.base_url, endpoint);
-            
+
             if !params.is_empty() {
                 let query_params = params
                     .iter()
@@ -265,7 +268,8 @@ impl SpaceCatApiClient {
                 Ok(resp) => resp,
                 Err(e) => {
                     if attempt < self.retry_attempts - 1 {
-                        tokio::time::sleep(Duration::from_millis(1000 * (attempt + 1) as u64)).await;
+                        tokio::time::sleep(Duration::from_millis(1000 * (attempt + 1) as u64))
+                            .await;
                         continue;
                     }
                     return Err(ApiError::Network(e));
@@ -285,7 +289,8 @@ impl SpaceCatApiClient {
                     Ok(bytes) => bytes.to_vec(),
                     Err(e) => {
                         if attempt < self.retry_attempts - 1 {
-                            tokio::time::sleep(Duration::from_millis(1000 * (attempt + 1) as u64)).await;
+                            tokio::time::sleep(Duration::from_millis(1000 * (attempt + 1) as u64))
+                                .await;
                             continue;
                         }
                         return Err(ApiError::Network(e));
@@ -298,7 +303,10 @@ impl SpaceCatApiClient {
                     status_code,
                 });
             } else {
-                let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+                let error_text = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "Unknown error".to_string());
                 if attempt < self.retry_attempts - 1 {
                     tokio::time::sleep(Duration::from_millis(1000 * (attempt + 1) as u64)).await;
                     continue;
@@ -326,6 +334,7 @@ impl SpaceCatApiClient {
         &self,
         params: &[(&str, &str)],
     ) -> Result<AutofocusResponse, ApiError> {
-        self.generic_request_with_retry("/equipment/focuser/last-af", params).await
+        self.generic_request_with_retry("/equipment/focuser/last-af", params)
+            .await
     }
 }

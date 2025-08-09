@@ -17,13 +17,15 @@ SpaceCat is a Rust-based astronomical observation system that interfaces with Sp
 
 ### Core Modules
 
-- **`src/main.rs`**: Main application demonstrating sequence parsing, event monitoring, image analysis, and real-time polling
+- **`src/main.rs`**: Main application with CLI commands for sequence parsing, event monitoring, image analysis, autofocus data, and real-time polling
 - **`src/config.rs`**: JSON-based configuration system with validation and error handling
 - **`src/api.rs`**: HTTP client with generic retry logic for SpaceCat API endpoints
 - **`src/events.rs`**: Event history structures and analysis methods
 - **`src/images.rs`**: Image metadata structures and session statistics
-- **`src/sequence.rs`**: Sequence management and container parsing
+- **`src/sequence.rs`**: Sequence management, container parsing, and target extraction utilities
+- **`src/autofocus.rs`**: Autofocus data structures, parsing, and analysis methods
 - **`src/poller.rs`**: Real-time event polling with deduplication
+- **`src/dual_poller.rs`**: Combined event and image polling with Discord integration and autofocus detection
 
 ### API Integration
 
@@ -31,6 +33,10 @@ The system connects to SpaceCat API at `http://192.168.0.82:1888` with endpoints
 - `/v2/api/version` - API health check and version info
 - `/v2/api/event-history` - Equipment event monitoring  
 - `/v2/api/image-history?all=true` - Image metadata and session statistics
+- `/v2/api/sequence/json` - Current sequence status and target information
+- `/v2/api/equipment/focuser/last-af` - Last autofocus session data
+- `/v2/api/image/{index}` - Individual image data with base64 encoding
+- `/v2/api/image/thumbnail/{index}` - Thumbnail images for previews
 
 ### Configuration
 
@@ -61,6 +67,7 @@ Uses `config.json` for API and Discord settings:
   - Filterwheel management (filter changes between HA, OIII, SII, R, G, B, L)
   - Mount control (parking/unparking, positioning)
   - Focuser, rotator, and guider operations
+  - Autofocus completion with detailed results
   - Weather monitoring and safety systems
 
 - **Image History**: Comprehensive image metadata tracking:
@@ -68,6 +75,15 @@ Uses `config.json` for API and Discord settings:
   - Image type classification (LIGHT, DARK, FLAT, BIAS frames)
   - Filter analysis (broadband vs narrowband)
   - Calibration frame management
+  - Target tracking and identification
+
+- **Autofocus System**: Advanced autofocus analysis and monitoring:
+  - Real-time autofocus completion detection via AUTOFOCUS-FINISHED events
+  - Comprehensive focus data parsing (positions, HFR values, temperatures)
+  - Multiple curve fitting analysis (quadratic, hyperbolic, trend lines)
+  - Focus quality assessment with R-squared values
+  - Success criteria evaluation and position change tracking
+  - Integration with dual polling for automatic result display
 
 - **Event Polling**: Real-time event monitoring with:
   - Event deduplication using timestamp+event+details keys
@@ -83,15 +99,33 @@ Uses `config.json` for API and Discord settings:
 
 - **Discord Integration**: Real-time notifications via Discord webhooks:
   - Event notifications with color-coded embeds
-  - Image capture alerts with detailed metadata
+  - Image capture alerts with detailed metadata and thumbnails
+  - Autofocus completion notifications with quality metrics
+  - Target change notifications for sequence monitoring
   - Configurable via config.json
   - Non-blocking operation that won't interrupt observations
 
 ### Data Structures
 
-- **Events**: Timestamped equipment state changes with optional details
+- **Events**: Timestamped equipment state changes with optional details (including AUTOFOCUS-FINISHED events)
 - **Images**: Metadata including exposure times, filters, temperatures, statistics
-- **Sequences**: Container-based automation with triggers and conditions
+- **Sequences**: Container-based automation with triggers, conditions, and target extraction
+- **Autofocus**: Comprehensive focus session data with measurement points, curve fitting results, and quality metrics
 - **Configuration**: JSON-based settings with validation
+
+### CLI Commands
+
+The system provides comprehensive CLI commands for all functionality:
+
+- `cargo run -- sequence` - Parse and display sequence information with target extraction
+- `cargo run -- events` - Load and analyze event history from API or local file  
+- `cargo run -- last-events --count 10` - Display the most recent events with details
+- `cargo run -- images` - Load and analyze image history with session statistics
+- `cargo run -- get-image <index>` - Retrieve specific images with base64 decoding
+- `cargo run -- get-thumbnail <index>` - Download image thumbnails
+- `cargo run -- poll` - Real-time event polling with configurable intervals
+- `cargo run -- dual-poll` - Combined event/image monitoring with Discord integration
+- `cargo run -- last-autofocus` - Display detailed autofocus analysis and quality metrics
+- `cargo run -- test-base64` - Validate base64 image processing functionality
 
 The system successfully demonstrates live telescope operation monitoring with 90 calibration images across 7 filters and real-time event tracking.

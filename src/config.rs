@@ -205,11 +205,19 @@ impl Config {
         // Validate Discord webhook URL if present
         if let Some(discord) = &self.discord {
             if discord.enabled && discord.webhook_url.is_empty() {
-                return Err("Discord webhook URL cannot be empty when Discord is enabled".to_string());
+                return Err(
+                    "Discord webhook URL cannot be empty when Discord is enabled".to_string(),
+                );
             }
-            
-            if discord.enabled && !discord.webhook_url.starts_with("https://discord.com/api/webhooks/") 
-                && !discord.webhook_url.starts_with("https://discordapp.com/api/webhooks/") {
+
+            if discord.enabled
+                && !discord
+                    .webhook_url
+                    .starts_with("https://discord.com/api/webhooks/")
+                && !discord
+                    .webhook_url
+                    .starts_with("https://discordapp.com/api/webhooks/")
+            {
                 return Err("Discord webhook URL must be a valid Discord webhook URL".to_string());
             }
         }

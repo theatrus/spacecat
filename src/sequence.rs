@@ -219,14 +219,14 @@ impl Container {
 }
 
 /// Extract the current target name from a sequence response
-/// 
+///
 /// This function looks for active or running containers that represent observation targets.
 /// Target containers are identified by having "_Container" suffix in their names.
 /// The suffix is removed from the returned target name.
-/// 
+///
 /// # Arguments
 /// * `sequence` - The sequence response to analyze
-/// 
+///
 /// # Returns
 /// * `Some(String)` - The current target name without "_Container" suffix
 /// * `None` - If no active target is found
@@ -236,21 +236,22 @@ pub fn extract_current_target(sequence: &SequenceResponse) -> Option<String> {
         for value in values {
             if let Some(obj) = value.as_object() {
                 // Try to extract data directly from the JSON object
-                if let (Some(name), Some(status)) = 
-                    (obj.get("Name").and_then(|v| v.as_str()),
-                     obj.get("Status").and_then(|v| v.as_str())) {
-                    
-                    if (status == "RUNNING" || status == "Active") &&
-                       name.ends_with("_Container") &&
-                       !is_system_container(name) {
+                if let (Some(name), Some(status)) = (
+                    obj.get("Name").and_then(|v| v.as_str()),
+                    obj.get("Status").and_then(|v| v.as_str()),
+                ) {
+                    if (status == "RUNNING" || status == "Active")
+                        && name.ends_with("_Container")
+                        && !is_system_container(name)
+                    {
                         // Remove the "_Container" suffix to get the target name
                         let target_name = name.strip_suffix("_Container").unwrap_or(name);
-                        
+
                         if !target_name.is_empty() {
                             return Some(target_name.to_string());
                         }
                     }
-                    
+
                     // Also search nested items
                     if let Some(items) = obj.get("Items").and_then(|v| v.as_array()) {
                         if let Some(nested_target) = search_containers(items) {
@@ -262,7 +263,7 @@ pub fn extract_current_target(sequence: &SequenceResponse) -> Option<String> {
         }
         None
     }
-    
+
     search_containers(&sequence.response)
 }
 
@@ -270,15 +271,17 @@ pub fn extract_current_target(sequence: &SequenceResponse) -> Option<String> {
 fn is_system_container(name: &str) -> bool {
     let system_containers = [
         "Start_Container",
-        "End_Container", 
+        "End_Container",
         "Targets_Container",
         "Basic Sequence Startup_Container",
         "Basic Sequence End_Container",
         "Target Imaging Instructions_Container",
-        "Parallel End of Sequence Instructions_Container"
+        "Parallel End of Sequence Instructions_Container",
     ];
-    
-    system_containers.iter().any(|&sys_name| name.contains(sys_name))
+
+    system_containers
+        .iter()
+        .any(|&sys_name| name.contains(sys_name))
 }
 
 #[cfg(test)]
@@ -338,7 +341,7 @@ mod tests {
         }"#;
 
         let sequence: SequenceResponse = serde_json::from_str(sequence_json).unwrap();
-        
+
         // The function should extract "Sh2 101" from "Sh2 101_Container" since it has RUNNING status
         let target = extract_current_target(&sequence);
         assert_eq!(target, Some("Sh2 101".to_string()));
@@ -425,7 +428,7 @@ mod tests {
         assert!(is_system_container("Targets_Container"));
         assert!(is_system_container("Basic Sequence Startup_Container"));
         assert!(is_system_container("Target Imaging Instructions_Container"));
-        
+
         assert!(!is_system_container("Sh2 101_Container"));
         assert!(!is_system_container("Triangulum Pinwheel_Container"));
         assert!(!is_system_container("M31_Container"));
