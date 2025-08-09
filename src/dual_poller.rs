@@ -264,10 +264,12 @@ impl DualPoller {
             embed = embed.field("Target", target, true);
         }
 
-        // Add meridian flip time if available
+        // Add meridian flip time if available and within the next hour
         if let Some(meridian_flip_hours) = self.current_meridian_flip_time {
-            let formatted_time = meridian_flip_time_formatted_with_clock(meridian_flip_hours);
-            embed = embed.field("Meridian Flip In", &formatted_time, true);
+            if meridian_flip_hours <= 1.0 {
+                let formatted_time = meridian_flip_time_formatted_with_clock(meridian_flip_hours);
+                embed = embed.field("Meridian Flip In", &formatted_time, true);
+            }
         }
 
         embed = embed
