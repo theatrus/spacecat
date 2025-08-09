@@ -54,7 +54,7 @@ impl ServiceWrapper {
 }
 
 // Windows service specific implementation
-#[cfg(all(windows, feature = "windows-service"))]
+#[cfg(windows)]
 mod windows_service_impl {
     use super::*;
     use tokio::time::sleep;
@@ -147,7 +147,7 @@ mod windows_service_impl {
 }
 
 // Stub implementation for non-Windows platforms
-#[cfg(not(all(windows, feature = "windows-service")))]
+#[cfg(not(windows))]
 impl ServiceWrapper {
     /// Stub implementation for non-Windows service shutdown
     pub fn run_with_shutdown(

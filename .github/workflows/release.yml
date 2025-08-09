@@ -38,7 +38,7 @@ jobs:
             - Discord webhook integration
             - Mount information and meridian flip tracking
             - Autofocus analysis and reporting
-            - **Windows service support** (Windows build only)
+            - **Windows service support** (automatically available on Windows)
             
             See [CLAUDE.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/CLAUDE.md) for detailed documentation.
           draft: false
@@ -124,11 +124,7 @@ jobs:
 
       - name: Build release binary
         run: |
-          if [ "${{ matrix.target }}" = "x86_64-pc-windows-gnu" ]; then
-            cargo build --release --target ${{ matrix.target }} --features windows-service --verbose
-          else
-            cargo build --release --target ${{ matrix.target }} --verbose
-          fi
+          cargo build --release --target ${{ matrix.target }} --verbose
 
       - name: Strip binary (Linux only)
         if: matrix.target != 'x86_64-pc-windows-gnu'

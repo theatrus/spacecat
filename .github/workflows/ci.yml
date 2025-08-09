@@ -88,10 +88,10 @@ jobs:
       - name: Run clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
-      - name: Check Windows service feature compilation (Linux cross-check)
+      - name: Check Windows service compilation (Linux cross-check)
         run: |
-          # Ensure Windows service feature compiles without errors on Linux (should use stubs)
-          cargo check --features windows-service --verbose
+          # Ensure Windows service code compiles without errors on Linux (should use stubs)
+          cargo check --verbose
 
   security:
     name: Security Audit
@@ -126,8 +126,8 @@ jobs:
       - name: Generate code coverage
         run: cargo tarpaulin --verbose --all-features --workspace --timeout 120 --out Xml
 
-      - name: Generate Windows service feature coverage
-        run: cargo tarpaulin --verbose --features windows-service --workspace --timeout 120 --out Xml --output-dir coverage-windows-service
+      - name: Generate platform-specific coverage
+        run: cargo tarpaulin --verbose --workspace --timeout 120 --out Xml --output-dir coverage-platform
 
       - name: Upload to codecov.io
         uses: codecov/codecov-action@v5
@@ -135,7 +135,7 @@ jobs:
           fail_ci_if_error: false
 
   windows-service:
-    name: Windows Service Feature
+    name: Windows Service Support
     runs-on: windows-latest
     steps:
       - name: Checkout code
@@ -160,20 +160,21 @@ jobs:
             windows-service-cargo-
             ${{ runner.os }}-cargo-
 
-      - name: Check Windows service feature compilation
-        run: cargo check --features windows-service --verbose
+      - name: Check Windows service compilation
+        run: cargo check --verbose
 
-      - name: Test Windows service feature
-        run: cargo test --features windows-service --verbose
+      - name: Test Windows service functionality
+        run: cargo test --verbose
 
-      - name: Run clippy with Windows service feature
-        run: cargo clippy --features windows-service --all-targets -- -D warnings
+      - name: Run clippy on Windows
+        run: cargo clippy --all-targets -- -D warnings
 
-      - name: Build Windows service feature
-        run: cargo build --features windows-service --verbose
+      - name: Build with Windows service support
+        run: cargo build --verbose
 
       - name: Test Windows service CLI commands (dry run)
         run: |
-          # Test that the CLI accepts Windows service commands without actually installing
-          cargo run --features windows-service -- --help
-          echo "Windows service commands are available in help output"
+          # Test that the CLI accepts Windows service commands automatically on Windows
+          cargo run -- --help
+          echo "Testing Windows service command availability..."
+          cargo run -- windows-service --help

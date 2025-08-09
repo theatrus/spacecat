@@ -21,14 +21,7 @@ mod tests {
     #[test]
     fn test_windows_service_help() {
         let output = Command::new("cargo")
-            .args(&[
-                "run",
-                "--features",
-                "windows-service",
-                "--",
-                "windows-service",
-                "--help",
-            ])
+            .args(&["run", "--", "windows-service", "--help"])
             .output()
             .expect("Failed to execute command");
 
@@ -46,7 +39,7 @@ mod tests {
     #[test]
     fn test_windows_service_unavailable() {
         let output = Command::new("cargo")
-            .args(&["run", "--features", "windows-service", "--", "--help"])
+            .args(&["run", "--", "--help"])
             .output()
             .expect("Failed to execute command");
 

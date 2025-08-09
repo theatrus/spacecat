@@ -135,7 +135,7 @@ Uses `config.json` for API and Discord settings:
   - Windows Event Log integration for centralized logging
   - System-wide configuration storage (`C:\ProgramData\SpaceCat\config.json`)
   - Graceful shutdown handling with proper service status reporting
-  - Feature-flagged compilation (only available on Windows with `windows-service` feature)
+  - Platform-specific compilation (automatically available on Windows)
   - Compatible with Windows 10/11 and Windows Server 2016+
 
 - **Testing**: Comprehensive unit test coverage with file-based testing:

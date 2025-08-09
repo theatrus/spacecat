@@ -14,7 +14,7 @@ SpaceCat can run as a Windows service for automated, production deployments. Thi
 ## Prerequisites
 
 - Windows 10/11 or Windows Server 2016+
-- SpaceCat Windows build with `windows-service` feature enabled
+- SpaceCat Windows build (service support is automatically included)
 - Administrator privileges for installation/uninstallation
 
 ## Installation

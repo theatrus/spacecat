@@ -43,7 +43,7 @@ sudo systemctl status spacecat.service
 git clone https://github.com/theatrus/spacecat.git
 cd spacecat
 
-# Build the project
+# Build the project (Windows service support included automatically on Windows)
 cargo build --release
 
 # Copy the binary to your PATH
@@ -159,7 +159,7 @@ spacecat.exe windows-service stop
 spacecat.exe windows-service uninstall
 ```
 
-**Note**: Windows service functionality is only available in Windows builds with the `windows-service` feature enabled.
+**Note**: Windows service functionality is automatically available when running on Windows.
 
 ## 🏗️ Development
 

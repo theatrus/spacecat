@@ -1,9 +1,8 @@
 //! Windows service implementation for SpaceCat
 //!
-//! This module provides Windows service functionality when compiled with the
-//! `windows-service` feature flag on Windows platforms.
+//! This module provides Windows service functionality when compiled on Windows platforms.
 
-#[cfg(all(windows, feature = "windows-service"))]
+#[cfg(windows)]
 mod implementation {
     use std::ffi::OsString;
     use std::sync::mpsc;
@@ -267,12 +266,12 @@ mod implementation {
     }
 }
 
-// Re-export the implementation functions when the feature is enabled
-#[cfg(all(windows, feature = "windows-service"))]
+// Re-export the implementation functions on Windows
+#[cfg(windows)]
 pub use implementation::*;
 
-// Provide stub functions for non-Windows platforms or when feature is disabled
-#[cfg(not(all(windows, feature = "windows-service")))]
+// Provide stub functions for non-Windows platforms
+#[cfg(not(windows))]
 mod stubs {
     pub fn install_service() -> Result<(), Box<dyn std::error::Error>> {
         Err("Windows service support is not available on this platform".into())
@@ -299,5 +298,5 @@ mod stubs {
     }
 }
 
-#[cfg(not(all(windows, feature = "windows-service")))]
+#[cfg(not(windows))]
 pub use stubs::*;

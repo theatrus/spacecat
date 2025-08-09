@@ -3,14 +3,14 @@
 #[cfg(test)]
 mod tests {
     // Import Windows service functions if available (Windows only)
-    #[cfg(all(windows, feature = "windows-service"))]
+    #[cfg(windows)]
     use spacecat::windows_service::*;
 
-    #[cfg(all(windows, feature = "windows-service"))]
+    #[cfg(windows)]
     #[test]
     fn test_service_functions_exist() {
         // These tests ensure the functions exist and return appropriate errors
-        // on non-Windows platforms or when feature is disabled
+        // on non-Windows platforms
 
         let result = install_service();
         assert!(result.is_err());
@@ -31,27 +31,15 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[cfg(all(windows, feature = "windows-service"))]
+    #[cfg(not(windows))]
     #[test]
-    fn test_error_messages() {
-        let result = install_service();
-        if let Err(e) = result {
-            let error_msg = e.to_string();
-            // On non-Windows platforms, should get platform error
-            #[cfg(not(all(windows, feature = "windows-service")))]
-            assert!(error_msg.contains("not available on this platform"));
-        }
-    }
-
-    #[cfg(not(all(windows, feature = "windows-service")))]
-    #[test]
-    fn test_windows_service_feature_disabled() {
-        // When the windows-service feature is not enabled, we can't test the functions
+    fn test_windows_service_unavailable() {
+        // On non-Windows platforms, we can't test the actual functions
         // but we can at least ensure this test compiles and runs
         assert!(true);
     }
 
-    #[cfg(all(windows, feature = "windows-service"))]
+    #[cfg(windows)]
     mod windows_only_tests {
         use super::*;
 
