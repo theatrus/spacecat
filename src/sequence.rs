@@ -293,9 +293,7 @@ pub fn extract_meridian_flip_time(sequence: &SequenceResponse) -> Option<f64> {
             && name == "Meridian Flip_Trigger"
         {
             // Extract TimeToFlip value
-            if let Some(time_to_flip) =
-                trigger_obj.get("TimeToFlip").and_then(|v| v.as_f64())
-            {
+            if let Some(time_to_flip) = trigger_obj.get("TimeToFlip").and_then(|v| v.as_f64()) {
                 return Some(time_to_flip);
             }
         }
