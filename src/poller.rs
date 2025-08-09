@@ -1,5 +1,5 @@
 use crate::api::SpaceCatApiClient;
-use crate::events::{Event, EventHistoryResponse};
+use crate::events::Event;
 use std::collections::HashSet;
 use std::time::Duration;
 use tokio::time::{Instant, sleep};

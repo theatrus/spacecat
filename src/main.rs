@@ -18,7 +18,6 @@ use events::EventHistoryResponse;
 use images::ImageHistoryResponse;
 use poller::EventPoller;
 use sequence::{SequenceResponse, extract_current_target};
-use std::fs;
 use std::time::Duration;
 
 #[derive(Parser)]
@@ -31,42 +30,18 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Parse and display sequence information
-    Sequence {
-        /// Path to the sequence JSON file
-        #[arg(short, long, default_value = "example_sequence.json")]
-        file: String,
-    },
-    /// Get event history from API or file
-    Events {
-        /// Use local file instead of API
-        #[arg(short, long)]
-        local: bool,
-        /// Path to the event history JSON file (when using --local)
-        #[arg(short, long, default_value = "example_event-history.json")]
-        file: String,
-    },
+    /// Get current sequence information from API
+    Sequence,
+    /// Get event history from API
+    Events,
     /// List the last N events with details
     LastEvents {
         /// Number of last events to display
         #[arg(short, long, default_value = "10")]
         count: usize,
-        /// Use local file instead of API
-        #[arg(long)]
-        local: bool,
-        /// Path to the event history JSON file (when using --local)
-        #[arg(short, long, default_value = "example_event-history.json")]
-        file: String,
     },
-    /// Get image history from API or file  
-    Images {
-        /// Use local file instead of API
-        #[arg(short, long)]
-        local: bool,
-        /// Path to the image history JSON file (when using --local)
-        #[arg(short, long, default_value = "example_image-history.json")]
-        file: String,
-    },
+    /// Get image history from API
+    Images,
     /// Get a specific image by index
     GetImage {
         /// Image index to retrieve
@@ -103,19 +78,8 @@ enum Commands {
         #[arg(short, long, default_value = "5")]
         interval: u64,
     },
-    /// Get the last autofocus data from API or file
-    LastAutofocus {
-        /// Use local file instead of API
-        #[arg(short, long)]
-        local: bool,
-        /// Path to the autofocus JSON file (when using --local)
-        #[arg(short, long, default_value = "example_last_af.json")]
-        file: String,
-    },
-    /// Test base64 image processing
-    TestBase64,
-    /// Run all demos (original behavior)
-    All,
+    /// Get the last autofocus data from API
+    LastAutofocus,
 }
 
 #[tokio::main]
@@ -123,26 +87,26 @@ async fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Sequence { file } => {
-            if let Err(e) = cmd_sequence(&file).await {
+        Commands::Sequence => {
+            if let Err(e) = cmd_sequence().await {
                 eprintln!("Sequence command failed: {}", e);
                 std::process::exit(1);
             }
         }
-        Commands::Events { local, file } => {
-            if let Err(e) = cmd_events(local, &file).await {
+        Commands::Events => {
+            if let Err(e) = cmd_events().await {
                 eprintln!("Events command failed: {}", e);
                 std::process::exit(1);
             }
         }
-        Commands::LastEvents { count, local, file } => {
-            if let Err(e) = cmd_last_events(count, local, &file).await {
+        Commands::LastEvents { count } => {
+            if let Err(e) = cmd_last_events(count).await {
                 eprintln!("LastEvents command failed: {}", e);
                 std::process::exit(1);
             }
         }
-        Commands::Images { local, file } => {
-            if let Err(e) = cmd_images(local, &file).await {
+        Commands::Images => {
+            if let Err(e) = cmd_images().await {
                 eprintln!("Images command failed: {}", e);
                 std::process::exit(1);
             }
@@ -175,28 +139,19 @@ async fn main() {
                 std::process::exit(1);
             }
         }
-        Commands::LastAutofocus { local, file } => {
-            if let Err(e) = cmd_last_autofocus(local, &file).await {
+        Commands::LastAutofocus => {
+            if let Err(e) = cmd_last_autofocus().await {
                 eprintln!("LastAutofocus command failed: {}", e);
-                std::process::exit(1);
-            }
-        }
-        Commands::TestBase64 => {
-            cmd_test_base64();
-        }
-        Commands::All => {
-            if let Err(e) = cmd_all().await {
-                eprintln!("All command failed: {}", e);
                 std::process::exit(1);
             }
         }
     }
 }
 
-async fn cmd_sequence(file: &str) -> Result<(), Box<dyn std::error::Error>> {
-    println!("Loading sequence from: {}", file);
+async fn cmd_sequence() -> Result<(), Box<dyn std::error::Error>> {
+    println!("Loading sequence from API...");
 
-    match load_sequence(file) {
+    match load_sequence_from_api().await {
         Ok(seq) => {
             println!(
                 "Successfully loaded sequence with {} items",
@@ -229,79 +184,43 @@ async fn cmd_sequence(file: &str) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Err(e) => {
-            return Err(format!("Failed to load sequence: {}", e).into());
+            return Err(format!("Failed to load sequence from API: {}", e).into());
         }
     }
 
     Ok(())
 }
 
-async fn cmd_events(local: bool, file: &str) -> Result<(), Box<dyn std::error::Error>> {
-    if local {
-        println!("Loading events from local file: {}", file);
-        match load_event_history(file) {
-            Ok(events) => {
-                println!(
-                    "Successfully loaded {} events from file",
-                    events.response.len()
-                );
-                display_event_statistics(&events);
-            }
-            Err(e) => {
-                return Err(format!("Failed to load event history from file: {}", e).into());
-            }
+async fn cmd_events() -> Result<(), Box<dyn std::error::Error>> {
+    println!("Loading events from API...");
+    match load_event_history_from_api().await {
+        Ok(events) => {
+            println!(
+                "Successfully loaded {} events from API",
+                events.response.len()
+            );
+            display_event_statistics(&events);
         }
-    } else {
-        println!("Loading events from API...");
-        match load_event_history_from_api().await {
-            Ok(events) => {
-                println!(
-                    "Successfully loaded {} events from API",
-                    events.response.len()
-                );
-                display_event_statistics(&events);
-            }
-            Err(e) => {
-                return Err(format!("Failed to load events from API: {}", e).into());
-            }
+        Err(e) => {
+            return Err(format!("Failed to load events from API: {}", e).into());
         }
     }
 
     Ok(())
 }
 
-async fn cmd_last_events(
-    count: usize,
-    local: bool,
-    file: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let events = if local {
-        println!("Loading events from local file: {}", file);
-        match load_event_history(file) {
-            Ok(events) => {
-                println!(
-                    "Successfully loaded {} events from file",
-                    events.response.len()
-                );
-                events
-            }
-            Err(e) => {
-                return Err(format!("Failed to load event history from file: {}", e).into());
-            }
+async fn cmd_last_events(count: usize) -> Result<(), Box<dyn std::error::Error>> {
+    println!("Loading events from API...");
+    let events = match load_event_history_from_api().await {
+        Ok(events) => {
+            println!(
+                "Successfully loaded {} events from API",
+                events.response.len()
+            );
+            events
         }
-    } else {
-        println!("Loading events from API...");
-        match load_event_history_from_api().await {
-            Ok(events) => {
-                println!(
-                    "Successfully loaded {} events from API",
-                    events.response.len()
-                );
-                events
-            }
-            Err(e) => {
-                return Err(format!("Failed to load events from API: {}", e).into());
-            }
+        Err(e) => {
+            return Err(format!("Failed to load events from API: {}", e).into());
         }
     };
 
@@ -309,36 +228,19 @@ async fn cmd_last_events(
     Ok(())
 }
 
-async fn cmd_images(local: bool, file: &str) -> Result<(), Box<dyn std::error::Error>> {
-    if local {
-        println!("Loading images from local file: {}", file);
-        match load_image_history(file) {
-            Ok(images) => {
-                println!(
-                    "Successfully loaded {} images from file",
-                    images.response.len()
-                );
-                display_image_statistics(&images);
-                display_last_images(&images, 3);
-            }
-            Err(e) => {
-                return Err(format!("Failed to load image history from file: {}", e).into());
-            }
+async fn cmd_images() -> Result<(), Box<dyn std::error::Error>> {
+    println!("Loading images from API...");
+    match load_image_history_from_api().await {
+        Ok(images) => {
+            println!(
+                "Successfully loaded {} images from API",
+                images.response.len()
+            );
+            display_image_statistics(&images);
+            display_last_images(&images, 3);
         }
-    } else {
-        println!("Loading images from API...");
-        match load_image_history_from_api().await {
-            Ok(images) => {
-                println!(
-                    "Successfully loaded {} images from API",
-                    images.response.len()
-                );
-                display_image_statistics(&images);
-                display_last_images(&images, 3);
-            }
-            Err(e) => {
-                return Err(format!("Failed to load images from API: {}", e).into());
-            }
+        Err(e) => {
+            return Err(format!("Failed to load images from API: {}", e).into());
         }
     }
 
@@ -565,106 +467,22 @@ async fn cmd_dual_poll(interval: u64) -> Result<(), Box<dyn std::error::Error>> 
     Ok(())
 }
 
-async fn cmd_last_autofocus(local: bool, file: &str) -> Result<(), Box<dyn std::error::Error>> {
-    if local {
-        println!("Loading autofocus data from local file: {}", file);
-        match load_autofocus_from_file(file) {
-            Ok(autofocus) => {
-                println!("Successfully loaded autofocus data from file");
-                display_autofocus_data(&autofocus);
-            }
-            Err(e) => {
-                return Err(format!("Failed to load autofocus data from file: {}", e).into());
-            }
-        }
-    } else {
-        println!("Loading autofocus data from API...");
-        match load_autofocus_from_api().await {
-            Ok(autofocus) => {
-                println!("Successfully loaded autofocus data from API");
-                display_autofocus_data(&autofocus);
-            }
-            Err(e) => {
-                return Err(format!("Failed to load autofocus data from API: {}", e).into());
-            }
-        }
-    }
-
-    Ok(())
-}
-
-fn cmd_test_base64() {
-    println!("Testing base64 decoding with a known PNG image...");
-
-    // Small 1x1 PNG image encoded as base64 (transparent pixel)
-    let test_png_base64 =
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChAI9AAAAAElFTkSuQmCC";
-
-    println!("  Test base64: {}", test_png_base64);
-
-    match base64::engine::general_purpose::STANDARD.decode(test_png_base64) {
-        Ok(decoded) => {
-            println!("  Successfully decoded {} bytes", decoded.len());
-
-            if decoded.len() > 10 {
-                let header = &decoded[0..std::cmp::min(10, decoded.len())];
-                println!("  Image header (hex): {:02x?}", header);
-
-                if decoded.starts_with(b"\x89PNG\r\n\x1a\n") {
-                    println!("  ✓ Confirmed PNG format");
-                    println!("  This demonstrates our base64 processing works correctly!");
-                } else {
-                    println!("  Unexpected format for test PNG");
-                }
-            }
+async fn cmd_last_autofocus() -> Result<(), Box<dyn std::error::Error>> {
+    println!("Loading autofocus data from API...");
+    match load_autofocus_from_api().await {
+        Ok(autofocus) => {
+            println!("Successfully loaded autofocus data from API");
+            display_autofocus_data(&autofocus);
         }
         Err(e) => {
-            println!("  Failed to decode test base64: {}", e);
+            return Err(format!("Failed to load autofocus data from API: {}", e).into());
         }
     }
-}
 
-async fn cmd_all() -> Result<(), Box<dyn std::error::Error>> {
-    println!("SpaceCat - Astronomical Observation System");
-    println!("Running all demos...\n");
-
-    println!("=== Sequence Demo ===");
-    cmd_sequence("example_sequence.json").await?;
-
-    println!("\n=== Events Demo ===");
-    cmd_events(false, "").await?;
-
-    println!("\n=== Last Events Demo ===");
-    cmd_last_events(5, false, "").await?;
-
-    println!("\n=== Images Demo ===");
-    cmd_images(false, "").await?;
-
-    println!("\n=== Get Image Demo ===");
-    cmd_get_image(0, &[]).await?;
-
-    println!("\n=== Get Thumbnail Demo ===");
-    cmd_get_thumbnail(0, "demo_thumbnail.jpg", None).await?;
-
-    println!("\n=== Polling Demo ===");
-    cmd_poll(2, 5).await?;
-
-    println!("\n=== Base64 Test Demo ===");
-    cmd_test_base64();
-
-    println!("\nAll demos completed!");
     Ok(())
 }
 
 // Helper functions
-
-fn load_autofocus_from_file(
-    filename: &str,
-) -> Result<AutofocusResponse, Box<dyn std::error::Error>> {
-    let json_content = fs::read_to_string(filename)?;
-    let autofocus: AutofocusResponse = serde_json::from_str(&json_content)?;
-    Ok(autofocus)
-}
 
 async fn load_autofocus_from_api() -> Result<AutofocusResponse, Box<dyn std::error::Error>> {
     // Load configuration from config.json or use default
@@ -799,22 +617,29 @@ fn display_autofocus_data(autofocus: &AutofocusResponse) {
     }
 }
 
-fn load_sequence(filename: &str) -> Result<SequenceResponse, Box<dyn std::error::Error>> {
-    let json_content = fs::read_to_string(filename)?;
-    let sequence: SequenceResponse = serde_json::from_str(&json_content)?;
+async fn load_sequence_from_api() -> Result<SequenceResponse, Box<dyn std::error::Error>> {
+    // Load configuration from config.json or use default
+    let config = Config::load_or_default();
+
+    // Validate configuration
+    if let Err(e) = config.validate() {
+        return Err(e.into());
+    }
+
+    // Create API client
+    let client = SpaceCatApiClient::new(config.api)?;
+
+    // Check API version and health
+    match client.get_version().await {
+        Ok(_) => {} // Version check successful
+        Err(e) => {
+            return Err(format!("Could not get API version: {}", e).into());
+        }
+    }
+
+    // Fetch sequence data
+    let sequence = client.get_sequence().await?;
     Ok(sequence)
-}
-
-fn load_event_history(filename: &str) -> Result<EventHistoryResponse, Box<dyn std::error::Error>> {
-    let json_content = fs::read_to_string(filename)?;
-    let events: EventHistoryResponse = serde_json::from_str(&json_content)?;
-    Ok(events)
-}
-
-fn load_image_history(filename: &str) -> Result<ImageHistoryResponse, Box<dyn std::error::Error>> {
-    let json_content = fs::read_to_string(filename)?;
-    let images: ImageHistoryResponse = serde_json::from_str(&json_content)?;
-    Ok(images)
 }
 
 async fn load_event_history_from_api() -> Result<EventHistoryResponse, Box<dyn std::error::Error>> {

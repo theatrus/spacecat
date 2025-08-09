@@ -433,4 +433,36 @@ mod tests {
         assert!(!is_system_container("Triangulum Pinwheel_Container"));
         assert!(!is_system_container("M31_Container"));
     }
+
+    #[test]
+    fn test_load_sequence_from_file() {
+        // Test loading the example sequence file if it exists
+        if let Ok(json_content) = std::fs::read_to_string("example_sequence.json") {
+            let sequence: Result<SequenceResponse, _> = serde_json::from_str(&json_content);
+            assert!(
+                sequence.is_ok(),
+                "Should be able to parse example_sequence.json"
+            );
+
+            let sequence = sequence.unwrap();
+            assert!(sequence.success, "Sequence should indicate success");
+            assert_eq!(sequence.status_code, 200, "Should have status code 200");
+            assert!(!sequence.response.is_empty(), "Should have response items");
+
+            // Test target extraction from real file
+            let target = extract_current_target(&sequence);
+            println!("Found target in example file: {:?}", target);
+
+            // Test container extraction
+            let containers = sequence.get_containers();
+            println!("Found {} containers in example file", containers.len());
+
+            // Test global triggers
+            if let Some(triggers) = sequence.get_global_triggers() {
+                println!("Found {} global triggers", triggers.global_triggers.len());
+            }
+        } else {
+            println!("example_sequence.json not found, skipping file test");
+        }
+    }
 }

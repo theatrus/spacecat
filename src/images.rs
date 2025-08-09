@@ -234,3 +234,252 @@ impl ImageMetadata {
         self.exposure_time / 60.0
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json;
+
+    #[test]
+    fn test_image_metadata_parsing() {
+        let image_json = r#"{
+            "ExposureTime": 300.0,
+            "ImageType": "LIGHT",
+            "Filter": "HA",
+            "RmsText": "1.23",
+            "Temperature": -10.5,
+            "CameraName": "ZWO ASI533MC Pro",
+            "Gain": 100,
+            "Offset": 10,
+            "Date": "2025-08-06 19:18:39",
+            "TelescopeName": "William Optics RedCat 71",
+            "FocalLength": 350,
+            "StDev": 456.78,
+            "Mean": 1234.56,
+            "Median": 1200.00,
+            "Stars": 145,
+            "HFR": 2.45,
+            "IsBayered": true
+        }"#;
+
+        let image: ImageMetadata = serde_json::from_str(image_json).unwrap();
+        assert_eq!(image.exposure_time, 300.0);
+        assert_eq!(image.image_type, "LIGHT");
+        assert_eq!(image.filter, "HA");
+        assert_eq!(image.temperature, -10.5);
+        assert_eq!(image.camera_name, "ZWO ASI533MC Pro");
+        assert_eq!(image.gain, 100);
+        assert_eq!(image.offset, 10);
+        assert_eq!(image.stars, 145);
+        assert_eq!(image.hfr, 2.45);
+        assert!(image.is_bayered);
+    }
+
+    #[test]
+    fn test_image_methods() {
+        let light_frame = ImageMetadata {
+            exposure_time: 180.0,
+            image_type: "LIGHT".to_string(),
+            filter: "OIII".to_string(),
+            rms_text: "1.50".to_string(),
+            temperature: -5.0,
+            camera_name: "Test Camera".to_string(),
+            gain: 120,
+            offset: 15,
+            date: "2025-08-06 20:00:00".to_string(),
+            telescope_name: "Test Telescope".to_string(),
+            focal_length: 400,
+            st_dev: 300.0,
+            mean: 2000.0,
+            median: 1950.0,
+            stars: 200,
+            hfr: 2.8,
+            is_bayered: false,
+        };
+
+        assert!(light_frame.is_light_frame());
+        assert!(!light_frame.is_calibration_frame());
+        assert!(!light_frame.is_broadband_filter());
+        assert!(light_frame.is_narrowband_filter());
+        assert_eq!(light_frame.exposure_time_minutes(), 3.0);
+
+        let flat_frame = ImageMetadata {
+            exposure_time: 1.0,
+            image_type: "FLAT".to_string(),
+            filter: "L".to_string(),
+            rms_text: "0.0".to_string(),
+            temperature: 15.0,
+            camera_name: "Test Camera".to_string(),
+            gain: 100,
+            offset: 10,
+            date: "2025-08-06 12:00:00".to_string(),
+            telescope_name: "Test Telescope".to_string(),
+            focal_length: 400,
+            st_dev: 100.0,
+            mean: 30000.0,
+            median: 30000.0,
+            stars: 0,
+            hfr: 0.0,
+            is_bayered: false,
+        };
+
+        assert!(!flat_frame.is_light_frame());
+        assert!(flat_frame.is_calibration_frame());
+        assert!(flat_frame.is_broadband_filter());
+        assert!(!flat_frame.is_narrowband_filter());
+    }
+
+    #[test]
+    fn test_image_history_methods() {
+        let images_json = r#"{
+            "Response": [
+                {
+                    "ExposureTime": 300.0,
+                    "ImageType": "LIGHT",
+                    "Filter": "HA",
+                    "RmsText": "1.23",
+                    "Temperature": -10.5,
+                    "CameraName": "ZWO ASI533MC Pro",
+                    "Gain": 100,
+                    "Offset": 10,
+                    "Date": "2025-08-06 19:18:39",
+                    "TelescopeName": "William Optics RedCat 71",
+                    "FocalLength": 350,
+                    "StDev": 456.78,
+                    "Mean": 1234.56,
+                    "Median": 1200.00,
+                    "Stars": 145,
+                    "HFR": 2.45,
+                    "IsBayered": true
+                },
+                {
+                    "ExposureTime": 1.0,
+                    "ImageType": "FLAT",
+                    "Filter": "HA",
+                    "RmsText": "0.0",
+                    "Temperature": 15.0,
+                    "CameraName": "ZWO ASI533MC Pro",
+                    "Gain": 100,
+                    "Offset": 10,
+                    "Date": "2025-08-06 12:00:00",
+                    "TelescopeName": "William Optics RedCat 71",
+                    "FocalLength": 350,
+                    "StDev": 100.0,
+                    "Mean": 30000.0,
+                    "Median": 30000.0,
+                    "Stars": 0,
+                    "HFR": 0.0,
+                    "IsBayered": true
+                }
+            ],
+            "Error": "",
+            "StatusCode": 200,
+            "Success": true,
+            "Type": "API"
+        }"#;
+
+        let images: ImageHistoryResponse = serde_json::from_str(images_json).unwrap();
+
+        // Test filtering by type
+        let light_frames = images.get_light_frames();
+        assert_eq!(light_frames.len(), 1);
+        assert_eq!(light_frames[0].image_type, "LIGHT");
+
+        let calibration_frames = images.get_calibration_frames();
+        assert_eq!(calibration_frames.len(), 1);
+        assert_eq!(calibration_frames[0].image_type, "FLAT");
+
+        // Test filtering by filter
+        let ha_images = images.get_images_by_filter("HA");
+        assert_eq!(ha_images.len(), 2);
+
+        // Test session stats
+        let stats = images.get_session_stats();
+        let stats_string = stats.to_string();
+        assert!(stats_string.contains("2 total images"));
+        assert!(stats_string.contains("1 light frames"));
+        assert!(stats_string.contains("1 calibration frames"));
+
+        // Test type and filter counting
+        let type_counts = images.count_images_by_type();
+        assert_eq!(type_counts.get("LIGHT"), Some(&1));
+        assert_eq!(type_counts.get("FLAT"), Some(&1));
+
+        let filter_counts = images.count_images_by_filter();
+        assert_eq!(filter_counts.get("HA"), Some(&2));
+    }
+
+    #[test]
+    fn test_load_image_history_from_file() {
+        // Test loading the example image history file if it exists
+        if let Ok(json_content) = std::fs::read_to_string("example_image-history.json") {
+            let images: Result<ImageHistoryResponse, _> = serde_json::from_str(&json_content);
+            assert!(
+                images.is_ok(),
+                "Should be able to parse example_image-history.json"
+            );
+
+            let images = images.unwrap();
+            assert!(images.success, "Images should indicate success");
+            assert_eq!(images.status_code, 200, "Should have status code 200");
+            assert!(!images.response.is_empty(), "Should have images");
+
+            println!("Found {} images in example file", images.response.len());
+
+            // Test image analysis
+            let stats = images.get_session_stats();
+            println!("Session stats:\n{}", stats);
+
+            let type_counts = images.count_images_by_type();
+            println!("Image type counts: {:?}", type_counts);
+
+            let filter_counts = images.count_images_by_filter();
+            println!("Filter counts: {:?}", filter_counts);
+
+            let light_frames = images.get_light_frames();
+            println!("Found {} light frames", light_frames.len());
+
+            let calibration = images.get_calibration_frames();
+            println!("Found {} calibration frames", calibration.len());
+
+            // Test temperature range
+            if !images.response.is_empty() {
+                let temperatures: Vec<f64> =
+                    images.response.iter().map(|img| img.temperature).collect();
+                let min_temp = temperatures.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+                let max_temp = temperatures
+                    .iter()
+                    .fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+                println!("Temperature range: {:.1}°C to {:.1}°C", min_temp, max_temp);
+            }
+        } else {
+            println!("example_image-history.json not found, skipping file test");
+        }
+    }
+
+    #[test]
+    fn test_base64_image_processing() {
+        // Test base64 decoding functionality that would be used by GetImage command
+        let test_png_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChAI9AAAAAElFTkSuQmCC";
+
+        match base64::Engine::decode(&base64::engine::general_purpose::STANDARD, test_png_base64) {
+            Ok(decoded) => {
+                assert!(!decoded.is_empty(), "Should decode base64 data");
+                println!("Successfully decoded {} bytes", decoded.len());
+
+                // Check PNG header
+                if decoded.starts_with(b"\x89PNG\r\n\x1a\n") {
+                    println!("✓ Confirmed PNG format");
+                } else {
+                    println!(
+                        "Decoded data header: {:02x?}",
+                        &decoded[0..std::cmp::min(8, decoded.len())]
+                    );
+                }
+            }
+            Err(e) => {
+                panic!("Failed to decode test base64: {}", e);
+            }
+        }
+    }
+}

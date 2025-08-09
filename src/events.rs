@@ -143,3 +143,168 @@ impl Event {
         Ok(std::time::SystemTime::now())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json;
+
+    #[test]
+    fn test_event_parsing() {
+        let event_json = r#"{
+            "Time": "2025-08-06T21:50:56.545923-07:00",
+            "Event": "AUTOFOCUS-FINISHED"
+        }"#;
+
+        let event: Event = serde_json::from_str(event_json).unwrap();
+        assert_eq!(event.time, "2025-08-06T21:50:56.545923-07:00");
+        assert_eq!(event.event, "AUTOFOCUS-FINISHED");
+        assert!(event.details.is_none());
+    }
+
+    #[test]
+    fn test_filterwheel_change_event() {
+        let event_json = r#"{
+            "Time": "2025-08-06T19:18:09.4045633-07:00",
+            "New": {"Name": "HA", "Id": 0},
+            "Previous": {"Name": "OIII", "Id": 1},
+            "Event": "FILTERWHEEL-CHANGED"
+        }"#;
+
+        let event: Event = serde_json::from_str(event_json).unwrap();
+        assert_eq!(event.event, "FILTERWHEEL-CHANGED");
+
+        if let Some(EventDetails::FilterWheelChange { new, previous }) = event.details {
+            assert_eq!(new.name, "HA");
+            assert_eq!(new.id, 0);
+            assert_eq!(previous.name, "OIII");
+            assert_eq!(previous.id, 1);
+        } else {
+            panic!("Expected FilterWheelChange details");
+        }
+    }
+
+    #[test]
+    fn test_event_methods() {
+        let camera_connected = Event {
+            time: "2025-08-06T18:45:40.1430956-07:00".to_string(),
+            event: "CAMERA-CONNECTED".to_string(),
+            details: None,
+        };
+
+        assert!(camera_connected.is_connection_event());
+        assert!(camera_connected.is_connection());
+        assert!(!camera_connected.is_disconnection());
+        assert_eq!(camera_connected.get_equipment_name(), Some("CAMERA"));
+
+        let mount_disconnected = Event {
+            time: "2025-08-06T19:20:35.2068582-07:00".to_string(),
+            event: "MOUNT-DISCONNECTED".to_string(),
+            details: None,
+        };
+
+        assert!(mount_disconnected.is_connection_event());
+        assert!(!mount_disconnected.is_connection());
+        assert!(mount_disconnected.is_disconnection());
+        assert_eq!(mount_disconnected.get_equipment_name(), Some("MOUNT"));
+    }
+
+    #[test]
+    fn test_event_history_methods() {
+        let events_json = r#"{
+            "Response": [
+                {
+                    "Time": "2025-08-06T19:18:39.2067156-07:00",
+                    "Event": "IMAGE-SAVE"
+                },
+                {
+                    "Time": "2025-08-06T19:18:09.4045633-07:00",
+                    "New": {"Name": "HA", "Id": 0},
+                    "Previous": {"Name": "OIII", "Id": 1},
+                    "Event": "FILTERWHEEL-CHANGED"
+                },
+                {
+                    "Time": "2025-08-06T21:50:56.545923-07:00",
+                    "Event": "AUTOFOCUS-FINISHED"
+                },
+                {
+                    "Time": "2025-08-06T18:45:40.1430956-07:00",
+                    "Event": "CAMERA-CONNECTED"
+                }
+            ],
+            "Error": "",
+            "StatusCode": 200,
+            "Success": true,
+            "Type": "API"
+        }"#;
+
+        let events: EventHistoryResponse = serde_json::from_str(events_json).unwrap();
+
+        // Test filtering by type
+        let image_saves = events.get_image_saves();
+        assert_eq!(image_saves.len(), 1);
+        assert_eq!(image_saves[0].event, "IMAGE-SAVE");
+
+        let filter_changes = events.get_filterwheel_changes();
+        assert_eq!(filter_changes.len(), 1);
+        assert_eq!(filter_changes[0].event, "FILTERWHEEL-CHANGED");
+
+        let connection_events = events.get_connection_events();
+        assert_eq!(connection_events.len(), 1);
+        assert_eq!(connection_events[0].event, "CAMERA-CONNECTED");
+
+        // Test autofocus events
+        let autofocus_events = events.get_events_by_type(event_types::AUTOFOCUS_FINISHED);
+        assert_eq!(autofocus_events.len(), 1);
+        assert_eq!(autofocus_events[0].event, "AUTOFOCUS-FINISHED");
+
+        // Test counting
+        let counts = events.count_events_by_type();
+        assert_eq!(counts.get("IMAGE-SAVE"), Some(&1));
+        assert_eq!(counts.get("FILTERWHEEL-CHANGED"), Some(&1));
+        assert_eq!(counts.get("AUTOFOCUS-FINISHED"), Some(&1));
+        assert_eq!(counts.get("CAMERA-CONNECTED"), Some(&1));
+    }
+
+    #[test]
+    fn test_load_event_history_from_file() {
+        // Test loading the example event history file if it exists
+        if let Ok(json_content) = std::fs::read_to_string("example_event-history.json") {
+            let events: Result<EventHistoryResponse, _> = serde_json::from_str(&json_content);
+            assert!(
+                events.is_ok(),
+                "Should be able to parse example_event-history.json"
+            );
+
+            let events = events.unwrap();
+            assert!(events.success, "Events should indicate success");
+            assert_eq!(events.status_code, 200, "Should have status code 200");
+            assert!(!events.response.is_empty(), "Should have events");
+
+            println!("Found {} events in example file", events.response.len());
+
+            // Test event analysis
+            let counts = events.count_events_by_type();
+            println!("Event type counts: {:?}", counts);
+
+            let filter_changes = events.get_filterwheel_changes();
+            println!("Found {} filter wheel changes", filter_changes.len());
+
+            let image_saves = events.get_image_saves();
+            println!("Found {} image saves", image_saves.len());
+
+            let autofocus_events = events.get_events_by_type(event_types::AUTOFOCUS_FINISHED);
+            println!("Found {} autofocus events", autofocus_events.len());
+
+            // Test time range filtering (get first and last event times)
+            if events.response.len() > 1 {
+                let first_time = &events.response[0].time;
+                let last_time = &events.response[events.response.len() - 1].time;
+                let range_events = events.get_events_in_range(first_time, last_time);
+                assert_eq!(range_events.len(), events.response.len());
+            }
+        } else {
+            println!("example_event-history.json not found, skipping file test");
+        }
+    }
+}

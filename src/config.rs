@@ -229,8 +229,6 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
-    use std::path::Path;
 
     #[test]
     fn test_default_config() {

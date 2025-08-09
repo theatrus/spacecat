@@ -17,7 +17,7 @@ SpaceCat is a Rust-based astronomical observation system that interfaces with Sp
 
 ### Core Modules
 
-- **`src/main.rs`**: Main application with CLI commands for sequence parsing, event monitoring, image analysis, autofocus data, and real-time polling
+- **`src/main.rs`**: Main application with CLI commands for API-only operations: sequence parsing, event monitoring, image analysis, autofocus data, and real-time polling
 - **`src/config.rs`**: JSON-based configuration system with validation and error handling
 - **`src/api.rs`**: HTTP client with generic retry logic for SpaceCat API endpoints
 - **`src/events.rs`**: Event history structures and analysis methods
@@ -105,6 +105,12 @@ Uses `config.json` for API and Discord settings:
   - Configurable via config.json
   - Non-blocking operation that won't interrupt observations
 
+- **Testing**: Comprehensive unit test coverage with file-based testing:
+  - All modules include unit tests for data parsing and analysis
+  - File-based testing using example JSON files (e.g., example_sequence.json)
+  - Base64 image processing validation tests
+  - API response structure validation
+
 ### Data Structures
 
 - **Events**: Timestamped equipment state changes with optional details (including AUTOFOCUS-FINISHED events)
@@ -115,10 +121,10 @@ Uses `config.json` for API and Discord settings:
 
 ### CLI Commands
 
-The system provides comprehensive CLI commands for all functionality:
+The system provides comprehensive CLI commands for all functionality. All commands now connect directly to the API for real-time data:
 
-- `cargo run -- sequence` - Parse and display sequence information with target extraction
-- `cargo run -- events` - Load and analyze event history from API or local file  
+- `cargo run -- sequence` - Get current sequence information and extract active targets
+- `cargo run -- events` - Load and analyze event history from API
 - `cargo run -- last-events --count 10` - Display the most recent events with details
 - `cargo run -- images` - Load and analyze image history with session statistics
 - `cargo run -- get-image <index>` - Retrieve specific images with base64 decoding
@@ -126,6 +132,5 @@ The system provides comprehensive CLI commands for all functionality:
 - `cargo run -- poll` - Real-time event polling with configurable intervals
 - `cargo run -- dual-poll` - Combined event/image monitoring with Discord integration
 - `cargo run -- last-autofocus` - Display detailed autofocus analysis and quality metrics
-- `cargo run -- test-base64` - Validate base64 image processing functionality
 
 The system successfully demonstrates live telescope operation monitoring with 90 calibration images across 7 filters and real-time event tracking.
