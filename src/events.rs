@@ -165,7 +165,7 @@ impl Event {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json;
+    
 
     #[test]
     fn test_event_parsing() {
@@ -303,7 +303,7 @@ mod tests {
 
             // Test event analysis
             let counts = events.count_events_by_type();
-            println!("Event type counts: {:?}", counts);
+            println!("Event type counts: {counts:?}");
 
             let filter_changes = events.get_filterwheel_changes();
             println!("Found {} filter wheel changes", filter_changes.len());

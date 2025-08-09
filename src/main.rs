@@ -96,31 +96,31 @@ async fn main() {
     match cli.command {
         Commands::Sequence => {
             if let Err(e) = cmd_sequence().await {
-                eprintln!("Sequence command failed: {}", e);
+                eprintln!("Sequence command failed: {e}");
                 std::process::exit(1);
             }
         }
         Commands::Events => {
             if let Err(e) = cmd_events().await {
-                eprintln!("Events command failed: {}", e);
+                eprintln!("Events command failed: {e}");
                 std::process::exit(1);
             }
         }
         Commands::LastEvents { count } => {
             if let Err(e) = cmd_last_events(count).await {
-                eprintln!("LastEvents command failed: {}", e);
+                eprintln!("LastEvents command failed: {e}");
                 std::process::exit(1);
             }
         }
         Commands::Images => {
             if let Err(e) = cmd_images().await {
-                eprintln!("Images command failed: {}", e);
+                eprintln!("Images command failed: {e}");
                 std::process::exit(1);
             }
         }
         Commands::GetImage { index, params } => {
             if let Err(e) = cmd_get_image(index, &params).await {
-                eprintln!("GetImage command failed: {}", e);
+                eprintln!("GetImage command failed: {e}");
                 std::process::exit(1);
             }
         }
@@ -130,31 +130,31 @@ async fn main() {
             image_type,
         } => {
             if let Err(e) = cmd_get_thumbnail(index, &output, image_type.as_deref()).await {
-                eprintln!("GetThumbnail command failed: {}", e);
+                eprintln!("GetThumbnail command failed: {e}");
                 std::process::exit(1);
             }
         }
         Commands::Poll { interval, count } => {
             if let Err(e) = cmd_poll(interval, count).await {
-                eprintln!("Poll command failed: {}", e);
+                eprintln!("Poll command failed: {e}");
                 std::process::exit(1);
             }
         }
         Commands::DualPoll { interval } => {
             if let Err(e) = cmd_dual_poll(interval).await {
-                eprintln!("DualPoll command failed: {}", e);
+                eprintln!("DualPoll command failed: {e}");
                 std::process::exit(1);
             }
         }
         Commands::LastAutofocus => {
             if let Err(e) = cmd_last_autofocus().await {
-                eprintln!("LastAutofocus command failed: {}", e);
+                eprintln!("LastAutofocus command failed: {e}");
                 std::process::exit(1);
             }
         }
         Commands::MountInfo => {
             if let Err(e) = cmd_mount_info().await {
-                eprintln!("MountInfo command failed: {}", e);
+                eprintln!("MountInfo command failed: {e}");
                 std::process::exit(1);
             }
         }
@@ -174,12 +174,14 @@ async fn cmd_sequence() -> Result<(), Box<dyn std::error::Error>> {
 
             // Get global triggers
             if let Some(triggers) = seq.get_global_triggers() {
-                println!("Found {} global triggers", triggers.global_triggers.len());
+                let trigger_count = triggers.global_triggers.len();
+                println!("Found {trigger_count} global triggers");
             }
 
             // Get all containers
             let containers = seq.get_containers();
-            println!("Found {} containers:", containers.len());
+            let container_count = containers.len();
+            println!("Found {container_count} containers:");
             for container in &containers {
                 println!(
                     "  - {} (status: {}, {} items)",
@@ -191,7 +193,7 @@ async fn cmd_sequence() -> Result<(), Box<dyn std::error::Error>> {
 
             // Test the new extract_current_target utility function
             if let Some(target) = extract_current_target(&seq) {
-                println!("Current active target: {}", target);
+                println!("Current active target: {target}");
             } else {
                 println!("No active target found");
             }
@@ -199,13 +201,13 @@ async fn cmd_sequence() -> Result<(), Box<dyn std::error::Error>> {
             // Extract meridian flip information
             if let Some(meridian_flip_hours) = extract_meridian_flip_time(&seq) {
                 let formatted_time = meridian_flip_time_formatted_with_clock(meridian_flip_hours);
-                println!("Meridian flip in: {}", formatted_time);
+                println!("Meridian flip in: {formatted_time}");
             } else {
                 println!("No meridian flip information available");
             }
         }
         Err(e) => {
-            return Err(format!("Failed to load sequence from API: {}", e).into());
+            return Err(format!("Failed to load sequence from API: {e}").into());
         }
     }
 
@@ -223,7 +225,7 @@ async fn cmd_events() -> Result<(), Box<dyn std::error::Error>> {
             display_event_statistics(&events);
         }
         Err(e) => {
-            return Err(format!("Failed to load events from API: {}", e).into());
+            return Err(format!("Failed to load events from API: {e}").into());
         }
     }
 
@@ -241,7 +243,7 @@ async fn cmd_last_events(count: usize) -> Result<(), Box<dyn std::error::Error>>
             events
         }
         Err(e) => {
-            return Err(format!("Failed to load events from API: {}", e).into());
+            return Err(format!("Failed to load events from API: {e}").into());
         }
     };
 
@@ -261,7 +263,7 @@ async fn cmd_images() -> Result<(), Box<dyn std::error::Error>> {
             display_last_images(&images, 3);
         }
         Err(e) => {
-            return Err(format!("Failed to load images from API: {}", e).into());
+            return Err(format!("Failed to load images from API: {e}").into());
         }
     }
 
@@ -269,7 +271,7 @@ async fn cmd_images() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn cmd_get_image(index: u32, params: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    println!("Getting image at index {} from API...", index);
+    println!("Getting image at index {index} from API...");
 
     // Parse additional parameters
     let mut param_pairs = vec![("autoPrepare", "true")]; // Default parameter
@@ -278,8 +280,7 @@ async fn cmd_get_image(index: u32, params: &[String]) -> Result<(), Box<dyn std:
             param_pairs.push((key, value));
         } else {
             eprintln!(
-                "Warning: Invalid parameter format '{}', expected 'key=value'",
-                param
+                "Warning: Invalid parameter format '{param}', expected 'key=value'"
             );
         }
     }
@@ -303,25 +304,27 @@ async fn cmd_get_image(index: u32, params: &[String]) -> Result<(), Box<dyn std:
             // Check if we got image data
             if image_response.success && !image_response.response.is_empty() {
                 let data_size = image_response.response.len();
-                println!("  Image data size: {} characters (base64)", data_size);
+                println!("  Image data size: {data_size} characters (base64)");
 
                 // Show first few characters of base64 data as a sample
                 let preview = if data_size > 50 {
-                    format!("{}...", &image_response.response[0..50])
+                    let preview_data = &image_response.response[0..50];
+                    format!("{preview_data}...")
                 } else {
                     image_response.response.clone()
                 };
-                println!("  Base64 preview: {}", preview);
+                println!("  Base64 preview: {preview}");
 
                 // Try to decode base64 to get actual image size
                 match base64::engine::general_purpose::STANDARD.decode(&image_response.response) {
                     Ok(decoded) => {
-                        println!("  Decoded image size: {} bytes", decoded.len());
+                        let decoded_len = decoded.len();
+                        println!("  Decoded image size: {decoded_len} bytes");
 
                         // Check if this looks like a valid image by examining the header
                         if decoded.len() > 10 {
                             let header = &decoded[0..std::cmp::min(10, decoded.len())];
-                            println!("  Image header (hex): {:02x?}", header);
+                            println!("  Image header (hex): {header:02x?}");
 
                             // Check for common image formats
                             if decoded.starts_with(b"\x89PNG\r\n\x1a\n") {
@@ -343,7 +346,7 @@ async fn cmd_get_image(index: u32, params: &[String]) -> Result<(), Box<dyn std:
                         }
                     }
                     Err(e) => {
-                        println!("  Failed to decode base64: {}", e);
+                        println!("  Failed to decode base64: {e}");
                     }
                 }
             } else {
@@ -351,7 +354,7 @@ async fn cmd_get_image(index: u32, params: &[String]) -> Result<(), Box<dyn std:
             }
         }
         Err(e) => {
-            return Err(format!("Failed to get image: {}", e).into());
+            return Err(format!("Failed to get image: {e}").into());
         }
     }
 
@@ -363,7 +366,7 @@ async fn cmd_get_thumbnail(
     output_path: &str,
     image_type: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    println!("Getting thumbnail for image at index {} from API...", index);
+    println!("Getting thumbnail for image at index {index} from API...");
 
     let config = Config::load_or_default();
     let client = SpaceCatApiClient::new(config.api)?;
@@ -384,7 +387,7 @@ async fn cmd_get_thumbnail(
             // Save the thumbnail to disk
             match std::fs::write(output_path, &thumbnail_response.data) {
                 Ok(()) => {
-                    println!("  Thumbnail saved to: {}", output_path);
+                    println!("  Thumbnail saved to: {output_path}");
 
                     // Try to detect image format from first few bytes
                     if thumbnail_response.data.len() >= 4 {
@@ -394,19 +397,19 @@ async fn cmd_get_thumbnail(
                         } else if header.starts_with(b"\x89PNG") {
                             println!("  Format: PNG");
                         } else {
-                            println!("  Format: Unknown (header: {:02x?})", header);
+                            println!("  Format: Unknown (header: {header:02x?})");
                         }
                     }
                 }
                 Err(e) => {
                     return Err(
-                        format!("Failed to save thumbnail to {}: {}", output_path, e).into(),
+                        format!("Failed to save thumbnail to {output_path}: {e}").into(),
                     );
                 }
             }
         }
         Err(e) => {
-            return Err(format!("Failed to get thumbnail: {}", e).into());
+            return Err(format!("Failed to get thumbnail: {e}").into());
         }
     }
 
@@ -415,14 +418,14 @@ async fn cmd_get_thumbnail(
 
 async fn cmd_poll(interval: u64, count: u32) -> Result<(), Box<dyn std::error::Error>> {
     println!("Starting event polling...");
-    println!("Poll interval: {}s, Poll cycles: {}", interval, count);
+    println!("Poll interval: {interval}s, Poll cycles: {count}");
 
     let config = Config::load_or_default();
     let client = SpaceCatApiClient::new(config.api)?;
     let mut poller = EventPoller::new(client, Duration::from_secs(interval));
 
     for i in 1..=count {
-        println!("\nPoll #{}", i);
+        println!("\nPoll #{i}");
 
         match poller.poll_new_events().await {
             Ok(result) => {
@@ -437,25 +440,27 @@ async fn cmd_poll(interval: u64, count: u32) -> Result<(), Box<dyn std::error::E
                     // Show specific event types
                     let image_saves = result.get_events_by_type(event_types::IMAGE_SAVE);
                     if !image_saves.is_empty() {
-                        println!("    → {} image saves in this batch", image_saves.len());
+                        let image_saves_len = image_saves.len();
+                        println!("    → {image_saves_len} image saves in this batch");
                     }
 
                     let filter_changes =
                         result.get_events_by_type(event_types::FILTERWHEEL_CHANGED);
                     if !filter_changes.is_empty() {
+                        let filter_changes_len = filter_changes.len();
                         println!(
-                            "    → {} filter changes in this batch",
-                            filter_changes.len()
+                            "    → {filter_changes_len} filter changes in this batch"
                         );
                     }
                 } else {
                     println!("  No new events since last poll");
                 }
 
-                println!("  Total events seen: {}", poller.seen_event_count());
+                let seen_count = poller.seen_event_count();
+                println!("  Total events seen: {seen_count}");
             }
             Err(e) => {
-                println!("  Poll failed: {}", e);
+                println!("  Poll failed: {e}");
             }
         }
     }
@@ -465,7 +470,7 @@ async fn cmd_poll(interval: u64, count: u32) -> Result<(), Box<dyn std::error::E
 
 async fn cmd_dual_poll(interval: u64) -> Result<(), Box<dyn std::error::Error>> {
     println!("Starting dual polling (events and images)...");
-    println!("Poll interval: {}s", interval);
+    println!("Poll interval: {interval}s");
     println!("Press Ctrl+C to stop\n");
 
     let config = Config::load_or_default();
@@ -476,9 +481,9 @@ async fn cmd_dual_poll(interval: u64) -> Result<(), Box<dyn std::error::Error>> 
     if let Some(discord_config) = &config.discord {
         if discord_config.enabled && !discord_config.webhook_url.is_empty() {
             println!("Discord webhook configured, events will be sent to Discord");
+            let cooldown = discord_config.image_cooldown_seconds;
             println!(
-                "Discord image cooldown: {}s",
-                discord_config.image_cooldown_seconds
+                "Discord image cooldown: {cooldown}s"
             );
             poller = poller
                 .with_discord_webhook(&discord_config.webhook_url)?
@@ -503,7 +508,7 @@ async fn cmd_last_autofocus() -> Result<(), Box<dyn std::error::Error>> {
             display_autofocus_data(&autofocus);
         }
         Err(e) => {
-            return Err(format!("Failed to load autofocus data from API: {}", e).into());
+            return Err(format!("Failed to load autofocus data from API: {e}").into());
         }
     }
 
@@ -518,7 +523,7 @@ async fn cmd_mount_info() -> Result<(), Box<dyn std::error::Error>> {
             display_mount_info(&mount_info);
         }
         Err(e) => {
-            return Err(format!("Failed to load mount information from API: {}", e).into());
+            return Err(format!("Failed to load mount information from API: {e}").into());
         }
     }
 
@@ -543,7 +548,7 @@ async fn load_autofocus_from_api() -> Result<AutofocusResponse, Box<dyn std::err
     match client.get_version().await {
         Ok(_) => {} // Version check successful
         Err(e) => {
-            return Err(format!("Could not get API version: {}", e).into());
+            return Err(format!("Could not get API version: {e}").into());
         }
     }
 
@@ -591,10 +596,10 @@ fn display_autofocus_data(autofocus: &AutofocusResponse) {
     );
 
     let (min_pos, max_pos) = af_data.get_focus_range();
-    println!("Focus Range: {} - {}", min_pos, max_pos);
+    println!("Focus Range: {min_pos} - {max_pos}");
 
     if let Some(best_hfr) = af_data.get_best_measured_hfr() {
-        println!("Best Measured HFR: {:.3}", best_hfr);
+        println!("Best Measured HFR: {best_hfr:.3}");
     }
 
     println!(
@@ -654,7 +659,7 @@ fn display_autofocus_data(autofocus: &AutofocusResponse) {
     let position_change =
         af_data.calculated_focus_point.position - af_data.previous_focus_point.position;
     if position_change != 0 {
-        println!("Focus position changed by {} steps", position_change);
+        println!("Focus position changed by {position_change} steps");
     } else {
         println!("Focus position unchanged from previous run");
     }
@@ -676,7 +681,7 @@ async fn load_mount_info_from_api() -> Result<MountInfoResponse, Box<dyn std::er
     match client.get_version().await {
         Ok(_) => {} // Version check successful
         Err(e) => {
-            return Err(format!("Could not get API version: {}", e).into());
+            return Err(format!("Could not get API version: {e}").into());
         }
     }
 
@@ -739,11 +744,11 @@ fn display_mount_info(mount_info: &MountInfoResponse) {
 
     println!("\n=== Current Position ===");
     let (ra, dec) = mount_info.get_coordinates();
-    println!("Right Ascension: {}", ra);
-    println!("Declination: {}", dec);
+    println!("Right Ascension: {ra}");
+    println!("Declination: {dec}");
     let (alt, az) = mount_info.get_alt_az();
-    println!("Altitude: {}", alt);
-    println!("Azimuth: {}", az);
+    println!("Altitude: {alt}");
+    println!("Azimuth: {az}");
     println!("Side of Pier: {}", mount_info.get_side_of_pier());
 
     println!("\n=== Time Information ===");
@@ -753,15 +758,14 @@ fn display_mount_info(mount_info: &MountInfoResponse) {
     let flip_time = mount_info.get_time_to_meridian_flip_hours();
     let flip_string = mount_info.get_time_to_meridian_flip_string();
     println!(
-        "Time to Meridian Flip: {:.3} hours ({})",
-        flip_time, flip_string
+        "Time to Meridian Flip: {flip_time:.3} hours ({flip_string})"
     );
 
     println!("\n=== Site Information ===");
     let (lat, lon, elev) = mount_info.get_site_info();
-    println!("Latitude: {:.3}°", lat);
-    println!("Longitude: {:.3}°", lon);
-    println!("Elevation: {} m", elev);
+    println!("Latitude: {lat:.3}°");
+    println!("Longitude: {lon:.3}°");
+    println!("Elevation: {elev} m");
 
     println!("\n=== Capabilities ===");
     println!(
@@ -829,7 +833,7 @@ fn display_mount_info(mount_info: &MountInfoResponse) {
     if !mount.supported_actions.is_empty() {
         println!("\n=== Supported Actions ===");
         for action in &mount.supported_actions {
-            println!("  • {}", action);
+            println!("  • {action}");
         }
     }
 }
@@ -850,7 +854,7 @@ async fn load_sequence_from_api() -> Result<SequenceResponse, Box<dyn std::error
     match client.get_version().await {
         Ok(_) => {} // Version check successful
         Err(e) => {
-            return Err(format!("Could not get API version: {}", e).into());
+            return Err(format!("Could not get API version: {e}").into());
         }
     }
 
@@ -875,7 +879,7 @@ async fn load_event_history_from_api() -> Result<EventHistoryResponse, Box<dyn s
     match client.get_version().await {
         Ok(_) => {} // Version check successful
         Err(e) => {
-            return Err(format!("Could not get API version: {}", e).into());
+            return Err(format!("Could not get API version: {e}").into());
         }
     }
 
@@ -900,7 +904,7 @@ async fn load_image_history_from_api() -> Result<ImageHistoryResponse, Box<dyn s
     match client.get_version().await {
         Ok(_) => {} // Version check successful
         Err(e) => {
-            return Err(format!("Could not get API version: {}", e).into());
+            return Err(format!("Could not get API version: {e}").into());
         }
     }
 
@@ -919,7 +923,7 @@ fn display_event_statistics(events: &EventHistoryResponse) {
     let counts = events.count_events_by_type();
     println!("Event type counts:");
     for (event_type, count) in counts.iter() {
-        println!("  {}: {}", event_type, count);
+        println!("  {event_type}: {count}");
     }
 
     // Show filter wheel changes
@@ -943,20 +947,20 @@ fn display_image_statistics(images: &ImageHistoryResponse) {
 
     // Show session statistics
     let stats = images.get_session_stats();
-    println!("{}", stats);
+    println!("{stats}");
 
     // Show image type counts
     let type_counts = images.count_images_by_type();
     println!("\nImage type counts:");
     for (image_type, count) in type_counts.iter() {
-        println!("  {}: {}", image_type, count);
+        println!("  {image_type}: {count}");
     }
 
     // Show filter counts
     let filter_counts = images.count_images_by_filter();
     println!("\nFilter counts:");
     for (filter, count) in filter_counts.iter() {
-        println!("  {}: {}", filter, count);
+        println!("  {filter}: {count}");
     }
 
     // Show light frames by filter
@@ -968,7 +972,7 @@ fn display_image_statistics(images: &ImageHistoryResponse) {
             *filter_lights.entry(&frame.filter).or_insert(0) += 1;
         }
         for (filter, count) in filter_lights.iter() {
-            println!("  {}: {} light frames", filter, count);
+            println!("  {filter}: {count} light frames");
         }
     }
 
@@ -983,12 +987,12 @@ fn display_image_statistics(images: &ImageHistoryResponse) {
         let max_temp = temperatures
             .iter()
             .fold(f64::NEG_INFINITY, |a, &b| a.max(b));
-        println!("Temperature range: {:.1}°C to {:.1}°C", min_temp, max_temp);
+        println!("Temperature range: {min_temp:.1}°C to {max_temp:.1}°C");
     }
 }
 
 fn display_last_images(images: &ImageHistoryResponse, count: usize) {
-    println!("\n=== Last {} Images ===", count);
+    println!("\n=== Last {count} Images ===");
 
     if images.response.is_empty() {
         println!("No images available");
@@ -1011,7 +1015,7 @@ fn display_last_images(images: &ImageHistoryResponse, count: usize) {
 
     for (index, image) in last_images.iter().rev() {
         // Reverse again to show in chronological order
-        println!("\nImage Index {}: ", index);
+        println!("\nImage Index {index}: ");
         println!("  Date: {}", image.date);
         println!("  Type: {}", image.image_type);
         println!("  Filter: {}", image.filter);
@@ -1029,7 +1033,7 @@ fn display_last_images(images: &ImageHistoryResponse, count: usize) {
 }
 
 fn display_last_events(events: &EventHistoryResponse, count: usize) {
-    println!("\n=== Last {} Events ===", count);
+    println!("\n=== Last {count} Events ===");
 
     if events.response.is_empty() {
         println!("No events available");
@@ -1052,7 +1056,7 @@ fn display_last_events(events: &EventHistoryResponse, count: usize) {
 
     for (index, event) in last_events.iter().rev() {
         // Reverse again to show in chronological order
-        println!("\nEvent Index {}: ", index);
+        println!("\nEvent Index {index}: ");
         println!("  Time: {}", event.time);
         println!("  Event: {}", event.event);
 
@@ -1070,7 +1074,7 @@ fn display_last_events(events: &EventHistoryResponse, count: usize) {
 
         // Display event type with emoji and description
         let (emoji, description) = get_event_type_info(&event.event);
-        println!("  Type: {} {}", emoji, description);
+        println!("  Type: {emoji} {description}");
     }
 }
 

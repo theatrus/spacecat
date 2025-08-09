@@ -77,12 +77,12 @@ impl EventPoller {
                 Ok(result) => {
                     if !result.new_events.is_empty() {
                         if let Err(e) = callback(result).await {
-                            eprintln!("Callback error: {}", e);
+                            eprintln!("Callback error: {e}");
                         }
                     }
                 }
                 Err(e) => {
-                    eprintln!("Polling error: {}", e);
+                    eprintln!("Polling error: {e}");
                     // Sleep longer on error to avoid spamming
                     sleep(Duration::from_secs(30)).await;
                 }

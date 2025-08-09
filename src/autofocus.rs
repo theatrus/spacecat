@@ -176,7 +176,7 @@ impl AutofocusData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json;
+    
 
     #[test]
     fn test_parse_autofocus_response() {

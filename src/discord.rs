@@ -155,10 +155,10 @@ pub enum DiscordError {
 impl std::fmt::Display for DiscordError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            DiscordError::Network(e) => write!(f, "Network error: {}", e),
-            DiscordError::Parse(e) => write!(f, "Parse error: {}", e),
+            DiscordError::Network(e) => write!(f, "Network error: {e}"),
+            DiscordError::Parse(e) => write!(f, "Parse error: {e}"),
             DiscordError::Http { status, message } => {
-                write!(f, "HTTP error {}: {}", status, message)
+                write!(f, "HTTP error {status}: {message}")
             }
             DiscordError::InvalidWebhookUrl => write!(f, "Invalid webhook URL"),
         }
@@ -213,10 +213,10 @@ impl DiscordWebhook {
         if let Some(params) = params {
             let query_string = params
                 .iter()
-                .map(|(k, v)| format!("{}={}", k, v))
+                .map(|(k, v)| format!("{k}={v}"))
                 .collect::<Vec<_>>()
                 .join("&");
-            url = format!("{}?{}", url, query_string);
+            url = format!("{url}?{query_string}");
         }
 
         let response = self
@@ -335,6 +335,12 @@ impl DiscordWebhook {
         }
 
         Ok(())
+    }
+}
+
+impl Default for Embed {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

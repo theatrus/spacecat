@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
     pub api: ApiConfig,
     pub logging: LoggingConfig,
@@ -51,9 +51,9 @@ pub enum ConfigError {
 impl std::fmt::Display for ConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ConfigError::FileNotFound(path) => write!(f, "Configuration file not found: {}", path),
-            ConfigError::ParseError(e) => write!(f, "Failed to parse configuration: {}", e),
-            ConfigError::IoError(e) => write!(f, "IO error reading configuration: {}", e),
+            ConfigError::FileNotFound(path) => write!(f, "Configuration file not found: {path}"),
+            ConfigError::ParseError(e) => write!(f, "Failed to parse configuration: {e}"),
+            ConfigError::IoError(e) => write!(f, "IO error reading configuration: {e}"),
         }
     }
 }
@@ -72,15 +72,6 @@ impl From<std::io::Error> for ConfigError {
     }
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            api: ApiConfig::default(),
-            logging: LoggingConfig::default(),
-            discord: None,
-        }
-    }
-}
 
 impl Default for ApiConfig {
     fn default() -> Self {
@@ -131,7 +122,7 @@ impl Config {
                 config
             }
             Err(e) => {
-                println!("Failed to load config.json ({}), using defaults", e);
+                println!("Failed to load config.json ({e}), using defaults");
                 Self::default()
             }
         }

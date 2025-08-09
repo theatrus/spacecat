@@ -56,12 +56,12 @@ impl DualPoller {
 
     pub async fn start_polling(&mut self, poll_interval: Duration) {
         println!("Starting dual polling loop (events and images)...");
-        println!("Polling interval: {:?}", poll_interval);
+        println!("Polling interval: {poll_interval:?}");
         println!("Press Ctrl+C to stop\n");
 
         // Initial fetch to establish baseline
         if let Err(e) = self.initialize_baseline().await {
-            eprintln!("Failed to initialize baseline: {}", e);
+            eprintln!("Failed to initialize baseline: {e}");
             return;
         }
 
@@ -110,16 +110,16 @@ impl DualPoller {
                         }
                     }
                 }
-                Err(e) => eprintln!("Error fetching events: {}", e),
+                Err(e) => eprintln!("Error fetching events: {e}"),
             }
 
             // Poll images
             match self.client.get_all_image_history().await {
                 Ok(images) => {
                     for (index, image) in images.response.iter().enumerate() {
-                        let key = self.image_key(&image);
+                        let key = self.image_key(image);
                         if self.image_seen.insert(key) {
-                            self.print_new_image(&image);
+                            self.print_new_image(image);
                             if let Some(webhook) = &self.discord_webhook {
                                 // Check if we should send this image to Discord based on cooldown
                                 let should_send = match self.last_discord_image_time {
@@ -132,7 +132,7 @@ impl DualPoller {
                                 if should_send {
                                     self.send_image_to_discord(
                                         webhook,
-                                        &image,
+                                        image,
                                         index,
                                         self.skipped_images_count,
                                     )
@@ -159,7 +159,7 @@ impl DualPoller {
                         }
                     }
                 }
-                Err(e) => eprintln!("Error fetching images: {}", e),
+                Err(e) => eprintln!("Error fetching images: {e}"),
             }
 
             sleep(poll_interval).await;
@@ -212,7 +212,7 @@ impl DualPoller {
         println!("[NEW EVENT] {}", event.time);
         println!("  Type: {}", event.event);
         if let Some(details) = &event.details {
-            println!("  Details: {:?}", details);
+            println!("  Details: {details:?}");
         }
         println!();
     }
@@ -220,11 +220,11 @@ impl DualPoller {
     fn print_new_image(&self, image: &ImageMetadata) {
         println!("[NEW IMAGE] {}", image.date);
         if let Some(target) = &self.current_target {
-            println!("  Target: {}", target);
+            println!("  Target: {target}");
         }
         if let Some(meridian_flip_hours) = self.current_meridian_flip_time {
             let formatted_time = meridian_flip_time_formatted_with_clock(meridian_flip_hours);
-            println!("  Meridian flip in: {}", formatted_time);
+            println!("  Meridian flip in: {formatted_time}");
         }
         println!("  Camera: {}", image.camera_name);
         println!("  Type: {}", image.image_type);
@@ -343,7 +343,7 @@ impl DualPoller {
         }
 
         if let Err(e) = webhook.execute_with_embed(None, embed).await {
-            eprintln!("Failed to send event to Discord: {}", e);
+            eprintln!("Failed to send event to Discord: {e}");
         }
     }
 
@@ -421,14 +421,14 @@ impl DualPoller {
                     .execute_with_file(None, Some(embed), &thumbnail_data.data, &filename)
                     .await
                 {
-                    eprintln!("Failed to send image with thumbnail to Discord: {}", e);
+                    eprintln!("Failed to send image with thumbnail to Discord: {e}");
                 }
             }
             Err(e) => {
-                eprintln!("Failed to download thumbnail for image {}: {}", index, e);
+                eprintln!("Failed to download thumbnail for image {index}: {e}");
                 // Send without thumbnail
                 if let Err(e) = webhook.execute_with_embed(None, embed).await {
-                    eprintln!("Failed to send image to Discord: {}", e);
+                    eprintln!("Failed to send image to Discord: {e}");
                 }
             }
         }
@@ -445,11 +445,11 @@ impl DualPoller {
                     if let (Some(old_target), Some(new_target_name)) =
                         (&self.current_target, &new_target)
                     {
-                        println!("[TARGET CHANGE] {} -> {}", old_target, new_target_name);
+                        println!("[TARGET CHANGE] {old_target} -> {new_target_name}");
                         if let Some(meridian_flip_hours) = new_meridian_flip_time {
                             let formatted_time =
                                 meridian_flip_time_formatted_with_clock(meridian_flip_hours);
-                            println!("  Meridian flip in: {}", formatted_time);
+                            println!("  Meridian flip in: {formatted_time}");
                         }
                         if let Some(webhook) = &self.discord_webhook {
                             self.send_target_change_to_discord(
@@ -461,11 +461,11 @@ impl DualPoller {
                             .await;
                         }
                     } else if let Some(new_target_name) = &new_target {
-                        println!("[TARGET START] {}", new_target_name);
+                        println!("[TARGET START] {new_target_name}");
                         if let Some(meridian_flip_hours) = new_meridian_flip_time {
                             let formatted_time =
                                 meridian_flip_time_formatted_with_clock(meridian_flip_hours);
-                            println!("  Meridian flip in: {}", formatted_time);
+                            println!("  Meridian flip in: {formatted_time}");
                         }
                         if let Some(webhook) = &self.discord_webhook {
                             self.send_target_start_to_discord(
@@ -489,7 +489,7 @@ impl DualPoller {
             Err(e) => {
                 // Only log sequence errors occasionally to avoid spam
                 if self.current_sequence.is_none() {
-                    eprintln!("Error fetching sequence (will retry silently): {}", e);
+                    eprintln!("Error fetching sequence (will retry silently): {e}");
                 }
             }
         }
@@ -521,7 +521,7 @@ impl DualPoller {
         let embed = embed.timestamp(&chrono::Utc::now().to_rfc3339());
 
         if let Err(e) = webhook.execute_with_embed(None, embed).await {
-            eprintln!("Failed to send target change to Discord: {}", e);
+            eprintln!("Failed to send target change to Discord: {e}");
         }
     }
 
@@ -549,7 +549,7 @@ impl DualPoller {
         let embed = embed.timestamp(&chrono::Utc::now().to_rfc3339());
 
         if let Err(e) = webhook.execute_with_embed(None, embed).await {
-            eprintln!("Failed to send target start to Discord: {}", e);
+            eprintln!("Failed to send target start to Discord: {e}");
         }
     }
 
@@ -581,8 +581,8 @@ impl DualPoller {
                 let (alt, az) = mount_info.get_alt_az();
 
                 embed = embed
-                    .field("Mount Position", &format!("RA: {}\nDec: {}", ra, dec), true)
-                    .field("Alt/Az", &format!("Alt: {}\nAz: {}", alt, az), true)
+                    .field("Mount Position", &format!("RA: {ra}\nDec: {dec}"), true)
+                    .field("Alt/Az", &format!("Alt: {alt}\nAz: {az}"), true)
                     .field("Pier Side", mount_info.get_side_of_pier(), true)
                     .field(
                         "Sidereal Time",
@@ -602,7 +602,7 @@ impl DualPoller {
                     let (lat, lon, elev) = mount_info.get_site_info();
                     embed = embed.field(
                         "Site Location",
-                        &format!("Lat: {:.3}°\nLon: {:.3}°\nElev: {}m", lat, lon, elev),
+                        &format!("Lat: {lat:.3}°\nLon: {lon:.3}°\nElev: {elev}m"),
                         true,
                     );
                 }
@@ -627,7 +627,7 @@ impl DualPoller {
         let embed = embed.timestamp(&chrono::Utc::now().to_rfc3339());
 
         if let Err(e) = webhook.execute_with_embed(None, embed).await {
-            eprintln!("Failed to send mount event to Discord: {}", e);
+            eprintln!("Failed to send mount event to Discord: {e}");
         }
     }
 
@@ -646,7 +646,7 @@ impl DualPoller {
                 }
             }
             Err(e) => {
-                eprintln!("Failed to fetch autofocus data: {}", e);
+                eprintln!("Failed to fetch autofocus data: {e}");
             }
         }
         println!();
@@ -661,7 +661,7 @@ impl DualPoller {
         let af_data = &af.response;
         let success_indicator = if af.is_successful() { "✅" } else { "⚠️" };
 
-        println!("{} Autofocus Summary", success_indicator);
+        println!("{success_indicator} Autofocus Summary");
         println!("  Filter: {}", af_data.filter);
         println!("  Method: {}", af_data.method);
         println!("  Temperature: {:.1}°C", af_data.temperature);
@@ -686,10 +686,10 @@ impl DualPoller {
         println!("  Best R-squared: {:.4}", af.get_best_r_squared());
 
         let (min_pos, max_pos) = af_data.get_focus_range();
-        println!("  Focus Range: {} - {}", min_pos, max_pos);
+        println!("  Focus Range: {min_pos} - {max_pos}");
 
         if let Some(best_hfr) = af_data.get_best_measured_hfr() {
-            println!("  Best Measured HFR: {:.3}", best_hfr);
+            println!("  Best Measured HFR: {best_hfr:.3}");
         }
     }
 
@@ -706,13 +706,13 @@ impl DualPoller {
         let position_change =
             af_data.calculated_focus_point.position - af_data.initial_focus_point.position;
         let position_change_text = if position_change > 0 {
-            format!("+{}", position_change)
+            format!("+{position_change}")
         } else {
             position_change.to_string()
         };
 
         let embed = Embed::new()
-            .title(&format!("{} Autofocus Completed", success_indicator))
+            .title(&format!("{success_indicator} Autofocus Completed"))
             .color(color)
             .field("Filter", &af_data.filter, true)
             .field("Method", &af_data.method, true)
@@ -747,7 +747,7 @@ impl DualPoller {
             .timestamp(&chrono::Utc::now().to_rfc3339());
 
         if let Err(e) = webhook.execute_with_embed(None, embed).await {
-            eprintln!("Failed to send autofocus results to Discord: {}", e);
+            eprintln!("Failed to send autofocus results to Discord: {e}");
         }
     }
 
@@ -758,8 +758,8 @@ impl DualPoller {
             let (alt, az) = mount_info.get_alt_az();
 
             embed = embed
-                .field("Mount Position", &format!("RA: {}\nDec: {}", ra, dec), true)
-                .field("Alt/Az", &format!("Alt: {}\nAz: {}", alt, az), true)
+                .field("Mount Position", &format!("RA: {ra}\nDec: {dec}"), true)
+                .field("Alt/Az", &format!("Alt: {alt}\nAz: {az}"), true)
                 .field("Pier Side", mount_info.get_side_of_pier(), true);
 
             if mount_info.response.tracking_enabled {

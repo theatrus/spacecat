@@ -38,9 +38,9 @@ pub enum ApiError {
 impl std::fmt::Display for ApiError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ApiError::Network(e) => write!(f, "Network error: {}", e),
-            ApiError::Parse(e) => write!(f, "Parse error: {}", e),
-            ApiError::Http { status, message } => write!(f, "HTTP error {}: {}", status, message),
+            ApiError::Network(e) => write!(f, "Network error: {e}"),
+            ApiError::Parse(e) => write!(f, "Parse error: {e}"),
+            ApiError::Http { status, message } => write!(f, "HTTP error {status}: {message}"),
         }
     }
 }
@@ -74,7 +74,7 @@ impl SpaceCatApiClient {
     }
 
     /// Create a new API client with default configuration
-    pub fn default() -> Result<Self, ApiError> {
+    pub fn with_defaults() -> Result<Self, ApiError> {
         Self::new(ApiConfig::default())
     }
 
@@ -236,7 +236,7 @@ impl SpaceCatApiClient {
         index: u32,
         params: &[(&str, &str)],
     ) -> Result<ImageResponse, ApiError> {
-        let endpoint = format!("/image/{}", index);
+        let endpoint = format!("/image/{index}");
         self.generic_request_with_retry(&endpoint, params).await
     }
 
@@ -251,7 +251,7 @@ impl SpaceCatApiClient {
         index: u32,
         params: &[(&str, &str)],
     ) -> Result<ThumbnailResponse, ApiError> {
-        let endpoint = format!("/image/thumbnail/{}", index);
+        let endpoint = format!("/image/thumbnail/{index}");
 
         for attempt in 0..self.retry_attempts {
             let mut url = format!("{}/v2/api{}", self.base_url, endpoint);
@@ -259,10 +259,10 @@ impl SpaceCatApiClient {
             if !params.is_empty() {
                 let query_params = params
                     .iter()
-                    .map(|(k, v)| format!("{}={}", k, v))
+                    .map(|(k, v)| format!("{k}={v}"))
                     .collect::<Vec<_>>()
                     .join("&");
-                url = format!("{}?{}", url, query_params);
+                url = format!("{url}?{query_params}");
             }
 
             let response = match self.client.get(&url).send().await {
