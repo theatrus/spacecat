@@ -120,7 +120,9 @@ spacecat mount-info
 
 ### Service Mode
 
-For production use, run SpaceCat as a systemd service:
+#### Linux (systemd)
+
+For production use on Linux, run SpaceCat as a systemd service:
 
 ```bash
 # Check service logs
@@ -132,6 +134,32 @@ sudo systemctl restart spacecat.service
 # Monitor service status
 sudo systemctl status spacecat.service
 ```
+
+#### Windows Service
+
+For production use on Windows, SpaceCat can run as a Windows service:
+
+```powershell
+# Install the service (run as Administrator)
+spacecat.exe windows-service install
+
+# Configure the service
+# Edit C:\ProgramData\SpaceCat\config.json
+
+# Start the service
+spacecat.exe windows-service start
+
+# Check service status
+spacecat.exe windows-service status
+
+# Stop the service
+spacecat.exe windows-service stop
+
+# Uninstall the service
+spacecat.exe windows-service uninstall
+```
+
+**Note**: Windows service functionality is only available in Windows builds with the `windows-service` feature enabled.
 
 ## 🏗️ Development
 

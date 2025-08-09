@@ -9,6 +9,10 @@ repository = "https://github.com/theatrus/spacecat"
 keywords = ["astronomy", "telescope", "automation", "spacecat"]
 categories = ["science", "api-bindings"]
 
+[features]
+default = []
+windows-service = ["dep:windows-service", "dep:winapi"]
+
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -17,3 +21,7 @@ reqwest = { version = "0.12", features = ["json", "multipart"] }
 base64 = "0.22"
 clap = { version = "4.0", features = ["derive"] }
 chrono = { version = "0.4", features = ["serde"] }
+
+# Windows service dependencies (optional)
+windows-service = { version = "0.6", optional = true }
+winapi = { version = "0.3", features = ["winsvc", "winuser", "winerror"], optional = true }
