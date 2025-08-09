@@ -75,7 +75,7 @@ impl DualPoller {
                     for event in events.response {
                         // Skip filterwheel changed events where the filter didn't actually change
                         // This can happen when the filterwheel reports its position without actually moving
-                        if event.event == "FILTERWHEEL-CHANGED" {
+                        if event.event == event_types::FILTERWHEEL_CHANGED {
                             if let Some(crate::events::EventDetails::FilterWheelChange {
                                 ref new,
                                 ref previous,
@@ -174,7 +174,7 @@ impl DualPoller {
         for event in events.response {
             // Skip filterwheel changed events where the filter didn't actually change
             // This can happen when the filterwheel reports its position without actually moving
-            if event.event == "FILTERWHEEL-CHANGED" {
+            if event.event == event_types::FILTERWHEEL_CHANGED {
                 if let Some(crate::events::EventDetails::FilterWheelChange {
                     ref new,
                     ref previous,
@@ -243,16 +243,16 @@ impl DualPoller {
     }
 
     async fn send_event_to_discord(&self, webhook: &DiscordWebhook, event: &Event) {
-        if event.event == "IMAGE-SAVE" {
+        if event.event == event_types::IMAGE_SAVE {
             // Skip IMAGE-SAVE events, they will be handled in the image section
             return;
         }
 
         let color = match event.event.as_str() {
-            "IMAGE-SAVE" => colors::GREEN,
-            "FILTERWHEEL-CHANGED" => colors::BLUE,
-            "SEQUENCE-START" => colors::CYAN,
-            "SEQUENCE-STOP" => colors::ORANGE,
+            event_types::IMAGE_SAVE => colors::GREEN,
+            event_types::FILTERWHEEL_CHANGED => colors::BLUE,
+            event_types::SEQUENCE_START => colors::CYAN,
+            event_types::SEQUENCE_STOP => colors::ORANGE,
             event_types::MOUNT_PARKED => colors::YELLOW,
             event_types::MOUNT_BEFORE_FLIP => colors::ORANGE,
             event_types::MOUNT_AFTER_FLIP => colors::GREEN,
@@ -262,7 +262,7 @@ impl DualPoller {
         };
 
         let title = match event.event.as_str() {
-            "FILTERWHEEL-CHANGED" => "🔄 Filter Changed".to_string(),
+            event_types::FILTERWHEEL_CHANGED => "🔄 Filter Changed".to_string(),
             _ => format!("📡 {}", event.event),
         };
 

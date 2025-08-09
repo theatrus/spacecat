@@ -15,7 +15,7 @@ use base64::Engine;
 use clap::{Parser, Subcommand};
 use config::Config;
 use dual_poller::DualPoller;
-use events::EventHistoryResponse;
+use events::{EventHistoryResponse, event_types};
 use images::ImageHistoryResponse;
 use mount::MountInfoResponse;
 use poller::EventPoller;
@@ -435,12 +435,12 @@ async fn cmd_poll(interval: u64, count: u32) -> Result<(), Box<dyn std::error::E
                     }
 
                     // Show specific event types
-                    let image_saves = result.get_events_by_type("IMAGE-SAVE");
+                    let image_saves = result.get_events_by_type(event_types::IMAGE_SAVE);
                     if !image_saves.is_empty() {
                         println!("    → {} image saves in this batch", image_saves.len());
                     }
 
-                    let filter_changes = result.get_events_by_type("FILTERWHEEL-CHANGED");
+                    let filter_changes = result.get_events_by_type(event_types::FILTERWHEEL_CHANGED);
                     if !filter_changes.is_empty() {
                         println!(
                             "    → {} filter changes in this batch",
@@ -1079,18 +1079,18 @@ fn get_event_type_info(event_name: &str) -> (&'static str, &'static str) {
     }
 
     match event_name {
-        "IMAGE-SAVE" => ("📸", "Image captured and saved"),
-        "FILTERWHEEL-CHANGED" => ("🔄", "Filter wheel position changed"),
-        "GUIDER-DITHER" => ("🎯", "Dithering for drizzling"),
-        "SEQUENCE-START" => ("▶️", "Sequence started"),
-        "SEQUENCE-STOP" => ("⏹️", "Sequence stopped"),
-        "SEQUENCE-PAUSE" => ("⏸️", "Sequence paused"),
-        "SEQUENCE-RESUME" => ("▶️", "Sequence resumed"),
-        "EXPOSURE-START" => ("🌟", "Exposure started"),
-        "EXPOSURE-END" => ("✨", "Exposure completed"),
-        "MOUNT-SLEW" => ("🔭", "Mount slewing to target"),
-        "FOCUS-START" => ("🔍", "Auto-focus started"),
-        "FOCUS-END" => ("✅", "Auto-focus completed"),
+        event_types::IMAGE_SAVE => ("📸", "Image captured and saved"),
+        event_types::FILTERWHEEL_CHANGED => ("🔄", "Filter wheel position changed"),
+        event_types::GUIDER_DITHER => ("🎯", "Dithering for drizzling"),
+        event_types::SEQUENCE_START => ("▶️", "Sequence started"),
+        event_types::SEQUENCE_STOP => ("⏹️", "Sequence stopped"),
+        event_types::SEQUENCE_PAUSE => ("⏸️", "Sequence paused"),
+        event_types::SEQUENCE_RESUME => ("▶️", "Sequence resumed"),
+        event_types::EXPOSURE_START => ("🌟", "Exposure started"),
+        event_types::EXPOSURE_END => ("✨", "Exposure completed"),
+        event_types::MOUNT_SLEW => ("🔭", "Mount slewing to target"),
+        event_types::FOCUS_START => ("🔍", "Auto-focus started"),
+        event_types::FOCUS_END => ("✅", "Auto-focus completed"),
         _ => ("📋", "System event"),
     }
 }

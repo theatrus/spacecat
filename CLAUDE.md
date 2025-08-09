@@ -131,6 +131,8 @@ Uses `config.json` for API and Discord settings:
 ### Data Structures
 
 - **Events**: Timestamped equipment state changes with optional details (including AUTOFOCUS-FINISHED events)
+  - All event types are defined as constants in `event_types` module for type-safe matching
+  - No string literals in event matching - all comparisons use predefined constants
 - **Images**: Metadata including exposure times, filters, temperatures, statistics
 - **Sequences**: Container-based automation with triggers, conditions, and target extraction
 - **Autofocus**: Comprehensive focus session data with measurement points, curve fitting results, and quality metrics

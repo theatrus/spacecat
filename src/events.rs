@@ -65,6 +65,16 @@ pub mod event_types {
     pub const SAFETY_DISCONNECTED: &str = "SAFETY-DISCONNECTED";
     pub const IMAGE_SAVE: &str = "IMAGE-SAVE";
     pub const AUTOFOCUS_FINISHED: &str = "AUTOFOCUS-FINISHED";
+    pub const SEQUENCE_START: &str = "SEQUENCE-START";
+    pub const SEQUENCE_STOP: &str = "SEQUENCE-STOP";
+    pub const SEQUENCE_PAUSE: &str = "SEQUENCE-PAUSE";
+    pub const SEQUENCE_RESUME: &str = "SEQUENCE-RESUME";
+    pub const GUIDER_DITHER: &str = "GUIDER-DITHER";
+    pub const EXPOSURE_START: &str = "EXPOSURE-START";
+    pub const EXPOSURE_END: &str = "EXPOSURE-END";
+    pub const MOUNT_SLEW: &str = "MOUNT-SLEW";
+    pub const FOCUS_START: &str = "FOCUS-START";
+    pub const FOCUS_END: &str = "FOCUS-END";
 }
 
 impl EventHistoryResponse {
@@ -161,7 +171,7 @@ mod tests {
 
         let event: Event = serde_json::from_str(event_json).unwrap();
         assert_eq!(event.time, "2025-08-06T21:50:56.545923-07:00");
-        assert_eq!(event.event, "AUTOFOCUS-FINISHED");
+        assert_eq!(event.event, event_types::AUTOFOCUS_FINISHED);
         assert!(event.details.is_none());
     }
 
@@ -175,7 +185,7 @@ mod tests {
         }"#;
 
         let event: Event = serde_json::from_str(event_json).unwrap();
-        assert_eq!(event.event, "FILTERWHEEL-CHANGED");
+        assert_eq!(event.event, event_types::FILTERWHEEL_CHANGED);
 
         if let Some(EventDetails::FilterWheelChange { new, previous }) = event.details {
             assert_eq!(new.name, "HA");
@@ -191,7 +201,7 @@ mod tests {
     fn test_event_methods() {
         let camera_connected = Event {
             time: "2025-08-06T18:45:40.1430956-07:00".to_string(),
-            event: "CAMERA-CONNECTED".to_string(),
+            event: event_types::CAMERA_CONNECTED.to_string(),
             details: None,
         };
 
@@ -202,7 +212,7 @@ mod tests {
 
         let mount_disconnected = Event {
             time: "2025-08-06T19:20:35.2068582-07:00".to_string(),
-            event: "MOUNT-DISCONNECTED".to_string(),
+            event: event_types::MOUNT_DISCONNECTED.to_string(),
             details: None,
         };
 
@@ -246,27 +256,27 @@ mod tests {
         // Test filtering by type
         let image_saves = events.get_image_saves();
         assert_eq!(image_saves.len(), 1);
-        assert_eq!(image_saves[0].event, "IMAGE-SAVE");
+        assert_eq!(image_saves[0].event, event_types::IMAGE_SAVE);
 
         let filter_changes = events.get_filterwheel_changes();
         assert_eq!(filter_changes.len(), 1);
-        assert_eq!(filter_changes[0].event, "FILTERWHEEL-CHANGED");
+        assert_eq!(filter_changes[0].event, event_types::FILTERWHEEL_CHANGED);
 
         let connection_events = events.get_connection_events();
         assert_eq!(connection_events.len(), 1);
-        assert_eq!(connection_events[0].event, "CAMERA-CONNECTED");
+        assert_eq!(connection_events[0].event, event_types::CAMERA_CONNECTED);
 
         // Test autofocus events
         let autofocus_events = events.get_events_by_type(event_types::AUTOFOCUS_FINISHED);
         assert_eq!(autofocus_events.len(), 1);
-        assert_eq!(autofocus_events[0].event, "AUTOFOCUS-FINISHED");
+        assert_eq!(autofocus_events[0].event, event_types::AUTOFOCUS_FINISHED);
 
         // Test counting
         let counts = events.count_events_by_type();
-        assert_eq!(counts.get("IMAGE-SAVE"), Some(&1));
-        assert_eq!(counts.get("FILTERWHEEL-CHANGED"), Some(&1));
-        assert_eq!(counts.get("AUTOFOCUS-FINISHED"), Some(&1));
-        assert_eq!(counts.get("CAMERA-CONNECTED"), Some(&1));
+        assert_eq!(counts.get(event_types::IMAGE_SAVE), Some(&1));
+        assert_eq!(counts.get(event_types::FILTERWHEEL_CHANGED), Some(&1));
+        assert_eq!(counts.get(event_types::AUTOFOCUS_FINISHED), Some(&1));
+        assert_eq!(counts.get(event_types::CAMERA_CONNECTED), Some(&1));
     }
 
     #[test]
