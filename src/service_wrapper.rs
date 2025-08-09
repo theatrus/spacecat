@@ -70,21 +70,20 @@ mod windows_service_impl {
 
             rt.block_on(async {
                 let client = SpaceCatApiClient::new(self.config.api.clone())
-                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+                    .map_err(|e| format!("API client error: {}", e))?;
 
                 let mut poller = DiscordUpdater::new(client);
 
                 // Configure Discord if available
-                if let Some(discord_config) = &self.config.discord {
-                    if discord_config.enabled && !discord_config.webhook_url.is_empty() {
+                if let Some(discord_config) = &self.config.discord
+                    && discord_config.enabled && !discord_config.webhook_url.is_empty() {
                         let cooldown = discord_config.image_cooldown_seconds;
 
                         poller = poller
                             .with_discord_webhook(&discord_config.webhook_url)
-                            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?
+                            .map_err(|e| format!("Discord webhook error: {}", e))?
                             .with_discord_image_cooldown(cooldown);
                     }
-                }
 
                 // Run the service with shutdown monitoring
                 let poll_interval = Duration::from_secs(5); // Default 5 second interval for service

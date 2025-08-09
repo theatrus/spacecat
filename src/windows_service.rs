@@ -3,15 +3,17 @@
 //! This module provides Windows service functionality when compiled on Windows platforms.
 
 #[cfg(windows)]
+#[allow(unused_must_use)]
 mod implementation {
     use std::ffi::OsString;
     use std::sync::mpsc;
     use std::time::Duration;
 
-    use windows_service::Result as WindowsServiceResult;
+    use windows_service::{Result as WindowsServiceResult, define_windows_service};
     use windows_service::service::{
         ServiceControl, ServiceControlAccept, ServiceExitCode, ServiceState, ServiceStatus,
-        ServiceType,
+        ServiceType, ServiceInfo, ServiceAccess, ServiceStartType, ServiceErrorControl,
+        ServiceDependency,
     };
     use windows_service::service_control_handler::{self, ServiceControlHandlerResult};
     use windows_service::service_dispatcher;
@@ -32,22 +34,22 @@ mod implementation {
 
         let service_binary_path = std::env::current_exe()?;
 
-        let service_info = windows_service::service_manager::ServiceInfo {
+        let service_info = ServiceInfo {
             name: OsString::from(SERVICE_NAME),
             display_name: OsString::from(SERVICE_DISPLAY_NAME),
             service_type: ServiceType::OWN_PROCESS,
-            start_type: windows_service::service_manager::ServiceStartType::AutoStart,
-            error_control: windows_service::service_manager::ServiceErrorControl::Normal,
+            start_type: ServiceStartType::AutoStart,
+            error_control: ServiceErrorControl::Normal,
             executable_path: service_binary_path,
             launch_arguments: vec![OsString::from("windows-service"), OsString::from("run")],
-            dependencies: vec![OsString::from("Tcpip")], // Network dependency
+            dependencies: vec![ServiceDependency::Service(OsString::from("Tcpip"))], // Network dependency
             account_name: None,                          // Run as Local System
             account_password: None,
         };
 
         let service = service_manager.create_service(
             &service_info,
-            windows_service::service_manager::ServiceAccess::all(),
+            ServiceAccess::all(),
         )?;
 
         // Set service description
@@ -64,9 +66,9 @@ mod implementation {
         let manager_access = ServiceManagerAccess::CONNECT;
         let service_manager = ServiceManager::local_computer(None::<&str>, manager_access)?;
 
-        let service_access = windows_service::service_manager::ServiceAccess::QUERY_STATUS
-            | windows_service::service_manager::ServiceAccess::STOP
-            | windows_service::service_manager::ServiceAccess::DELETE;
+        let service_access = ServiceAccess::QUERY_STATUS
+            | ServiceAccess::STOP
+            | ServiceAccess::DELETE;
         let service = service_manager.open_service(SERVICE_NAME, service_access)?;
 
         // Stop the service if it's running
@@ -100,8 +102,8 @@ mod implementation {
         let manager_access = ServiceManagerAccess::CONNECT;
         let service_manager = ServiceManager::local_computer(None::<&str>, manager_access)?;
 
-        let service_access = windows_service::service_manager::ServiceAccess::QUERY_STATUS
-            | windows_service::service_manager::ServiceAccess::START;
+        let service_access = ServiceAccess::QUERY_STATUS
+            | ServiceAccess::START;
         let service = service_manager.open_service(SERVICE_NAME, service_access)?;
 
         let service_status = service.query_status()?;
@@ -120,8 +122,8 @@ mod implementation {
         let manager_access = ServiceManagerAccess::CONNECT;
         let service_manager = ServiceManager::local_computer(None::<&str>, manager_access)?;
 
-        let service_access = windows_service::service_manager::ServiceAccess::QUERY_STATUS
-            | windows_service::service_manager::ServiceAccess::STOP;
+        let service_access = ServiceAccess::QUERY_STATUS
+            | ServiceAccess::STOP;
         let service = service_manager.open_service(SERVICE_NAME, service_access)?;
 
         let service_status = service.query_status()?;
@@ -140,7 +142,7 @@ mod implementation {
         let manager_access = ServiceManagerAccess::CONNECT;
         let service_manager = ServiceManager::local_computer(None::<&str>, manager_access)?;
 
-        let service_access = windows_service::service_manager::ServiceAccess::QUERY_STATUS;
+        let service_access = ServiceAccess::QUERY_STATUS;
         let service = service_manager.open_service(SERVICE_NAME, service_access)?;
 
         let service_status = service.query_status()?;
@@ -164,9 +166,8 @@ mod implementation {
         service_dispatcher::start(SERVICE_NAME, ffi_service_main)
     }
 
-    fn ffi_service_main(arguments: Vec<OsString>) -> WindowsServiceResult<()> {
-        service_main(arguments)
-    }
+    define_windows_service!(ffi_service_main, service_main);
+
 
     fn service_main(_arguments: Vec<OsString>) -> WindowsServiceResult<()> {
         // Create a channel to communicate with the system service event loop
@@ -219,7 +220,7 @@ mod implementation {
         })?;
 
         service_result.map_err(|_e| {
-            windows_service::Error::Winapi(winapi::shared::winerror::ERROR_SERVICE_SPECIFIC_ERROR)
+            windows_service::Error::Winapi(std::io::Error::from_raw_os_error(1))
         })
     }
 
@@ -245,13 +246,14 @@ mod implementation {
         };
 
         // Create service wrapper
-        let service_wrapper = ServiceWrapper::new(config)?;
+        let service_wrapper = ServiceWrapper::new(config)
+            .map_err(|e| format!("Failed to create service wrapper: {}", e))?;
 
         // Run the discord updater with graceful shutdown support
         service_wrapper.run_with_shutdown(shutdown_rx)
     }
 
-    fn get_service_config_path() -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
+    fn get_service_config_path() -> Result<std::path::PathBuf, Box<dyn std::error::Error + Send + Sync>> {
         use std::path::PathBuf;
 
         // Use %ProgramData%\SpaceCat\config.json for service installations
