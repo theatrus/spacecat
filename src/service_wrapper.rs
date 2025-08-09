@@ -76,14 +76,16 @@ mod windows_service_impl {
 
                 // Configure Discord if available
                 if let Some(discord_config) = &self.config.discord
-                    && discord_config.enabled && !discord_config.webhook_url.is_empty() {
-                        let cooldown = discord_config.image_cooldown_seconds;
+                    && discord_config.enabled
+                    && !discord_config.webhook_url.is_empty()
+                {
+                    let cooldown = discord_config.image_cooldown_seconds;
 
-                        poller = poller
-                            .with_discord_webhook(&discord_config.webhook_url)
-                            .map_err(|e| format!("Discord webhook error: {}", e))?
-                            .with_discord_image_cooldown(cooldown);
-                    }
+                    poller = poller
+                        .with_discord_webhook(&discord_config.webhook_url)
+                        .map_err(|e| format!("Discord webhook error: {}", e))?
+                        .with_discord_image_cooldown(cooldown);
+                }
 
                 // Run the service with shutdown monitoring
                 let poll_interval = Duration::from_secs(5); // Default 5 second interval for service

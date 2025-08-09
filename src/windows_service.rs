@@ -9,15 +9,15 @@ mod implementation {
     use std::sync::mpsc;
     use std::time::Duration;
 
-    use windows_service::{Result as WindowsServiceResult, define_windows_service};
     use windows_service::service::{
-        ServiceControl, ServiceControlAccept, ServiceExitCode, ServiceState, ServiceStatus,
-        ServiceType, ServiceInfo, ServiceAccess, ServiceStartType, ServiceErrorControl,
-        ServiceDependency,
+        ServiceAccess, ServiceControl, ServiceControlAccept, ServiceDependency,
+        ServiceErrorControl, ServiceExitCode, ServiceInfo, ServiceStartType, ServiceState,
+        ServiceStatus, ServiceType,
     };
     use windows_service::service_control_handler::{self, ServiceControlHandlerResult};
     use windows_service::service_dispatcher;
     use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
+    use windows_service::{Result as WindowsServiceResult, define_windows_service};
 
     use crate::config::Config;
     use crate::service_wrapper::ServiceWrapper;
@@ -43,14 +43,11 @@ mod implementation {
             executable_path: service_binary_path,
             launch_arguments: vec![OsString::from("windows-service"), OsString::from("run")],
             dependencies: vec![ServiceDependency::Service(OsString::from("Tcpip"))], // Network dependency
-            account_name: None,                          // Run as Local System
+            account_name: None, // Run as Local System
             account_password: None,
         };
 
-        let service = service_manager.create_service(
-            &service_info,
-            ServiceAccess::all(),
-        )?;
+        let service = service_manager.create_service(&service_info, ServiceAccess::all())?;
 
         // Set service description
         service.set_description(SERVICE_DESCRIPTION)?;
@@ -66,9 +63,8 @@ mod implementation {
         let manager_access = ServiceManagerAccess::CONNECT;
         let service_manager = ServiceManager::local_computer(None::<&str>, manager_access)?;
 
-        let service_access = ServiceAccess::QUERY_STATUS
-            | ServiceAccess::STOP
-            | ServiceAccess::DELETE;
+        let service_access =
+            ServiceAccess::QUERY_STATUS | ServiceAccess::STOP | ServiceAccess::DELETE;
         let service = service_manager.open_service(SERVICE_NAME, service_access)?;
 
         // Stop the service if it's running
@@ -102,8 +98,7 @@ mod implementation {
         let manager_access = ServiceManagerAccess::CONNECT;
         let service_manager = ServiceManager::local_computer(None::<&str>, manager_access)?;
 
-        let service_access = ServiceAccess::QUERY_STATUS
-            | ServiceAccess::START;
+        let service_access = ServiceAccess::QUERY_STATUS | ServiceAccess::START;
         let service = service_manager.open_service(SERVICE_NAME, service_access)?;
 
         let service_status = service.query_status()?;
@@ -122,8 +117,7 @@ mod implementation {
         let manager_access = ServiceManagerAccess::CONNECT;
         let service_manager = ServiceManager::local_computer(None::<&str>, manager_access)?;
 
-        let service_access = ServiceAccess::QUERY_STATUS
-            | ServiceAccess::STOP;
+        let service_access = ServiceAccess::QUERY_STATUS | ServiceAccess::STOP;
         let service = service_manager.open_service(SERVICE_NAME, service_access)?;
 
         let service_status = service.query_status()?;
@@ -167,7 +161,6 @@ mod implementation {
     }
 
     define_windows_service!(ffi_service_main, service_main);
-
 
     fn service_main(_arguments: Vec<OsString>) -> WindowsServiceResult<()> {
         // Create a channel to communicate with the system service event loop
@@ -219,9 +212,8 @@ mod implementation {
             process_id: None,
         })?;
 
-        service_result.map_err(|_e| {
-            windows_service::Error::Winapi(std::io::Error::from_raw_os_error(1))
-        })
+        service_result
+            .map_err(|_e| windows_service::Error::Winapi(std::io::Error::from_raw_os_error(1)))
     }
 
     fn run_discord_updater_service(
@@ -253,7 +245,8 @@ mod implementation {
         service_wrapper.run_with_shutdown(shutdown_rx)
     }
 
-    fn get_service_config_path() -> Result<std::path::PathBuf, Box<dyn std::error::Error + Send + Sync>> {
+    fn get_service_config_path()
+    -> Result<std::path::PathBuf, Box<dyn std::error::Error + Send + Sync>> {
         use std::path::PathBuf;
 
         // Use %ProgramData%\SpaceCat\config.json for service installations
