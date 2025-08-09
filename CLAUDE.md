@@ -115,7 +115,10 @@ Uses `config.json` for API and Discord settings:
   - Configurable image cooldown to prevent Discord spam (default 60 seconds)
   - Skipped image counting with summary in next notification
   - Autofocus completion notifications with quality metrics
-  - Target change notifications for sequence monitoring
+  - Enhanced target change notifications with real-time mount position data
+  - Mount meridian flip events (MOUNT-BEFORE-FLIP, MOUNT-AFTER-FLIP) with detailed position info
+  - Mount park events (MOUNT-PARKED) with position, site location, and tracking status
+  - Mount information includes RA/Dec, Alt/Az, pier side, tracking status, and sidereal time
   - Configurable via config.json
   - Non-blocking operation that won't interrupt observations
 

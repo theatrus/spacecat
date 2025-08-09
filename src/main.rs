@@ -475,7 +475,10 @@ async fn cmd_dual_poll(interval: u64) -> Result<(), Box<dyn std::error::Error>> 
     if let Some(discord_config) = &config.discord {
         if discord_config.enabled && !discord_config.webhook_url.is_empty() {
             println!("Discord webhook configured, events will be sent to Discord");
-            println!("Discord image cooldown: {}s", discord_config.image_cooldown_seconds);
+            println!(
+                "Discord image cooldown: {}s",
+                discord_config.image_cooldown_seconds
+            );
             poller = poller
                 .with_discord_webhook(&discord_config.webhook_url)?
                 .with_discord_image_cooldown(discord_config.image_cooldown_seconds);

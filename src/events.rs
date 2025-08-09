@@ -49,6 +49,9 @@ pub mod event_types {
     pub const MOUNT_DISCONNECTED: &str = "MOUNT-DISCONNECTED";
     pub const MOUNT_CONNECTED: &str = "MOUNT-CONNECTED";
     pub const MOUNT_UNPARKED: &str = "MOUNT-UNPARKED";
+    pub const MOUNT_PARKED: &str = "MOUNT-PARKED";
+    pub const MOUNT_BEFORE_FLIP: &str = "MOUNT-BEFORE-FLIP";
+    pub const MOUNT_AFTER_FLIP: &str = "MOUNT-AFTER-FLIP";
     pub const FOCUSER_DISCONNECTED: &str = "FOCUSER-DISCONNECTED";
     pub const FOCUSER_CONNECTED: &str = "FOCUSER-CONNECTED";
     pub const ROTATOR_DISCONNECTED: &str = "ROTATOR-DISCONNECTED";

@@ -3,6 +3,7 @@ use crate::autofocus::AutofocusResponse;
 use crate::discord::{DiscordWebhook, Embed, colors};
 use crate::events::{Event, event_types};
 use crate::images::ImageMetadata;
+use crate::mount::MountInfoResponse;
 use crate::sequence::{
     SequenceResponse, extract_current_target, extract_meridian_flip_time,
     meridian_flip_time_formatted_with_clock,
@@ -95,7 +96,15 @@ impl DualPoller {
                                 self.handle_autofocus_finished(&event).await;
                             }
 
-                            if let Some(webhook) = &self.discord_webhook {
+                            // Handle mount events with enhanced info
+                            if event.event == event_types::MOUNT_BEFORE_FLIP
+                                || event.event == event_types::MOUNT_AFTER_FLIP
+                                || event.event == event_types::MOUNT_PARKED
+                            {
+                                if let Some(webhook) = &self.discord_webhook {
+                                    self.send_mount_event_to_discord(webhook, &event).await;
+                                }
+                            } else if let Some(webhook) = &self.discord_webhook {
                                 self.send_event_to_discord(webhook, &event).await;
                             }
                         }
@@ -115,21 +124,36 @@ impl DualPoller {
                                 // Check if we should send this image to Discord based on cooldown
                                 let should_send = match self.last_discord_image_time {
                                     None => true, // First image, always send
-                                    Some(last_time) => last_time.elapsed() >= self.discord_image_cooldown,
+                                    Some(last_time) => {
+                                        last_time.elapsed() >= self.discord_image_cooldown
+                                    }
                                 };
 
                                 if should_send {
-                                    self.send_image_to_discord(webhook, &image, index, self.skipped_images_count).await;
+                                    self.send_image_to_discord(
+                                        webhook,
+                                        &image,
+                                        index,
+                                        self.skipped_images_count,
+                                    )
+                                    .await;
                                     self.last_discord_image_time = Some(Instant::now());
                                     // Reset skipped count after sending
                                     if self.skipped_images_count > 0 {
-                                        println!("  Sent image to Discord (including {} skipped images)", self.skipped_images_count);
+                                        println!(
+                                            "  Sent image to Discord (including {} skipped images)",
+                                            self.skipped_images_count
+                                        );
                                     }
                                     self.skipped_images_count = 0;
                                 } else {
                                     self.skipped_images_count += 1;
-                                    let remaining = self.discord_image_cooldown - self.last_discord_image_time.unwrap().elapsed();
-                                    println!("  Skipping Discord notification (cooldown: {:.0}s remaining)", remaining.as_secs_f32());
+                                    let remaining = self.discord_image_cooldown
+                                        - self.last_discord_image_time.unwrap().elapsed();
+                                    println!(
+                                        "  Skipping Discord notification (cooldown: {:.0}s remaining)",
+                                        remaining.as_secs_f32()
+                                    );
                                 }
                             }
                         }
@@ -229,7 +253,9 @@ impl DualPoller {
             "FILTERWHEEL-CHANGED" => colors::BLUE,
             "SEQUENCE-START" => colors::CYAN,
             "SEQUENCE-STOP" => colors::ORANGE,
-            "MOUNT-PARKED" => colors::YELLOW,
+            event_types::MOUNT_PARKED => colors::YELLOW,
+            event_types::MOUNT_BEFORE_FLIP => colors::ORANGE,
+            event_types::MOUNT_AFTER_FLIP => colors::GREEN,
             _ if event.event.contains("ERROR") => colors::RED,
             _ if event.event.contains("WARNING") => colors::ORANGE,
             _ => colors::GRAY,
@@ -286,14 +312,15 @@ impl DualPoller {
         };
 
         let title = if skipped_count > 0 {
-            format!("📸 New {} Frame Captured (+{} skipped)", image.image_type, skipped_count)
+            format!(
+                "📸 New {} Frame Captured (+{} skipped)",
+                image.image_type, skipped_count
+            )
         } else {
             format!("📸 New {} Frame Captured", image.image_type)
         };
 
-        let mut embed = Embed::new()
-            .title(&title)
-            .color(color);
+        let mut embed = Embed::new().title(&title).color(color);
 
         // Add target information if available
         if let Some(target) = &self.current_target {
@@ -302,7 +329,11 @@ impl DualPoller {
 
         // Add skipped images summary if any
         if skipped_count > 0 {
-            embed = embed.field("Images Since Last Post", &format!("{} images", skipped_count + 1), true);
+            embed = embed.field(
+                "Images Since Last Post",
+                &format!("{} images", skipped_count + 1),
+                true,
+            );
         }
 
         // Add meridian flip time if available and within the next hour
@@ -431,6 +462,11 @@ impl DualPoller {
             embed = embed.field("Meridian Flip In", &formatted_time, true);
         }
 
+        // Try to fetch mount info
+        if let Ok(mount_info) = self.client.get_mount_info().await {
+            embed = self.add_mount_info_to_embed(embed, &mount_info);
+        }
+
         let embed = embed.timestamp(&chrono::Utc::now().to_rfc3339());
 
         if let Err(e) = webhook.execute_with_embed(None, embed).await {
@@ -454,10 +490,93 @@ impl DualPoller {
             embed = embed.field("Meridian Flip In", &formatted_time, true);
         }
 
+        // Try to fetch mount info
+        if let Ok(mount_info) = self.client.get_mount_info().await {
+            embed = self.add_mount_info_to_embed(embed, &mount_info);
+        }
+
         let embed = embed.timestamp(&chrono::Utc::now().to_rfc3339());
 
         if let Err(e) = webhook.execute_with_embed(None, embed).await {
             eprintln!("Failed to send target start to Discord: {}", e);
+        }
+    }
+
+    async fn send_mount_event_to_discord(&self, webhook: &DiscordWebhook, event: &Event) {
+        let (title, color) = match event.event.as_str() {
+            event_types::MOUNT_BEFORE_FLIP => {
+                ("🔄 Mount Preparing for Meridian Flip", colors::ORANGE)
+            }
+            event_types::MOUNT_AFTER_FLIP => ("✅ Mount Meridian Flip Completed", colors::GREEN),
+            event_types::MOUNT_PARKED => ("🅿️ Mount Parked", colors::YELLOW),
+            _ => ("🔭 Mount Event", colors::GRAY),
+        };
+
+        let mut embed = Embed::new()
+            .title(title)
+            .color(color)
+            .field("Event", &event.event, true)
+            .field("Time", &event.time, true);
+
+        // Add current target if available
+        if let Some(target) = &self.current_target {
+            embed = embed.field("Current Target", target, true);
+        }
+
+        // Try to fetch mount info for detailed position data
+        if let Ok(mount_info) = self.client.get_mount_info().await {
+            if mount_info.is_connected() {
+                let (ra, dec) = mount_info.get_coordinates();
+                let (alt, az) = mount_info.get_alt_az();
+
+                embed = embed
+                    .field("Mount Position", &format!("RA: {}\nDec: {}", ra, dec), true)
+                    .field("Alt/Az", &format!("Alt: {}\nAz: {}", alt, az), true)
+                    .field("Pier Side", mount_info.get_side_of_pier(), true)
+                    .field(
+                        "Sidereal Time",
+                        &mount_info.response.sidereal_time_string,
+                        true,
+                    );
+
+                // For after-flip, show the new meridian flip time
+                if event.event == event_types::MOUNT_AFTER_FLIP {
+                    let flip_time = mount_info.get_time_to_meridian_flip_hours();
+                    let formatted_time = meridian_flip_time_formatted_with_clock(flip_time);
+                    embed = embed.field("Next Meridian Flip", &formatted_time, true);
+                }
+
+                // For parked event, show park details
+                if event.event == event_types::MOUNT_PARKED {
+                    let (lat, lon, elev) = mount_info.get_site_info();
+                    embed = embed.field(
+                        "Site Location",
+                        &format!("Lat: {:.3}°\nLon: {:.3}°\nElev: {}m", lat, lon, elev),
+                        true,
+                    );
+                }
+
+                if mount_info.response.tracking_enabled {
+                    embed = embed.field("Tracking Status", "✅ Enabled", true);
+                } else {
+                    embed = embed.field("Tracking Status", "❌ Disabled", true);
+                }
+
+                // Add slewing status if relevant
+                if mount_info.response.slewing {
+                    embed = embed.field("Mount Status", "🔄 Slewing", true);
+                } else if mount_info.response.at_park {
+                    embed = embed.field("Mount Status", "🅿️ Parked", true);
+                } else {
+                    embed = embed.field("Mount Status", "✅ Tracking", true);
+                }
+            }
+        }
+
+        let embed = embed.timestamp(&chrono::Utc::now().to_rfc3339());
+
+        if let Err(e) = webhook.execute_with_embed(None, embed).await {
+            eprintln!("Failed to send mount event to Discord: {}", e);
         }
     }
 
@@ -579,5 +698,25 @@ impl DualPoller {
         if let Err(e) = webhook.execute_with_embed(None, embed).await {
             eprintln!("Failed to send autofocus results to Discord: {}", e);
         }
+    }
+
+    // Helper method to add mount info fields to an embed
+    fn add_mount_info_to_embed(&self, mut embed: Embed, mount_info: &MountInfoResponse) -> Embed {
+        if mount_info.is_connected() {
+            let (ra, dec) = mount_info.get_coordinates();
+            let (alt, az) = mount_info.get_alt_az();
+
+            embed = embed
+                .field("Mount Position", &format!("RA: {}\nDec: {}", ra, dec), true)
+                .field("Alt/Az", &format!("Alt: {}\nAz: {}", alt, az), true)
+                .field("Pier Side", mount_info.get_side_of_pier(), true);
+
+            if mount_info.response.tracking_enabled {
+                embed = embed.field("Tracking", "✅ Enabled", true);
+            } else {
+                embed = embed.field("Tracking", "❌ Disabled", true);
+            }
+        }
+        embed
     }
 }
