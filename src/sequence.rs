@@ -267,6 +267,57 @@ pub fn extract_current_target(sequence: &SequenceResponse) -> Option<String> {
     search_containers(&sequence.response)
 }
 
+/// Extract the meridian flip time from a sequence response
+///
+/// This function looks for the "Meridian Flip_Trigger" in the GlobalTriggers section
+/// and extracts the TimeToFlip value, which represents the time until meridian flip in hours.
+///
+/// # Arguments
+/// * `sequence` - The sequence response to analyze
+///
+/// # Returns
+/// * `Some(f64)` - The time to meridian flip in hours
+/// * `None` - If no meridian flip trigger is found or TimeToFlip is not available
+pub fn extract_meridian_flip_time(sequence: &SequenceResponse) -> Option<f64> {
+    // Get global triggers from the first item
+    let global_triggers_item = sequence.response.get(0)?;
+    let global_triggers_array = global_triggers_item
+        .as_object()?
+        .get("GlobalTriggers")?
+        .as_array()?;
+
+    // Search for the Meridian Flip trigger
+    for trigger in global_triggers_array {
+        if let Some(trigger_obj) = trigger.as_object() {
+            if let Some(name) = trigger_obj.get("Name").and_then(|v| v.as_str()) {
+                if name == "Meridian Flip_Trigger" {
+                    // Extract TimeToFlip value
+                    if let Some(time_to_flip) =
+                        trigger_obj.get("TimeToFlip").and_then(|v| v.as_f64())
+                    {
+                        return Some(time_to_flip);
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Convert meridian flip time from hours to minutes
+pub fn meridian_flip_time_minutes(hours: f64) -> f64 {
+    hours * 60.0
+}
+
+/// Convert meridian flip time from hours to hours:minutes format string
+pub fn meridian_flip_time_formatted(hours: f64) -> String {
+    let total_minutes = (hours * 60.0) as i32;
+    let hrs = total_minutes / 60;
+    let mins = total_minutes % 60;
+    format!("{:02}:{:02}", hrs, mins)
+}
+
 /// Check if a container name represents a system container rather than a target
 fn is_system_container(name: &str) -> bool {
     let system_containers = [
@@ -461,8 +512,132 @@ mod tests {
             if let Some(triggers) = sequence.get_global_triggers() {
                 println!("Found {} global triggers", triggers.global_triggers.len());
             }
+
+            // Test meridian flip time extraction from real file
+            let meridian_flip_time = extract_meridian_flip_time(&sequence);
+            println!(
+                "Found meridian flip time in example file: {:?}",
+                meridian_flip_time
+            );
+
+            if let Some(time_hours) = meridian_flip_time {
+                let time_minutes = meridian_flip_time_minutes(time_hours);
+                let time_formatted = meridian_flip_time_formatted(time_hours);
+                println!(
+                    "Meridian flip in {:.3} hours ({:.1} minutes, {})",
+                    time_hours, time_minutes, time_formatted
+                );
+            }
         } else {
             println!("example_sequence.json not found, skipping file test");
         }
+    }
+
+    #[test]
+    fn test_extract_meridian_flip_time() {
+        // Test data with meridian flip trigger
+        let sequence_json = r#"{
+            "Response": [
+                {
+                    "GlobalTriggers": [
+                        {
+                            "Name": "Meridian Flip_Trigger",
+                            "TimeToFlip": 1.3464521451944444,
+                            "Status": "CREATED"
+                        },
+                        {
+                            "Name": "AF After HFR Increase_Trigger",
+                            "Status": "CREATED",
+                            "DeltaHFR": 10
+                        }
+                    ]
+                },
+                {
+                    "Name": "Start_Container",
+                    "Status": "FINISHED",
+                    "Items": [],
+                    "Triggers": [],
+                    "Conditions": []
+                }
+            ],
+            "Error": "",
+            "StatusCode": 200,
+            "Success": true,
+            "Type": "API"
+        }"#;
+
+        let sequence: SequenceResponse = serde_json::from_str(sequence_json).unwrap();
+        let flip_time = extract_meridian_flip_time(&sequence);
+
+        assert!(flip_time.is_some());
+        let time_hours = flip_time.unwrap();
+        assert!((time_hours - 1.3464521451944444).abs() < 0.0001);
+    }
+
+    #[test]
+    fn test_extract_meridian_flip_time_no_trigger() {
+        // Test data without meridian flip trigger
+        let sequence_json = r#"{
+            "Response": [
+                {
+                    "GlobalTriggers": [
+                        {
+                            "Name": "AF After HFR Increase_Trigger",
+                            "Status": "CREATED",
+                            "DeltaHFR": 10
+                        }
+                    ]
+                }
+            ],
+            "Error": "",
+            "StatusCode": 200,
+            "Success": true,
+            "Type": "API"
+        }"#;
+
+        let sequence: SequenceResponse = serde_json::from_str(sequence_json).unwrap();
+        let flip_time = extract_meridian_flip_time(&sequence);
+
+        assert!(flip_time.is_none());
+    }
+
+    #[test]
+    fn test_extract_meridian_flip_time_no_global_triggers() {
+        // Test data with empty global triggers
+        let sequence_json = r#"{
+            "Response": [
+                {
+                    "GlobalTriggers": []
+                }
+            ],
+            "Error": "",
+            "StatusCode": 200,
+            "Success": true,
+            "Type": "API"
+        }"#;
+
+        let sequence: SequenceResponse = serde_json::from_str(sequence_json).unwrap();
+        let flip_time = extract_meridian_flip_time(&sequence);
+
+        assert!(flip_time.is_none());
+    }
+
+    #[test]
+    fn test_meridian_flip_time_conversions() {
+        let time_hours = 1.3464521451944444;
+
+        // Test conversion to minutes
+        let time_minutes = meridian_flip_time_minutes(time_hours);
+        let expected_minutes = 1.3464521451944444 * 60.0;
+        assert!((time_minutes - expected_minutes).abs() < 0.001);
+
+        // Test formatted time string
+        let formatted = meridian_flip_time_formatted(time_hours);
+        assert_eq!(formatted, "01:20"); // 1.346... hours = 1 hour 20 minutes (approximately)
+
+        // Test edge cases
+        assert_eq!(meridian_flip_time_formatted(0.0), "00:00");
+        assert_eq!(meridian_flip_time_formatted(2.5), "02:30");
+        assert_eq!(meridian_flip_time_formatted(0.25), "00:15");
     }
 }

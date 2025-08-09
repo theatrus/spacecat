@@ -17,7 +17,10 @@ use dual_poller::DualPoller;
 use events::EventHistoryResponse;
 use images::ImageHistoryResponse;
 use poller::EventPoller;
-use sequence::{SequenceResponse, extract_current_target};
+use sequence::{
+    SequenceResponse, extract_current_target, extract_meridian_flip_time,
+    meridian_flip_time_formatted,
+};
 use std::time::Duration;
 
 #[derive(Parser)]
@@ -181,6 +184,17 @@ async fn cmd_sequence() -> Result<(), Box<dyn std::error::Error>> {
                 println!("Current active target: {}", target);
             } else {
                 println!("No active target found");
+            }
+
+            // Extract meridian flip information
+            if let Some(meridian_flip_hours) = extract_meridian_flip_time(&seq) {
+                let formatted_time = meridian_flip_time_formatted(meridian_flip_hours);
+                println!(
+                    "Meridian flip in: {:.3} hours ({})",
+                    meridian_flip_hours, formatted_time
+                );
+            } else {
+                println!("No meridian flip information available");
             }
         }
         Err(e) => {
