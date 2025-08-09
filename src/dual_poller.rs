@@ -5,7 +5,7 @@ use crate::events::{Event, event_types};
 use crate::images::ImageMetadata;
 use crate::sequence::{
     SequenceResponse, extract_current_target, extract_meridian_flip_time,
-    meridian_flip_time_formatted,
+    meridian_flip_time_formatted_with_clock,
 };
 use std::collections::HashSet;
 use std::time::Duration;
@@ -170,7 +170,7 @@ impl DualPoller {
             println!("  Target: {}", target);
         }
         if let Some(meridian_flip_hours) = self.current_meridian_flip_time {
-            let formatted_time = meridian_flip_time_formatted(meridian_flip_hours);
+            let formatted_time = meridian_flip_time_formatted_with_clock(meridian_flip_hours);
             println!(
                 "  Meridian flip in: {:.3} hours ({})",
                 meridian_flip_hours, formatted_time
@@ -249,7 +249,7 @@ impl DualPoller {
 
         // Add meridian flip time if available
         if let Some(meridian_flip_hours) = self.current_meridian_flip_time {
-            let formatted_time = meridian_flip_time_formatted(meridian_flip_hours);
+            let formatted_time = meridian_flip_time_formatted_with_clock(meridian_flip_hours);
             embed = embed.field(
                 "Meridian Flip In",
                 &format!("{:.3}h ({})", meridian_flip_hours, formatted_time),
@@ -309,7 +309,8 @@ impl DualPoller {
                     {
                         println!("[TARGET CHANGE] {} -> {}", old_target, new_target_name);
                         if let Some(meridian_flip_hours) = new_meridian_flip_time {
-                            let formatted_time = meridian_flip_time_formatted(meridian_flip_hours);
+                            let formatted_time =
+                                meridian_flip_time_formatted_with_clock(meridian_flip_hours);
                             println!(
                                 "  Meridian flip in: {:.3} hours ({})",
                                 meridian_flip_hours, formatted_time
@@ -327,7 +328,8 @@ impl DualPoller {
                     } else if let Some(new_target_name) = &new_target {
                         println!("[TARGET START] {}", new_target_name);
                         if let Some(meridian_flip_hours) = new_meridian_flip_time {
-                            let formatted_time = meridian_flip_time_formatted(meridian_flip_hours);
+                            let formatted_time =
+                                meridian_flip_time_formatted_with_clock(meridian_flip_hours);
                             println!(
                                 "  Meridian flip in: {:.3} hours ({})",
                                 meridian_flip_hours, formatted_time
@@ -375,7 +377,7 @@ impl DualPoller {
             .field("New Target", new_target, true);
 
         if let Some(meridian_flip_hours) = meridian_flip_time {
-            let formatted_time = meridian_flip_time_formatted(meridian_flip_hours);
+            let formatted_time = meridian_flip_time_formatted_with_clock(meridian_flip_hours);
             embed = embed.field(
                 "Meridian Flip In",
                 &format!("{:.3}h ({})", meridian_flip_hours, formatted_time),
@@ -402,7 +404,7 @@ impl DualPoller {
             .field("Target", target, false);
 
         if let Some(meridian_flip_hours) = meridian_flip_time {
-            let formatted_time = meridian_flip_time_formatted(meridian_flip_hours);
+            let formatted_time = meridian_flip_time_formatted_with_clock(meridian_flip_hours);
             embed = embed.field(
                 "Meridian Flip In",
                 &format!("{:.3}h ({})", meridian_flip_hours, formatted_time),

@@ -19,7 +19,7 @@ use images::ImageHistoryResponse;
 use poller::EventPoller;
 use sequence::{
     SequenceResponse, extract_current_target, extract_meridian_flip_time,
-    meridian_flip_time_formatted,
+    meridian_flip_time_formatted_with_clock,
 };
 use std::time::Duration;
 
@@ -188,7 +188,7 @@ async fn cmd_sequence() -> Result<(), Box<dyn std::error::Error>> {
 
             // Extract meridian flip information
             if let Some(meridian_flip_hours) = extract_meridian_flip_time(&seq) {
-                let formatted_time = meridian_flip_time_formatted(meridian_flip_hours);
+                let formatted_time = meridian_flip_time_formatted_with_clock(meridian_flip_hours);
                 println!(
                     "Meridian flip in: {:.3} hours ({})",
                     meridian_flip_hours, formatted_time

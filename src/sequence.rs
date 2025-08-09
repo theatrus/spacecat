@@ -1,3 +1,4 @@
+use chrono;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -316,6 +317,24 @@ pub fn meridian_flip_time_formatted(hours: f64) -> String {
     let hrs = total_minutes / 60;
     let mins = total_minutes % 60;
     format!("{:02}:{:02}", hrs, mins)
+}
+
+/// Convert meridian flip time from hours to a detailed format string with wall-clock time
+pub fn meridian_flip_time_formatted_with_clock(hours: f64) -> String {
+    let total_minutes = (hours * 60.0) as i32;
+    let hrs = total_minutes / 60;
+    let mins = total_minutes % 60;
+    let duration_str = format!("{:02}:{:02}", hrs, mins);
+
+    // Calculate wall-clock time when meridian flip will occur
+    let now = chrono::Utc::now();
+    let meridian_flip_time = now + chrono::Duration::seconds((hours * 3600.0) as i64);
+
+    // Format in local timezone for better readability
+    let local_flip_time = meridian_flip_time.with_timezone(&chrono::Local);
+    let clock_time = local_flip_time.format("%H:%M:%S").to_string();
+
+    format!("{} (at {})", duration_str, clock_time)
 }
 
 /// Check if a container name represents a system container rather than a target
@@ -639,5 +658,17 @@ mod tests {
         assert_eq!(meridian_flip_time_formatted(0.0), "00:00");
         assert_eq!(meridian_flip_time_formatted(2.5), "02:30");
         assert_eq!(meridian_flip_time_formatted(0.25), "00:15");
+
+        // Test formatted time string with wall-clock time
+        let formatted_with_clock = meridian_flip_time_formatted_with_clock(time_hours);
+        // Should contain the duration and "at" followed by time
+        assert!(formatted_with_clock.contains("01:20"));
+        assert!(formatted_with_clock.contains("at "));
+        assert!(formatted_with_clock.matches(':').count() >= 3); // Should have HH:MM:SS format
+
+        // Test short duration with wall-clock time
+        let short_duration = meridian_flip_time_formatted_with_clock(0.25);
+        assert!(short_duration.contains("00:15"));
+        assert!(short_duration.contains("at "));
     }
 }
