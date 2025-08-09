@@ -2,6 +2,7 @@ use crate::autofocus::AutofocusResponse;
 use crate::config::ApiConfig;
 use crate::events::EventHistoryResponse;
 use crate::images::{ImageHistoryResponse, ImageResponse, ThumbnailResponse};
+use crate::mount::MountInfoResponse;
 use crate::sequence::SequenceResponse;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -335,6 +336,20 @@ impl SpaceCatApiClient {
         params: &[(&str, &str)],
     ) -> Result<AutofocusResponse, ApiError> {
         self.generic_request_with_retry("/equipment/focuser/last-af", params)
+            .await
+    }
+
+    /// Fetch mount information from the /equipment/mount endpoint
+    pub async fn get_mount_info(&self) -> Result<MountInfoResponse, ApiError> {
+        self.get_mount_info_with_params(&[]).await
+    }
+
+    /// Fetch mount information with custom query parameters
+    pub async fn get_mount_info_with_params(
+        &self,
+        params: &[(&str, &str)],
+    ) -> Result<MountInfoResponse, ApiError> {
+        self.generic_request_with_retry("/equipment/mount", params)
             .await
     }
 }

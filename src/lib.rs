@@ -5,5 +5,6 @@ pub mod discord;
 pub mod dual_poller;
 pub mod events;
 pub mod images;
+pub mod mount;
 pub mod poller;
 pub mod sequence;

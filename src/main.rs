@@ -5,6 +5,7 @@ mod discord;
 mod dual_poller;
 mod events;
 mod images;
+mod mount;
 mod poller;
 mod sequence;
 
@@ -16,6 +17,7 @@ use config::Config;
 use dual_poller::DualPoller;
 use events::EventHistoryResponse;
 use images::ImageHistoryResponse;
+use mount::MountInfoResponse;
 use poller::EventPoller;
 use sequence::{
     SequenceResponse, extract_current_target, extract_meridian_flip_time,
@@ -83,6 +85,8 @@ enum Commands {
     },
     /// Get the last autofocus data from API
     LastAutofocus,
+    /// Get mount information from API
+    MountInfo,
 }
 
 #[tokio::main]
@@ -145,6 +149,12 @@ async fn main() {
         Commands::LastAutofocus => {
             if let Err(e) = cmd_last_autofocus().await {
                 eprintln!("LastAutofocus command failed: {}", e);
+                std::process::exit(1);
+            }
+        }
+        Commands::MountInfo => {
+            if let Err(e) = cmd_mount_info().await {
+                eprintln!("MountInfo command failed: {}", e);
                 std::process::exit(1);
             }
         }
@@ -493,6 +503,21 @@ async fn cmd_last_autofocus() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+async fn cmd_mount_info() -> Result<(), Box<dyn std::error::Error>> {
+    println!("Loading mount information from API...");
+    match load_mount_info_from_api().await {
+        Ok(mount_info) => {
+            println!("Successfully loaded mount information from API");
+            display_mount_info(&mount_info);
+        }
+        Err(e) => {
+            return Err(format!("Failed to load mount information from API: {}", e).into());
+        }
+    }
+
+    Ok(())
+}
+
 // Helper functions
 
 async fn load_autofocus_from_api() -> Result<AutofocusResponse, Box<dyn std::error::Error>> {
@@ -625,6 +650,180 @@ fn display_autofocus_data(autofocus: &AutofocusResponse) {
         println!("Focus position changed by {} steps", position_change);
     } else {
         println!("Focus position unchanged from previous run");
+    }
+}
+
+async fn load_mount_info_from_api() -> Result<MountInfoResponse, Box<dyn std::error::Error>> {
+    // Load configuration from config.json or use default
+    let config = Config::load_or_default();
+
+    // Validate configuration
+    if let Err(e) = config.validate() {
+        return Err(e.into());
+    }
+
+    // Create API client
+    let client = SpaceCatApiClient::new(config.api)?;
+
+    // Check API version and health
+    match client.get_version().await {
+        Ok(_) => {} // Version check successful
+        Err(e) => {
+            return Err(format!("Could not get API version: {}", e).into());
+        }
+    }
+
+    // Fetch mount info
+    let mount_info = client.get_mount_info().await?;
+    Ok(mount_info)
+}
+
+fn display_mount_info(mount_info: &MountInfoResponse) {
+    println!(
+        "Status: {}, Success: {}",
+        mount_info.status_code, mount_info.success
+    );
+
+    if !mount_info.error.is_empty() {
+        println!("Error: {}", mount_info.error);
+        return;
+    }
+
+    let mount = &mount_info.response;
+
+    println!("\n=== Mount Information ===");
+    println!("Name: {}", mount.name);
+    println!("Display Name: {}", mount.display_name);
+    println!("Device ID: {}", mount.device_id);
+
+    println!("\n=== Connection Status ===");
+    println!(
+        "Connected: {}",
+        if mount.connected { "✅ Yes" } else { "❌ No" }
+    );
+    println!(
+        "Tracking: {}",
+        if mount.tracking_enabled {
+            "✅ Enabled"
+        } else {
+            "❌ Disabled"
+        }
+    );
+    println!(
+        "Parked: {}",
+        if mount.at_park {
+            "🅿️ Yes"
+        } else {
+            "🔭 No"
+        }
+    );
+    println!(
+        "Slewing: {}",
+        if mount.slewing {
+            "🔄 Yes"
+        } else {
+            "⏸️ No"
+        }
+    );
+    println!(
+        "At Home: {}",
+        if mount.at_home { "🏠 Yes" } else { "❌ No" }
+    );
+
+    println!("\n=== Current Position ===");
+    let (ra, dec) = mount_info.get_coordinates();
+    println!("Right Ascension: {}", ra);
+    println!("Declination: {}", dec);
+    let (alt, az) = mount_info.get_alt_az();
+    println!("Altitude: {}", alt);
+    println!("Azimuth: {}", az);
+    println!("Side of Pier: {}", mount_info.get_side_of_pier());
+
+    println!("\n=== Time Information ===");
+    println!("Sidereal Time: {}", mount.sidereal_time_string);
+    println!("UTC Date: {}", mount.utc_date);
+
+    let flip_time = mount_info.get_time_to_meridian_flip_hours();
+    let flip_string = mount_info.get_time_to_meridian_flip_string();
+    println!(
+        "Time to Meridian Flip: {:.3} hours ({})",
+        flip_time, flip_string
+    );
+
+    println!("\n=== Site Information ===");
+    let (lat, lon, elev) = mount_info.get_site_info();
+    println!("Latitude: {:.3}°", lat);
+    println!("Longitude: {:.3}°", lon);
+    println!("Elevation: {} m", elev);
+
+    println!("\n=== Capabilities ===");
+    println!(
+        "Can Find Home: {}",
+        if mount.can_find_home {
+            "✅ Yes"
+        } else {
+            "❌ No"
+        }
+    );
+    println!(
+        "Can Park: {}",
+        if mount.can_park { "✅ Yes" } else { "❌ No" }
+    );
+    println!(
+        "Can Set Park: {}",
+        if mount.can_set_park {
+            "✅ Yes"
+        } else {
+            "❌ No"
+        }
+    );
+    println!(
+        "Can Slew: {}",
+        if mount.can_slew { "✅ Yes" } else { "❌ No" }
+    );
+    println!(
+        "Can Pulse Guide: {}",
+        if mount.can_pulse_guide {
+            "✅ Yes"
+        } else {
+            "❌ No"
+        }
+    );
+    println!(
+        "Is Pulse Guiding: {}",
+        if mount.is_pulse_guiding {
+            "🎯 Yes"
+        } else {
+            "❌ No"
+        }
+    );
+    println!(
+        "Can Set Tracking: {}",
+        if mount.can_set_tracking_enabled {
+            "✅ Yes"
+        } else {
+            "❌ No"
+        }
+    );
+
+    println!("\n=== Tracking ===");
+    println!("Tracking Modes: {}", mount.tracking_modes.join(", "));
+    println!("Equatorial System: {}", mount.equatorial_system);
+    println!("Alignment Mode: {}", mount.alignment_mode);
+    println!(
+        "Guide Rate RA: {:.2} arcsec/sec",
+        mount.guide_rate_right_ascension_arcsec_per_sec
+    );
+    println!(
+        "Guide Rate Dec: {:.2} arcsec/sec",
+        mount.guide_rate_declination_arcsec_per_sec
+    );
+
+    if !mount.supported_actions.is_empty() {
+        println!("\n=== Supported Actions ===");
+        for action in &mount.supported_actions {
+            println!("  • {}", action);
+        }
     }
 }
 
