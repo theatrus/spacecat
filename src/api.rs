@@ -12,6 +12,8 @@ pub struct SpaceCatApiClient {
     retry_attempts: u32,
 }
 
+pub type SpaceCatClient = SpaceCatApiClient;
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct VersionResponse {

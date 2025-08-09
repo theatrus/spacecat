@@ -1,5 +1,6 @@
 mod api;
 mod config;
+mod dual_poller;
 mod events;
 mod images;
 mod poller;
@@ -9,6 +10,7 @@ use api::SpaceCatApiClient;
 use base64::Engine;
 use clap::{Parser, Subcommand};
 use config::Config;
+use dual_poller::DualPoller;
 use events::EventHistoryResponse;
 use images::ImageHistoryResponse;
 use poller::EventPoller;
@@ -36,6 +38,18 @@ enum Commands {
     Events {
         /// Use local file instead of API
         #[arg(short, long)]
+        local: bool,
+        /// Path to the event history JSON file (when using --local)
+        #[arg(short, long, default_value = "example_event-history.json")]
+        file: String,
+    },
+    /// List the last N events with details
+    LastEvents {
+        /// Number of last events to display
+        #[arg(short, long, default_value = "10")]
+        count: usize,
+        /// Use local file instead of API
+        #[arg(long)]
         local: bool,
         /// Path to the event history JSON file (when using --local)
         #[arg(short, long, default_value = "example_event-history.json")]
@@ -80,6 +94,12 @@ enum Commands {
         #[arg(short, long, default_value = "5")]
         count: u32,
     },
+    /// Poll for both new events and images in real-time
+    DualPoll {
+        /// Poll interval in seconds
+        #[arg(short, long, default_value = "5")]
+        interval: u64,
+    },
     /// Test base64 image processing
     TestBase64,
     /// Run all demos (original behavior)
@@ -100,6 +120,12 @@ async fn main() {
         Commands::Events { local, file } => {
             if let Err(e) = cmd_events(local, &file).await {
                 eprintln!("Events command failed: {}", e);
+                std::process::exit(1);
+            }
+        }
+        Commands::LastEvents { count, local, file } => {
+            if let Err(e) = cmd_last_events(count, local, &file).await {
+                eprintln!("LastEvents command failed: {}", e);
                 std::process::exit(1);
             }
         }
@@ -124,6 +150,12 @@ async fn main() {
         Commands::Poll { interval, count } => {
             if let Err(e) = cmd_poll(interval, count).await {
                 eprintln!("Poll command failed: {}", e);
+                std::process::exit(1);
+            }
+        }
+        Commands::DualPoll { interval } => {
+            if let Err(e) = cmd_dual_poll(interval).await {
+                eprintln!("DualPoll command failed: {}", e);
                 std::process::exit(1);
             }
         }
@@ -206,6 +238,41 @@ async fn cmd_events(local: bool, file: &str) -> Result<(), Box<dyn std::error::E
         }
     }
     
+    Ok(())
+}
+
+async fn cmd_last_events(count: usize, local: bool, file: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let events = if local {
+        println!("Loading events from local file: {}", file);
+        match load_event_history(file) {
+            Ok(events) => {
+                println!(
+                    "Successfully loaded {} events from file",
+                    events.response.len()
+                );
+                events
+            }
+            Err(e) => {
+                return Err(format!("Failed to load event history from file: {}", e).into());
+            }
+        }
+    } else {
+        println!("Loading events from API...");
+        match load_event_history_from_api().await {
+            Ok(events) => {
+                println!(
+                    "Successfully loaded {} events from API",
+                    events.response.len()
+                );
+                events
+            }
+            Err(e) => {
+                return Err(format!("Failed to load events from API: {}", e).into());
+            }
+        }
+    };
+
+    display_last_events(&events, count);
     Ok(())
 }
 
@@ -428,6 +495,20 @@ async fn cmd_poll(interval: u64, count: u32) -> Result<(), Box<dyn std::error::E
     Ok(())
 }
 
+async fn cmd_dual_poll(interval: u64) -> Result<(), Box<dyn std::error::Error>> {
+    println!("Starting dual polling (events and images)...");
+    println!("Poll interval: {}s", interval);
+    println!("Press Ctrl+C to stop\n");
+    
+    let config = Config::load_or_default();
+    let client = SpaceCatApiClient::new(config.api)?;
+    let mut poller = DualPoller::new(client);
+    
+    poller.start_polling(Duration::from_secs(interval)).await;
+    
+    Ok(())
+}
+
 fn cmd_test_base64() {
     println!("Testing base64 decoding with a known PNG image...");
     
@@ -467,6 +548,9 @@ async fn cmd_all() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\n=== Events Demo ===");
     cmd_events(false, "").await?;
+
+    println!("\n=== Last Events Demo ===");
+    cmd_last_events(5, false, "").await?;
 
     println!("\n=== Images Demo ===");
     cmd_images(false, "").await?;
@@ -666,5 +750,81 @@ fn display_last_images(images: &ImageHistoryResponse, count: usize) {
         println!("  Stars: {}, HFR: {:.2}", image.stars, image.hfr);
         println!("  Mean: {:.1}, Median: {:.1}, StDev: {:.1}", 
                 image.mean, image.median, image.st_dev);
+    }
+}
+
+fn display_last_events(events: &EventHistoryResponse, count: usize) {
+    println!("\n=== Last {} Events ===", count);
+    
+    if events.response.is_empty() {
+        println!("No events available");
+        return;
+    }
+    
+    // Get the last N events (events are typically in chronological order)
+    let last_events: Vec<_> = events.response.iter()
+        .enumerate()
+        .rev()  // Reverse to get most recent first
+        .take(count)
+        .collect();
+    
+    if last_events.is_empty() {
+        println!("No events to display");
+        return;
+    }
+    
+    for (index, event) in last_events.iter().rev() {  // Reverse again to show in chronological order
+        println!("\nEvent Index {}: ", index);
+        println!("  Time: {}", event.time);
+        println!("  Event: {}", event.event);
+        
+        // Display details if available
+        if let Some(ref details) = event.details {
+            match details {
+                crate::events::EventDetails::FilterWheelChange { new, previous } => {
+                    println!("  Details: Filter changed from {} to {}", previous.name, new.name);
+                }
+            }
+        }
+        
+        // Display event type with emoji and description
+        let (emoji, description) = get_event_type_info(&event.event);
+        println!("  Type: {} {}", emoji, description);
+    }
+}
+
+fn get_event_type_info(event_name: &str) -> (&'static str, &'static str) {
+    if is_connection_event(event_name) {
+        return get_connection_event_info(event_name);
+    }
+    
+    match event_name {
+        "IMAGE-SAVE" => ("📸", "Image captured and saved"),
+        "FILTERWHEEL-CHANGED" => ("🔄", "Filter wheel position changed"),
+        "GUIDER-DITHER" => ("🎯", "Dithering for drizzling"),
+        "SEQUENCE-START" => ("▶️", "Sequence started"),
+        "SEQUENCE-STOP" => ("⏹️", "Sequence stopped"),
+        "SEQUENCE-PAUSE" => ("⏸️", "Sequence paused"),
+        "SEQUENCE-RESUME" => ("▶️", "Sequence resumed"),
+        "EXPOSURE-START" => ("🌟", "Exposure started"),
+        "EXPOSURE-END" => ("✨", "Exposure completed"),
+        "MOUNT-SLEW" => ("🔭", "Mount slewing to target"),
+        "FOCUS-START" => ("🔍", "Auto-focus started"),
+        "FOCUS-END" => ("✅", "Auto-focus completed"),
+        _ => ("📋", "System event"),
+    }
+}
+
+fn is_connection_event(event_name: &str) -> bool {
+    event_name.contains("CONNECTED") || event_name.contains("DISCONNECTED")
+}
+
+fn get_connection_event_info(event_name: &str) -> (&'static str, &'static str) {
+    if event_name.contains("DISCONNECTED") {
+        ("🔴", "Equipment disconnected")
+    } else if event_name.contains("CONNECTED") {
+        ("🟢", "Equipment connected")
+    } else {
+        ("📋", "Connection event")
     }
 }
