@@ -1,27 +1,18 @@
-mod api;
-mod autofocus;
-mod config;
-mod discord;
-mod dual_poller;
-mod events;
-mod images;
-mod mount;
-mod poller;
-mod sequence;
-
-use api::SpaceCatApiClient;
-use autofocus::AutofocusResponse;
 use base64::Engine;
 use clap::{Parser, Subcommand};
-use config::Config;
-use dual_poller::DualPoller;
-use events::{EventHistoryResponse, event_types};
-use images::ImageHistoryResponse;
-use mount::MountInfoResponse;
-use poller::EventPoller;
-use sequence::{
-    SequenceResponse, extract_current_target, extract_meridian_flip_time,
-    meridian_flip_time_formatted_with_clock,
+use spacecat::{
+    api::SpaceCatApiClient,
+    autofocus::AutofocusResponse,
+    config::Config,
+    dual_poller::DualPoller,
+    events::{EventDetails, EventHistoryResponse, event_types},
+    images::ImageHistoryResponse,
+    mount::MountInfoResponse,
+    poller::EventPoller,
+    sequence::{
+        SequenceResponse, extract_current_target, extract_meridian_flip_time,
+        meridian_flip_time_formatted_with_clock,
+    },
 };
 use std::time::Duration;
 
@@ -279,9 +270,7 @@ async fn cmd_get_image(index: u32, params: &[String]) -> Result<(), Box<dyn std:
         if let Some((key, value)) = param.split_once('=') {
             param_pairs.push((key, value));
         } else {
-            eprintln!(
-                "Warning: Invalid parameter format '{param}', expected 'key=value'"
-            );
+            eprintln!("Warning: Invalid parameter format '{param}', expected 'key=value'");
         }
     }
 
@@ -402,9 +391,7 @@ async fn cmd_get_thumbnail(
                     }
                 }
                 Err(e) => {
-                    return Err(
-                        format!("Failed to save thumbnail to {output_path}: {e}").into(),
-                    );
+                    return Err(format!("Failed to save thumbnail to {output_path}: {e}").into());
                 }
             }
         }
@@ -448,9 +435,7 @@ async fn cmd_poll(interval: u64, count: u32) -> Result<(), Box<dyn std::error::E
                         result.get_events_by_type(event_types::FILTERWHEEL_CHANGED);
                     if !filter_changes.is_empty() {
                         let filter_changes_len = filter_changes.len();
-                        println!(
-                            "    → {filter_changes_len} filter changes in this batch"
-                        );
+                        println!("    → {filter_changes_len} filter changes in this batch");
                     }
                 } else {
                     println!("  No new events since last poll");
@@ -482,9 +467,7 @@ async fn cmd_dual_poll(interval: u64) -> Result<(), Box<dyn std::error::Error>> 
         if discord_config.enabled && !discord_config.webhook_url.is_empty() {
             println!("Discord webhook configured, events will be sent to Discord");
             let cooldown = discord_config.image_cooldown_seconds;
-            println!(
-                "Discord image cooldown: {cooldown}s"
-            );
+            println!("Discord image cooldown: {cooldown}s");
             poller = poller
                 .with_discord_webhook(&discord_config.webhook_url)?
                 .with_discord_image_cooldown(discord_config.image_cooldown_seconds);
@@ -757,9 +740,7 @@ fn display_mount_info(mount_info: &MountInfoResponse) {
 
     let flip_time = mount_info.get_time_to_meridian_flip_hours();
     let flip_string = mount_info.get_time_to_meridian_flip_string();
-    println!(
-        "Time to Meridian Flip: {flip_time:.3} hours ({flip_string})"
-    );
+    println!("Time to Meridian Flip: {flip_time:.3} hours ({flip_string})");
 
     println!("\n=== Site Information ===");
     let (lat, lon, elev) = mount_info.get_site_info();
@@ -1063,7 +1044,7 @@ fn display_last_events(events: &EventHistoryResponse, count: usize) {
         // Display details if available
         if let Some(ref details) = event.details {
             match details {
-                crate::events::EventDetails::FilterWheelChange { new, previous } => {
+                EventDetails::FilterWheelChange { new, previous } => {
                     println!(
                         "  Details: Filter changed from {} to {}",
                         previous.name, new.name

@@ -72,7 +72,6 @@ impl From<std::io::Error> for ConfigError {
     }
 }
 
-
 impl Default for ApiConfig {
     fn default() -> Self {
         Self {

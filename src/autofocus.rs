@@ -176,7 +176,6 @@ impl AutofocusData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     #[test]
     fn test_parse_autofocus_response() {

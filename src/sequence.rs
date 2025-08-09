@@ -356,7 +356,6 @@ fn is_system_container(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     #[test]
     fn test_extract_current_target() {
@@ -533,9 +532,7 @@ mod tests {
 
             // Test meridian flip time extraction from real file
             let meridian_flip_time = extract_meridian_flip_time(&sequence);
-            println!(
-                "Found meridian flip time in example file: {meridian_flip_time:?}"
-            );
+            println!("Found meridian flip time in example file: {meridian_flip_time:?}");
 
             if let Some(time_hours) = meridian_flip_time {
                 let time_minutes = meridian_flip_time_minutes(time_hours);

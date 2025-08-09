@@ -238,7 +238,6 @@ impl ImageMetadata {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     #[test]
     fn test_image_metadata_parsing() {
