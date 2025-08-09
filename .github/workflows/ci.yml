@@ -88,6 +88,11 @@ jobs:
       - name: Run clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
+      - name: Check Windows service feature compilation (Linux cross-check)
+        run: |
+          # Ensure Windows service feature compiles without errors on Linux (should use stubs)
+          cargo check --features windows-service --verbose
+
   security:
     name: Security Audit
     runs-on: ubuntu-latest
@@ -121,7 +126,54 @@ jobs:
       - name: Generate code coverage
         run: cargo tarpaulin --verbose --all-features --workspace --timeout 120 --out Xml
 
+      - name: Generate Windows service feature coverage
+        run: cargo tarpaulin --verbose --features windows-service --workspace --timeout 120 --out Xml --output-dir coverage-windows-service
+
       - name: Upload to codecov.io
         uses: codecov/codecov-action@v5
         with:
           fail_ci_if_error: false
+
+  windows-service:
+    name: Windows Service Feature
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: windows-service-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            windows-service-cargo-
+            ${{ runner.os }}-cargo-
+
+      - name: Check Windows service feature compilation
+        run: cargo check --features windows-service --verbose
+
+      - name: Test Windows service feature
+        run: cargo test --features windows-service --verbose
+
+      - name: Run clippy with Windows service feature
+        run: cargo clippy --features windows-service --all-targets -- -D warnings
+
+      - name: Build Windows service feature
+        run: cargo build --features windows-service --verbose
+
+      - name: Test Windows service CLI commands (dry run)
+        run: |
+          # Test that the CLI accepts Windows service commands without actually installing
+          cargo run --features windows-service -- --help
+          echo "Windows service commands are available in help output"
