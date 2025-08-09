@@ -21,7 +21,14 @@ mod tests {
     #[test]
     fn test_windows_service_help() {
         let output = Command::new("cargo")
-            .args(&["run", "--features", "windows-service", "--", "windows-service", "--help"])
+            .args(&[
+                "run",
+                "--features",
+                "windows-service",
+                "--",
+                "windows-service",
+                "--help",
+            ])
             .output()
             .expect("Failed to execute command");
 
@@ -50,7 +57,7 @@ mod tests {
         assert!(!stdout.contains("windows-service"));
     }
 
-    #[test] 
+    #[test]
     fn test_basic_commands_available() {
         let output = Command::new("cargo")
             .args(&["run", "--", "--help"])
@@ -59,7 +66,7 @@ mod tests {
 
         assert!(output.status.success());
         let stdout = String::from_utf8_lossy(&output.stdout);
-        
+
         // Basic commands should always be available
         assert!(stdout.contains("sequence"));
         assert!(stdout.contains("events"));
