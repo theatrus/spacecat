@@ -2,7 +2,7 @@ pub mod api;
 pub mod autofocus;
 pub mod config;
 pub mod discord;
-pub mod dual_poller;
+pub mod discord_updater;
 pub mod events;
 pub mod images;
 pub mod mount;

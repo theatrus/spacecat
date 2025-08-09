@@ -4,7 +4,7 @@ use spacecat::{
     api::SpaceCatApiClient,
     autofocus::AutofocusResponse,
     config::Config,
-    dual_poller::DualPoller,
+    discord_updater::DiscordUpdater,
     events::{EventDetails, EventHistoryResponse, event_types},
     images::ImageHistoryResponse,
     mount::MountInfoResponse,
@@ -460,7 +460,7 @@ async fn cmd_discord_updater(interval: u64) -> Result<(), Box<dyn std::error::Er
 
     let config = Config::load_or_default();
     let client = SpaceCatApiClient::new(config.api.clone())?;
-    let mut poller = DualPoller::new(client);
+    let mut poller = DiscordUpdater::new(client);
 
     // Check for Discord webhook configuration
     if let Some(discord_config) = &config.discord {

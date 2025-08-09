@@ -29,7 +29,7 @@ automation.
 - **`src/sequence.rs`**: Sequence management, container parsing, and target extraction utilities
 - **`src/autofocus.rs`**: Autofocus data structures, parsing, and analysis methods
 - **`src/poller.rs`**: Real-time event polling with deduplication
-- **`src/dual_poller.rs`**: Combined event and image polling with Discord integration and autofocus detection
+- **`src/discord_updater.rs`**: Combined event and image polling with Discord integration and autofocus detection
 
 ### API Integration
 

@@ -119,9 +119,9 @@ webhook.execute_with_embed(None, embed).await?;
 ### Custom Integration
 ```rust
 use spacecat::discord::DiscordWebhook;
-use spacecat::dual_poller::DualPoller;
+use spacecat::discord_updater::DiscordUpdater;
 
-let mut poller = DualPoller::new(client);
+let mut poller = DiscordUpdater::new(client);
 poller = poller.with_discord_webhook(&webhook_url)?;
 ```
 
