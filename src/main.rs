@@ -1,4 +1,5 @@
 mod api;
+mod autofocus;
 mod config;
 mod discord;
 mod dual_poller;
@@ -8,6 +9,7 @@ mod poller;
 mod sequence;
 
 use api::SpaceCatApiClient;
+use autofocus::AutofocusResponse;
 use base64::Engine;
 use clap::{Parser, Subcommand};
 use config::Config;
@@ -101,6 +103,15 @@ enum Commands {
         #[arg(short, long, default_value = "5")]
         interval: u64,
     },
+    /// Get the last autofocus data from API or file
+    LastAutofocus {
+        /// Use local file instead of API
+        #[arg(short, long)]
+        local: bool,
+        /// Path to the autofocus JSON file (when using --local)
+        #[arg(short, long, default_value = "example_last_af.json")]
+        file: String,
+    },
     /// Test base64 image processing
     TestBase64,
     /// Run all demos (original behavior)
@@ -157,6 +168,12 @@ async fn main() {
         Commands::DualPoll { interval } => {
             if let Err(e) = cmd_dual_poll(interval).await {
                 eprintln!("DualPoll command failed: {}", e);
+                std::process::exit(1);
+            }
+        }
+        Commands::LastAutofocus { local, file } => {
+            if let Err(e) = cmd_last_autofocus(local, &file).await {
+                eprintln!("LastAutofocus command failed: {}", e);
                 std::process::exit(1);
             }
         }
@@ -529,6 +546,34 @@ async fn cmd_dual_poll(interval: u64) -> Result<(), Box<dyn std::error::Error>> 
     Ok(())
 }
 
+async fn cmd_last_autofocus(local: bool, file: &str) -> Result<(), Box<dyn std::error::Error>> {
+    if local {
+        println!("Loading autofocus data from local file: {}", file);
+        match load_autofocus_from_file(file) {
+            Ok(autofocus) => {
+                println!("Successfully loaded autofocus data from file");
+                display_autofocus_data(&autofocus);
+            }
+            Err(e) => {
+                return Err(format!("Failed to load autofocus data from file: {}", e).into());
+            }
+        }
+    } else {
+        println!("Loading autofocus data from API...");
+        match load_autofocus_from_api().await {
+            Ok(autofocus) => {
+                println!("Successfully loaded autofocus data from API");
+                display_autofocus_data(&autofocus);
+            }
+            Err(e) => {
+                return Err(format!("Failed to load autofocus data from API: {}", e).into());
+            }
+        }
+    }
+    
+    Ok(())
+}
+
 fn cmd_test_base64() {
     println!("Testing base64 decoding with a known PNG image...");
     
@@ -592,6 +637,123 @@ async fn cmd_all() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 // Helper functions
+
+fn load_autofocus_from_file(filename: &str) -> Result<AutofocusResponse, Box<dyn std::error::Error>> {
+    let json_content = fs::read_to_string(filename)?;
+    let autofocus: AutofocusResponse = serde_json::from_str(&json_content)?;
+    Ok(autofocus)
+}
+
+async fn load_autofocus_from_api() -> Result<AutofocusResponse, Box<dyn std::error::Error>> {
+    // Load configuration from config.json or use default
+    let config = Config::load_or_default();
+
+    // Validate configuration
+    if let Err(e) = config.validate() {
+        return Err(e.into());
+    }
+
+    // Create API client
+    let client = SpaceCatApiClient::new(config.api)?;
+
+    // Check API version and health
+    match client.get_version().await {
+        Ok(_) => {} // Version check successful
+        Err(e) => {
+            return Err(format!("Could not get API version: {}", e).into());
+        }
+    }
+
+    // Fetch autofocus data
+    let autofocus = client.get_last_autofocus().await?;
+    Ok(autofocus)
+}
+
+fn display_autofocus_data(autofocus: &AutofocusResponse) {
+    println!(
+        "Status: {}, Success: {}",
+        autofocus.status_code, autofocus.success
+    );
+    
+    if !autofocus.error.is_empty() {
+        println!("Error: {}", autofocus.error);
+        return;
+    }
+
+    let af_data = &autofocus.response;
+    
+    println!("\n=== Autofocus Summary ===");
+    println!("Filter: {}", af_data.filter);
+    println!("Focuser: {}", af_data.auto_focuser_name);
+    println!("Star Detector: {}", af_data.star_detector_name);
+    println!("Method: {}", af_data.method);
+    println!("Fitting: {}", af_data.fitting);
+    println!("Temperature: {:.1}°C", af_data.temperature);
+    println!("Duration: {}", af_data.duration);
+    println!("Timestamp: {}", af_data.timestamp);
+    
+    println!("\n=== Focus Results ===");
+    println!("Initial Position: {}", af_data.initial_focus_point.position);
+    println!("Calculated Position: {}", af_data.calculated_focus_point.position);
+    println!("Calculated HFR: {:.3}", af_data.calculated_focus_point.value);
+    println!("Previous Position: {}", af_data.previous_focus_point.position);
+    
+    let (min_pos, max_pos) = af_data.get_focus_range();
+    println!("Focus Range: {} - {}", min_pos, max_pos);
+    
+    if let Some(best_hfr) = af_data.get_best_measured_hfr() {
+        println!("Best Measured HFR: {:.3}", best_hfr);
+    }
+    
+    println!("\n=== Measurement Points ({}) ===", af_data.measure_points.len());
+    for (i, point) in af_data.measure_points.iter().enumerate() {
+        println!("  {:2}: Position {}, HFR {:.3}, Error {:.3}", 
+                i + 1, point.position, point.value, point.error);
+    }
+    
+    println!("\n=== Curve Fitting Results ===");
+    println!("R-squared values:");
+    println!("  Quadratic: {:.4}", af_data.r_squares.quadratic);
+    println!("  Hyperbolic: {:.4}", af_data.r_squares.hyperbolic);
+    println!("  Left Trend: {:.4}", af_data.r_squares.left_trend);
+    println!("  Right Trend: {:.4}", af_data.r_squares.right_trend);
+    println!("Best R-squared: {:.4}", autofocus.get_best_r_squared());
+    
+    println!("\n=== Intersections ===");
+    let intersections = &af_data.intersections;
+    println!("Trend Line Intersection: Position {}, Value {:.3}", 
+            intersections.trend_line_intersection.position,
+            intersections.trend_line_intersection.value);
+    println!("Hyperbolic Minimum: Position {}, Value {:.3}", 
+            intersections.hyperbolic_minimum.position,
+            intersections.hyperbolic_minimum.value);
+    println!("Quadratic Minimum: Position {}, Value {:.3}", 
+            intersections.quadratic_minimum.position,
+            intersections.quadratic_minimum.value);
+    println!("Gaussian Maximum: Position {}, Value {:.3}", 
+            intersections.gaussian_maximum.position,
+            intersections.gaussian_maximum.value);
+    
+    println!("\n=== Backlash Compensation ===");
+    let backlash = &af_data.backlash_compensation;
+    println!("Model: {}", backlash.backlash_compensation_model);
+    println!("Backlash IN: {}", backlash.backlash_in);
+    println!("Backlash OUT: {}", backlash.backlash_out);
+    
+    println!("\n=== Analysis ===");
+    if autofocus.is_successful() {
+        println!("✅ Autofocus appears successful");
+    } else {
+        println!("❌ Autofocus may have issues");
+    }
+    
+    let position_change = af_data.calculated_focus_point.position - af_data.previous_focus_point.position;
+    if position_change != 0 {
+        println!("Focus position changed by {} steps", position_change);
+    } else {
+        println!("Focus position unchanged from previous run");
+    }
+}
 
 fn load_sequence(filename: &str) -> Result<SequenceResponse, Box<dyn std::error::Error>> {
     let json_content = fs::read_to_string(filename)?;

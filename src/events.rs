@@ -61,6 +61,7 @@ pub mod event_types {
     pub const DOME_DISCONNECTED: &str = "DOME-DISCONNECTED";
     pub const SAFETY_DISCONNECTED: &str = "SAFETY-DISCONNECTED";
     pub const IMAGE_SAVE: &str = "IMAGE-SAVE";
+    pub const AUTOFOCUS_FINISHED: &str = "AUTOFOCUS-FINISHED";
 }
 
 impl EventHistoryResponse {

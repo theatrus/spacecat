@@ -1,6 +1,7 @@
 use crate::api::SpaceCatClient;
+use crate::autofocus::AutofocusResponse;
 use crate::discord::{DiscordWebhook, Embed, colors};
-use crate::events::Event;
+use crate::events::{Event, event_types};
 use crate::images::ImageMetadata;
 use crate::sequence::{SequenceResponse, extract_current_target};
 use std::collections::HashSet;
@@ -65,6 +66,12 @@ impl DualPoller {
                         let key = self.event_key(&event);
                         if self.event_seen.insert(key) {
                             self.print_new_event(&event);
+                            
+                            // Handle autofocus-finished events
+                            if event.event == event_types::AUTOFOCUS_FINISHED {
+                                self.handle_autofocus_finished(&event).await;
+                            }
+                            
                             if let Some(webhook) = &self.discord_webhook {
                                 self.send_event_to_discord(webhook, &event).await;
                             }
@@ -301,6 +308,98 @@ impl DualPoller {
 
         if let Err(e) = webhook.execute_with_embed(None, embed).await {
             eprintln!("Failed to send target start to Discord: {}", e);
+        }
+    }
+
+    async fn handle_autofocus_finished(&self, event: &Event) {
+        println!("[AUTOFOCUS FINISHED] {}", event.time);
+        println!("Fetching autofocus results...");
+        
+        match self.client.get_last_autofocus().await {
+            Ok(autofocus_data) => {
+                self.display_autofocus_results(&autofocus_data);
+                
+                // Send to Discord if configured
+                if let Some(webhook) = &self.discord_webhook {
+                    self.send_autofocus_to_discord(webhook, &autofocus_data).await;
+                }
+            }
+            Err(e) => {
+                eprintln!("Failed to fetch autofocus data: {}", e);
+            }
+        }
+        println!();
+    }
+
+    fn display_autofocus_results(&self, af: &AutofocusResponse) {
+        if !af.success {
+            println!("❌ Autofocus failed: {}", af.error);
+            return;
+        }
+
+        let af_data = &af.response;
+        let success_indicator = if af.is_successful() { "✅" } else { "⚠️" };
+        
+        println!("{} Autofocus Summary", success_indicator);
+        println!("  Filter: {}", af_data.filter);
+        println!("  Method: {}", af_data.method);
+        println!("  Temperature: {:.1}°C", af_data.temperature);
+        println!("  Duration: {}", af_data.duration);
+        
+        println!("Focus Results:");
+        println!("  Initial Position: {}", af_data.initial_focus_point.position);
+        println!("  Calculated Position: {} (HFR: {:.3})", 
+                af_data.calculated_focus_point.position, 
+                af_data.calculated_focus_point.value);
+        println!("  Position Change: {}", 
+                af_data.calculated_focus_point.position - af_data.initial_focus_point.position);
+        
+        println!("Quality Metrics:");
+        println!("  Measurement Points: {}", af_data.measure_points.len());
+        println!("  Best R-squared: {:.4}", af.get_best_r_squared());
+        
+        let (min_pos, max_pos) = af_data.get_focus_range();
+        println!("  Focus Range: {} - {}", min_pos, max_pos);
+        
+        if let Some(best_hfr) = af_data.get_best_measured_hfr() {
+            println!("  Best Measured HFR: {:.3}", best_hfr);
+        }
+    }
+
+    async fn send_autofocus_to_discord(&self, webhook: &DiscordWebhook, af: &AutofocusResponse) {
+        let color = if af.is_successful() { 
+            colors::GREEN 
+        } else { 
+            colors::ORANGE 
+        };
+        
+        let af_data = &af.response;
+        let success_indicator = if af.is_successful() { "✅" } else { "⚠️" };
+        
+        let position_change = af_data.calculated_focus_point.position - af_data.initial_focus_point.position;
+        let position_change_text = if position_change > 0 {
+            format!("+{}", position_change)
+        } else {
+            position_change.to_string()
+        };
+
+        let embed = Embed::new()
+            .title(&format!("{} Autofocus Completed", success_indicator))
+            .color(color)
+            .field("Filter", &af_data.filter, true)
+            .field("Method", &af_data.method, true)
+            .field("Duration", &af_data.duration, true)
+            .field("Temperature", &format!("{:.1}°C", af_data.temperature), true)
+            .field("Focus Position", &af_data.calculated_focus_point.position.to_string(), true)
+            .field("Position Change", &position_change_text, true)
+            .field("HFR", &format!("{:.3}", af_data.calculated_focus_point.value), true)
+            .field("R-squared", &format!("{:.4}", af.get_best_r_squared()), true)
+            .field("Measurements", &af_data.measure_points.len().to_string(), true)
+            .footer(&format!("Focuser: {}", af_data.auto_focuser_name), None)
+            .timestamp(&chrono::Utc::now().to_rfc3339());
+
+        if let Err(e) = webhook.execute_with_embed(None, embed).await {
+            eprintln!("Failed to send autofocus results to Discord: {}", e);
         }
     }
 }

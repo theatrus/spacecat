@@ -1,3 +1,4 @@
+use crate::autofocus::AutofocusResponse;
 use crate::config::ApiConfig;
 use crate::events::EventHistoryResponse;
 use crate::images::{ImageHistoryResponse, ImageResponse, ThumbnailResponse};
@@ -313,5 +314,18 @@ impl SpaceCatApiClient {
             status: 500,
             message: "All retry attempts exhausted".to_string(),
         })
+    }
+
+    /// Fetch the last autofocus data from the /equipment/focuser/last-af endpoint
+    pub async fn get_last_autofocus(&self) -> Result<AutofocusResponse, ApiError> {
+        self.get_last_autofocus_with_params(&[]).await
+    }
+
+    /// Fetch the last autofocus data with custom query parameters
+    pub async fn get_last_autofocus_with_params(
+        &self,
+        params: &[(&str, &str)],
+    ) -> Result<AutofocusResponse, ApiError> {
+        self.generic_request_with_retry("/equipment/focuser/last-af", params).await
     }
 }

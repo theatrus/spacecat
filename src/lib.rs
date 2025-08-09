@@ -1,4 +1,5 @@
 pub mod api;
+pub mod autofocus;
 pub mod config;
 pub mod discord;
 pub mod dual_poller;
