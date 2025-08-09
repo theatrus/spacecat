@@ -209,14 +209,34 @@ impl DualPoller {
             _ => colors::GRAY,
         };
 
+        let title = match event.event.as_str() {
+            "FILTERWHEEL-CHANGED" => "🔄 Filter Changed".to_string(),
+            _ => format!("📡 {}", event.event),
+        };
+
         let mut embed = Embed::new()
-            .title(&format!("📡 {}", event.event))
+            .title(&title)
             .color(color)
             .field("Time", &event.time, false)
             .timestamp(&chrono::Utc::now().to_rfc3339());
 
         if let Some(details) = &event.details {
-            embed = embed.field("Details", &format!("{:?}", details), false);
+            match details {
+                crate::events::EventDetails::FilterWheelChange { new, previous } => {
+                    embed = embed
+                        .field(
+                            "Filter Change",
+                            &format!("{} → {}", previous.name, new.name),
+                            false,
+                        )
+                        .field(
+                            "Previous",
+                            &format!("{} (ID: {})", previous.name, previous.id),
+                            true,
+                        )
+                        .field("New", &format!("{} (ID: {})", new.name, new.id), true);
+                }
+            }
         }
 
         if let Err(e) = webhook.execute_with_embed(None, embed).await {
