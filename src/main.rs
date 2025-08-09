@@ -490,7 +490,7 @@ async fn cmd_poll(interval: u64, count: u32) -> Result<(), Box<dyn std::error::E
 async fn cmd_discord_updater(interval: u64) -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::load_or_default();
     let service_wrapper = ServiceWrapper::new(config)?;
-    
+
     service_wrapper.run_cli(interval).await
 }
 
@@ -1107,7 +1107,9 @@ fn get_connection_event_info(event_name: &str) -> (&'static str, &'static str) {
 }
 
 #[cfg(windows)]
-async fn cmd_windows_service(action: WindowsServiceAction) -> Result<(), Box<dyn std::error::Error>> {
+async fn cmd_windows_service(
+    action: WindowsServiceAction,
+) -> Result<(), Box<dyn std::error::Error>> {
     match action {
         WindowsServiceAction::Install => {
             println!("Installing Windows service...");
@@ -1136,6 +1138,6 @@ async fn cmd_windows_service(action: WindowsServiceAction) -> Result<(), Box<dyn
                 .map_err(|e| format!("Service runtime error: {}", e).into());
         }
     }
-    
+
     Ok(())
 }
