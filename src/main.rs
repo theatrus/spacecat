@@ -1,5 +1,6 @@
 mod api;
 mod config;
+mod discord;
 mod dual_poller;
 mod events;
 mod images;
@@ -501,8 +502,20 @@ async fn cmd_dual_poll(interval: u64) -> Result<(), Box<dyn std::error::Error>> 
     println!("Press Ctrl+C to stop\n");
     
     let config = Config::load_or_default();
-    let client = SpaceCatApiClient::new(config.api)?;
+    let client = SpaceCatApiClient::new(config.api.clone())?;
     let mut poller = DualPoller::new(client);
+    
+    // Check for Discord webhook configuration
+    if let Some(discord_config) = &config.discord {
+        if discord_config.enabled && !discord_config.webhook_url.is_empty() {
+            println!("Discord webhook configured, events will be sent to Discord");
+            poller = poller.with_discord_webhook(&discord_config.webhook_url)?;
+        } else if !discord_config.enabled {
+            println!("Discord webhook disabled in configuration");
+        }
+    } else {
+        println!("No Discord webhook configured (add 'discord' section to config.json to enable)");
+    }
     
     poller.start_polling(Duration::from_secs(interval)).await;
     

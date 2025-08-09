@@ -6,6 +6,8 @@ use std::path::Path;
 pub struct Config {
     pub api: ApiConfig,
     pub logging: LoggingConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub discord: Option<DiscordConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,6 +22,17 @@ pub struct LoggingConfig {
     pub level: String,
     pub enable_file_logging: bool,
     pub log_file: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiscordConfig {
+    pub webhook_url: String,
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+}
+
+fn default_enabled() -> bool {
+    true
 }
 
 #[derive(Debug)]
@@ -58,6 +71,7 @@ impl Default for Config {
         Self {
             api: ApiConfig::default(),
             logging: LoggingConfig::default(),
+            discord: None,
         }
     }
 }
@@ -186,6 +200,18 @@ impl Config {
                 "Invalid logging level '{}'. Valid levels: {:?}",
                 self.logging.level, valid_levels
             ));
+        }
+
+        // Validate Discord webhook URL if present
+        if let Some(discord) = &self.discord {
+            if discord.enabled && discord.webhook_url.is_empty() {
+                return Err("Discord webhook URL cannot be empty when Discord is enabled".to_string());
+            }
+            
+            if discord.enabled && !discord.webhook_url.starts_with("https://discord.com/api/webhooks/") 
+                && !discord.webhook_url.starts_with("https://discordapp.com/api/webhooks/") {
+                return Err("Discord webhook URL must be a valid Discord webhook URL".to_string());
+            }
         }
 
         Ok(())

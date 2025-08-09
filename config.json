@@ -8,5 +8,9 @@
     "level": "info",
     "enable_file_logging": false,
     "log_file": "spacecat.log"
+  },
+  "discord": {
+    "enabled": true,
+    "webhook_url": "https://discord.com/api/webhooks/1403605999822049360/fiDJi3DX29SCeGETYYHTgIzwG648RgNqPRacAiGKMzIgE-t7Pnh1CcCL4SOsK-szaTsD"
   }
 }

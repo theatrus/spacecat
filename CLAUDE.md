@@ -34,7 +34,7 @@ The system connects to SpaceCat API at `http://192.168.0.82:1888` with endpoints
 
 ### Configuration
 
-Uses `config.json` for API settings:
+Uses `config.json` for API and Discord settings:
 ```json
 {
   "api": {
@@ -43,7 +43,13 @@ Uses `config.json` for API settings:
     "retry_attempts": 3
   },
   "logging": {
-    "level": "info"
+    "level": "info",
+    "enable_file_logging": false,
+    "log_file": "spacecat.log"
+  },
+  "discord": {
+    "webhook_url": "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN",
+    "enabled": true
   }
 }
 ```
@@ -74,6 +80,12 @@ Uses `config.json` for API settings:
   - Generic retry patterns across all API endpoints
   - Comprehensive error types (Network, Parse, HTTP)
   - Configurable timeout and retry attempts
+
+- **Discord Integration**: Real-time notifications via Discord webhooks:
+  - Event notifications with color-coded embeds
+  - Image capture alerts with detailed metadata
+  - Configurable via config.json
+  - Non-blocking operation that won't interrupt observations
 
 ### Data Structures
 
