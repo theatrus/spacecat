@@ -75,16 +75,14 @@ impl DualPoller {
                     for event in events.response {
                         // Skip filterwheel changed events where the filter didn't actually change
                         // This can happen when the filterwheel reports its position without actually moving
-                        if event.event == event_types::FILTERWHEEL_CHANGED {
-                            if let Some(crate::events::EventDetails::FilterWheelChange {
+                        if event.event == event_types::FILTERWHEEL_CHANGED
+                            && let Some(crate::events::EventDetails::FilterWheelChange {
                                 ref new,
                                 ref previous,
                             }) = event.details
-                            {
-                                if new.name == previous.name {
-                                    continue; // Skip this redundant event
-                                }
-                            }
+                            && new.name == previous.name
+                        {
+                            continue; // Skip this redundant event
                         }
 
                         let key = self.event_key(&event);
@@ -174,16 +172,14 @@ impl DualPoller {
         for event in events.response {
             // Skip filterwheel changed events where the filter didn't actually change
             // This can happen when the filterwheel reports its position without actually moving
-            if event.event == event_types::FILTERWHEEL_CHANGED {
-                if let Some(crate::events::EventDetails::FilterWheelChange {
+            if event.event == event_types::FILTERWHEEL_CHANGED
+                && let Some(crate::events::EventDetails::FilterWheelChange {
                     ref new,
                     ref previous,
                 }) = event.details
-                {
-                    if new.name == previous.name {
-                        continue; // Skip this redundant event
-                    }
-                }
+                && new.name == previous.name
+            {
+                continue; // Skip this redundant event
             }
             self.event_seen.insert(self.event_key(&event));
         }
@@ -388,11 +384,11 @@ impl DualPoller {
         }
 
         // Add meridian flip time if available and within the next hour
-        if let Some(meridian_flip_hours) = self.current_meridian_flip_time {
-            if meridian_flip_hours <= 1.0 {
-                let formatted_time = meridian_flip_time_formatted_with_clock(meridian_flip_hours);
-                embed = embed.field("Meridian Flip In", &formatted_time, true);
-            }
+        if let Some(meridian_flip_hours) = self.current_meridian_flip_time
+            && meridian_flip_hours <= 1.0
+        {
+            let formatted_time = meridian_flip_time_formatted_with_clock(meridian_flip_hours);
+            embed = embed.field("Meridian Flip In", &formatted_time, true);
         }
 
         embed = embed
@@ -575,52 +571,52 @@ impl DualPoller {
         }
 
         // Try to fetch mount info for detailed position data
-        if let Ok(mount_info) = self.client.get_mount_info().await {
-            if mount_info.is_connected() {
-                let (ra, dec) = mount_info.get_coordinates();
-                let (alt, az) = mount_info.get_alt_az();
+        if let Ok(mount_info) = self.client.get_mount_info().await
+            && mount_info.is_connected()
+        {
+            let (ra, dec) = mount_info.get_coordinates();
+            let (alt, az) = mount_info.get_alt_az();
 
-                embed = embed
-                    .field("Mount Position", &format!("RA: {ra}\nDec: {dec}"), true)
-                    .field("Alt/Az", &format!("Alt: {alt}\nAz: {az}"), true)
-                    .field("Pier Side", mount_info.get_side_of_pier(), true)
-                    .field(
-                        "Sidereal Time",
-                        &mount_info.response.sidereal_time_string,
-                        true,
-                    );
+            embed = embed
+                .field("Mount Position", &format!("RA: {ra}\nDec: {dec}"), true)
+                .field("Alt/Az", &format!("Alt: {alt}\nAz: {az}"), true)
+                .field("Pier Side", mount_info.get_side_of_pier(), true)
+                .field(
+                    "Sidereal Time",
+                    &mount_info.response.sidereal_time_string,
+                    true,
+                );
 
-                // For after-flip, show the new meridian flip time
-                if event.event == event_types::MOUNT_AFTER_FLIP {
-                    let flip_time = mount_info.get_time_to_meridian_flip_hours();
-                    let formatted_time = meridian_flip_time_formatted_with_clock(flip_time);
-                    embed = embed.field("Next Meridian Flip", &formatted_time, true);
-                }
+            // For after-flip, show the new meridian flip time
+            if event.event == event_types::MOUNT_AFTER_FLIP {
+                let flip_time = mount_info.get_time_to_meridian_flip_hours();
+                let formatted_time = meridian_flip_time_formatted_with_clock(flip_time);
+                embed = embed.field("Next Meridian Flip", &formatted_time, true);
+            }
 
-                // For parked event, show park details
-                if event.event == event_types::MOUNT_PARKED {
-                    let (lat, lon, elev) = mount_info.get_site_info();
-                    embed = embed.field(
-                        "Site Location",
-                        &format!("Lat: {lat:.3}°\nLon: {lon:.3}°\nElev: {elev}m"),
-                        true,
-                    );
-                }
+            // For parked event, show park details
+            if event.event == event_types::MOUNT_PARKED {
+                let (lat, lon, elev) = mount_info.get_site_info();
+                embed = embed.field(
+                    "Site Location",
+                    &format!("Lat: {lat:.3}°\nLon: {lon:.3}°\nElev: {elev}m"),
+                    true,
+                );
+            }
 
-                if mount_info.response.tracking_enabled {
-                    embed = embed.field("Tracking Status", "✅ Enabled", true);
-                } else {
-                    embed = embed.field("Tracking Status", "❌ Disabled", true);
-                }
+            if mount_info.response.tracking_enabled {
+                embed = embed.field("Tracking Status", "✅ Enabled", true);
+            } else {
+                embed = embed.field("Tracking Status", "❌ Disabled", true);
+            }
 
-                // Add slewing status if relevant
-                if mount_info.response.slewing {
-                    embed = embed.field("Mount Status", "🔄 Slewing", true);
-                } else if mount_info.response.at_park {
-                    embed = embed.field("Mount Status", "🅿️ Parked", true);
-                } else {
-                    embed = embed.field("Mount Status", "✅ Tracking", true);
-                }
+            // Add slewing status if relevant
+            if mount_info.response.slewing {
+                embed = embed.field("Mount Status", "🔄 Slewing", true);
+            } else if mount_info.response.at_park {
+                embed = embed.field("Mount Status", "🅿️ Parked", true);
+            } else {
+                embed = embed.field("Mount Status", "✅ Tracking", true);
             }
         }
 

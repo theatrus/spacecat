@@ -253,10 +253,10 @@ pub fn extract_current_target(sequence: &SequenceResponse) -> Option<String> {
                     }
 
                     // Also search nested items
-                    if let Some(items) = obj.get("Items").and_then(|v| v.as_array()) {
-                        if let Some(nested_target) = search_containers(items) {
-                            return Some(nested_target);
-                        }
+                    if let Some(items) = obj.get("Items").and_then(|v| v.as_array())
+                        && let Some(nested_target) = search_containers(items)
+                    {
+                        return Some(nested_target);
                     }
                 }
             }
@@ -288,16 +288,15 @@ pub fn extract_meridian_flip_time(sequence: &SequenceResponse) -> Option<f64> {
 
     // Search for the Meridian Flip trigger
     for trigger in global_triggers_array {
-        if let Some(trigger_obj) = trigger.as_object() {
-            if let Some(name) = trigger_obj.get("Name").and_then(|v| v.as_str()) {
-                if name == "Meridian Flip_Trigger" {
-                    // Extract TimeToFlip value
-                    if let Some(time_to_flip) =
-                        trigger_obj.get("TimeToFlip").and_then(|v| v.as_f64())
-                    {
-                        return Some(time_to_flip);
-                    }
-                }
+        if let Some(trigger_obj) = trigger.as_object()
+            && let Some(name) = trigger_obj.get("Name").and_then(|v| v.as_str())
+            && name == "Meridian Flip_Trigger"
+        {
+            // Extract TimeToFlip value
+            if let Some(time_to_flip) =
+                trigger_obj.get("TimeToFlip").and_then(|v| v.as_f64())
+            {
+                return Some(time_to_flip);
             }
         }
     }
