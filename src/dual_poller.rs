@@ -146,10 +146,19 @@ impl DualPoller {
         println!("  Exposure: {}s", image.exposure_time);
         println!("  Temperature: {:.1}°C", image.temperature);
         println!("  Stars: {}, HFR: {:.2}", image.stars, image.hfr);
+        println!("  RMS: {}", image.rms_text);
+        println!("  Mean: {:.1}, Median: {:.1}, StDev: {:.1}", image.mean, image.median, image.st_dev);
+        println!("  Telescope: {}", image.telescope_name);
+
         println!();
     }
 
     async fn send_event_to_discord(&self, webhook: &DiscordWebhook, event: &Event) {
+        if event.event == "IMAGE-SAVE" {
+            // Skip IMAGE-SAVE events, they will be handled in the image section
+            return;
+        }
+
         let color = match event.event.as_str() {
             "IMAGE-SAVE" => colors::GREEN,
             "FILTERWHEEL-CHANGED" => colors::BLUE,
@@ -189,6 +198,7 @@ impl DualPoller {
             .title(&format!("📸 New {} Frame Captured", image.image_type))
             .color(color)
             .field("Camera", &image.camera_name, true)
+            .field("Tracking RMS", &image.rms_text, true)
             .field("Filter", &image.filter, true)
             .field("Exposure", &format!("{}s", image.exposure_time), true)
             .field("Temperature", &format!("{:.1}°C", image.temperature), true)
