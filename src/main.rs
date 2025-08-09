@@ -189,10 +189,7 @@ async fn cmd_sequence() -> Result<(), Box<dyn std::error::Error>> {
             // Extract meridian flip information
             if let Some(meridian_flip_hours) = extract_meridian_flip_time(&seq) {
                 let formatted_time = meridian_flip_time_formatted_with_clock(meridian_flip_hours);
-                println!(
-                    "Meridian flip in: {:.3} hours ({})",
-                    meridian_flip_hours, formatted_time
-                );
+                println!("Meridian flip in: {}", formatted_time);
             } else {
                 println!("No meridian flip information available");
             }

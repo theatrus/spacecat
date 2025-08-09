@@ -171,10 +171,7 @@ impl DualPoller {
         }
         if let Some(meridian_flip_hours) = self.current_meridian_flip_time {
             let formatted_time = meridian_flip_time_formatted_with_clock(meridian_flip_hours);
-            println!(
-                "  Meridian flip in: {:.3} hours ({})",
-                meridian_flip_hours, formatted_time
-            );
+            println!("  Meridian flip in: {}", formatted_time);
         }
         println!("  Camera: {}", image.camera_name);
         println!("  Type: {}", image.image_type);
@@ -270,11 +267,7 @@ impl DualPoller {
         // Add meridian flip time if available
         if let Some(meridian_flip_hours) = self.current_meridian_flip_time {
             let formatted_time = meridian_flip_time_formatted_with_clock(meridian_flip_hours);
-            embed = embed.field(
-                "Meridian Flip In",
-                &format!("{:.3}h ({})", meridian_flip_hours, formatted_time),
-                true,
-            );
+            embed = embed.field("Meridian Flip In", &formatted_time, true);
         }
 
         embed = embed
@@ -331,10 +324,7 @@ impl DualPoller {
                         if let Some(meridian_flip_hours) = new_meridian_flip_time {
                             let formatted_time =
                                 meridian_flip_time_formatted_with_clock(meridian_flip_hours);
-                            println!(
-                                "  Meridian flip in: {:.3} hours ({})",
-                                meridian_flip_hours, formatted_time
-                            );
+                            println!("  Meridian flip in: {}", formatted_time);
                         }
                         if let Some(webhook) = &self.discord_webhook {
                             self.send_target_change_to_discord(
@@ -350,10 +340,7 @@ impl DualPoller {
                         if let Some(meridian_flip_hours) = new_meridian_flip_time {
                             let formatted_time =
                                 meridian_flip_time_formatted_with_clock(meridian_flip_hours);
-                            println!(
-                                "  Meridian flip in: {:.3} hours ({})",
-                                meridian_flip_hours, formatted_time
-                            );
+                            println!("  Meridian flip in: {}", formatted_time);
                         }
                         if let Some(webhook) = &self.discord_webhook {
                             self.send_target_start_to_discord(
@@ -398,11 +385,7 @@ impl DualPoller {
 
         if let Some(meridian_flip_hours) = meridian_flip_time {
             let formatted_time = meridian_flip_time_formatted_with_clock(meridian_flip_hours);
-            embed = embed.field(
-                "Meridian Flip In",
-                &format!("{:.3}h ({})", meridian_flip_hours, formatted_time),
-                true,
-            );
+            embed = embed.field("Meridian Flip In", &formatted_time, true);
         }
 
         let embed = embed.timestamp(&chrono::Utc::now().to_rfc3339());
@@ -425,11 +408,7 @@ impl DualPoller {
 
         if let Some(meridian_flip_hours) = meridian_flip_time {
             let formatted_time = meridian_flip_time_formatted_with_clock(meridian_flip_hours);
-            embed = embed.field(
-                "Meridian Flip In",
-                &format!("{:.3}h ({})", meridian_flip_hours, formatted_time),
-                true,
-            );
+            embed = embed.field("Meridian Flip In", &formatted_time, true);
         }
 
         let embed = embed.timestamp(&chrono::Utc::now().to_rfc3339());
