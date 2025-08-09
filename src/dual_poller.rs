@@ -55,7 +55,7 @@ impl DualPoller {
     }
 
     pub async fn start_polling(&mut self, poll_interval: Duration) {
-        println!("Starting dual polling loop (events and images)...");
+        println!("Starting Discord updater loop (events and images)...");
         println!("Polling interval: {poll_interval:?}");
         println!("Press Ctrl+C to stop\n");
 

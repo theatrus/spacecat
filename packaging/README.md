@@ -103,7 +103,7 @@ The systemd service includes security hardening:
 
 ### Service Configuration
 
-The service runs `spacecat dual-poll --interval 5` with:
+The service runs `spacecat discord-updater --interval 5` with:
 - **Automatic restart** on failure
 - **Journal logging** with identifier `spacecat`
 - **Network dependency** (waits for network to be online)

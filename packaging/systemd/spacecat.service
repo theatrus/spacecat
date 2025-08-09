@@ -11,7 +11,7 @@ User=spacecat
 Group=spacecat
 Environment=RUST_LOG=info
 WorkingDirectory=/etc/spacecat
-ExecStart=/usr/bin/spacecat dual-poll --interval 5
+ExecStart=/usr/bin/spacecat discord-updater --interval 5
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
 RestartSec=10

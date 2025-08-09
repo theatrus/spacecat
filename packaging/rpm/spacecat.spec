@@ -73,5 +73,5 @@ fi
 %changelog
 * Fri Aug 09 2025 Yann Ramin <github@theatr.us> - 0.1.0-1
 - Initial RPM package
-- Added systemd service for dual-poll mode
+- Added systemd service for discord-updater mode
 - Includes configuration file and logging directory

@@ -68,8 +68,8 @@ enum Commands {
         #[arg(short, long, default_value = "5")]
         count: u32,
     },
-    /// Poll for both new events and images in real-time
-    DualPoll {
+    /// Update Discord with events and images in real-time
+    DiscordUpdater {
         /// Poll interval in seconds
         #[arg(short, long, default_value = "5")]
         interval: u64,
@@ -131,9 +131,9 @@ async fn main() {
                 std::process::exit(1);
             }
         }
-        Commands::DualPoll { interval } => {
-            if let Err(e) = cmd_dual_poll(interval).await {
-                eprintln!("DualPoll command failed: {e}");
+        Commands::DiscordUpdater { interval } => {
+            if let Err(e) = cmd_discord_updater(interval).await {
+                eprintln!("DiscordUpdater command failed: {e}");
                 std::process::exit(1);
             }
         }
@@ -453,8 +453,8 @@ async fn cmd_poll(interval: u64, count: u32) -> Result<(), Box<dyn std::error::E
     Ok(())
 }
 
-async fn cmd_dual_poll(interval: u64) -> Result<(), Box<dyn std::error::Error>> {
-    println!("Starting dual polling (events and images)...");
+async fn cmd_discord_updater(interval: u64) -> Result<(), Box<dyn std::error::Error>> {
+    println!("Starting Discord updater (events and images)...");
     println!("Poll interval: {interval}s");
     println!("Press Ctrl+C to stop\n");
 

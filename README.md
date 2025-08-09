@@ -108,8 +108,8 @@ spacecat get-thumbnail 5 --output "image_5.jpg" --image-type "LIGHT"
 # Poll for new events (5 cycles, 2 second intervals)
 spacecat poll --interval 2 --count 5
 
-# Start continuous dual polling (recommended)
-spacecat dual-poll --interval 5
+# Start continuous Discord updates (recommended)
+spacecat discord-updater --interval 5
 
 # Get latest autofocus results
 spacecat last-autofocus

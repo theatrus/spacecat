@@ -99,7 +99,7 @@ Uses `config.json` for API and Discord settings:
   - Multiple curve fitting analysis (quadratic, hyperbolic, trend lines)
   - Focus quality assessment with R-squared values
   - Success criteria evaluation and position change tracking
-  - Integration with dual polling for automatic result display
+  - Integration with Discord updater for automatic result display
 
 - **Event Polling**: Real-time event monitoring with:
   - Event deduplication using timestamp+event+details keys
@@ -153,7 +153,7 @@ The system provides comprehensive CLI commands for all functionality. All comman
 - `cargo run -- get-image <index>` - Retrieve specific images with base64 decoding
 - `cargo run -- get-thumbnail <index>` - Download image thumbnails
 - `cargo run -- poll` - Real-time event polling with configurable intervals
-- `cargo run -- dual-poll` - Combined event/image monitoring with Discord integration
+- `cargo run -- discord-updater` - Combined event/image monitoring with Discord integration
 - `cargo run -- last-autofocus` - Display detailed autofocus analysis and quality metrics
 - `cargo run -- mount-info` - Display comprehensive mount status, position, and capabilities
 

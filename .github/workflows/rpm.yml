@@ -152,7 +152,7 @@ jobs:
             ```
             
             #### Features
-            - Systemd service running `spacecat dual-poll`
+            - Systemd service running `spacecat discord-updater`
             - Automatic restarts and logging
             - Secure execution with dedicated user account
             - Configuration in `/etc/spacecat/config.json`
