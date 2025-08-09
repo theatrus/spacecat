@@ -47,7 +47,7 @@ SpaceCat includes Discord webhook support for real-time notifications of astrono
 
 3. **Run with Discord Integration**:
    ```bash
-   cargo run -- dual-poll
+   cargo run -- discord-updater
    ```
    
    To temporarily disable Discord notifications without removing the webhook URL:
@@ -119,9 +119,9 @@ webhook.execute_with_embed(None, embed).await?;
 ### Custom Integration
 ```rust
 use spacecat::discord::DiscordWebhook;
-use spacecat::dual_poller::DualPoller;
+use spacecat::discord_updater::DiscordUpdater;
 
-let mut poller = DualPoller::new(client);
+let mut poller = DiscordUpdater::new(client);
 poller = poller.with_discord_webhook(&webhook_url)?;
 ```
 

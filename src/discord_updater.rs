@@ -12,7 +12,7 @@ use std::collections::HashSet;
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
 
-pub struct DualPoller {
+pub struct DiscordUpdater {
     client: SpaceCatClient,
     event_seen: HashSet<String>,
     image_seen: HashSet<String>,
@@ -25,7 +25,7 @@ pub struct DualPoller {
     skipped_images_count: u32,
 }
 
-impl DualPoller {
+impl DiscordUpdater {
     pub fn new(client: SpaceCatClient) -> Self {
         Self {
             client,
@@ -55,7 +55,7 @@ impl DualPoller {
     }
 
     pub async fn start_polling(&mut self, poll_interval: Duration) {
-        println!("Starting dual polling loop (events and images)...");
+        println!("Starting Discord updater loop (events and images)...");
         println!("Polling interval: {poll_interval:?}");
         println!("Press Ctrl+C to stop\n");
 

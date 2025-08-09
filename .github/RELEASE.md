@@ -44,7 +44,7 @@ cp config.example.json config.json
 # Run basic commands
 spacecat sequence
 spacecat events
-spacecat dual-poll
+spacecat discord-updater
 ```
 
 See [CLAUDE.md](../CLAUDE.md) for detailed documentation.
