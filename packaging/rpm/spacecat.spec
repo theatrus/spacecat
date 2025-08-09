@@ -7,7 +7,7 @@ License:        Apache-2.0
 URL:            https://github.com/theatrus/spacecat
 Source0:        %{name}-%{version}.tar.gz
 
-BuildRequires:  rust >= 1.89.0
+BuildRequires:  rust >= 1.80.0
 BuildRequires:  cargo
 BuildRequires:  systemd-rpm-macros
 Requires:       systemd

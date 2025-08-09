@@ -11,7 +11,6 @@ all: rpm
 # Check if required tools are installed
 check-deps:
 	@command -v rpmbuild >/dev/null 2>&1 || { echo "rpmbuild is required but not installed. Run 'make install-deps'" >&2; exit 1; }
-	@command -v rust >/dev/null 2>&1 || { echo "rust is required but not installed. Run 'make install-deps'" >&2; exit 1; }
 	@command -v cargo >/dev/null 2>&1 || { echo "cargo is required but not installed. Run 'make install-deps'" >&2; exit 1; }
 
 # Install build dependencies (Fedora)

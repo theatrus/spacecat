@@ -13,7 +13,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Architecture
 
-SpaceCat is a Rust-based astronomical observation system that interfaces with SpaceCat API for telescope automation and monitoring. The system provides real-time event tracking, image history management, and sequence automation.
+SpaceCat is a Rust-based astronomical observation system that interfaces with
+NINA Advanced API for monitoring and posting to Discord (or other services). The
+system provides real-time event tracking, image history management, and sequence
+automation.
 
 ### Core Modules
 
@@ -30,7 +33,7 @@ SpaceCat is a Rust-based astronomical observation system that interfaces with Sp
 
 ### API Integration
 
-The system connects to SpaceCat API at `http://192.168.0.82:1888` with endpoints:
+The system connects to NINA Advanced API at `http://192.168.0.82:1888` with endpoints:
 - `/v2/api/version` - API health check and version info
 - `/v2/api/event-history` - Equipment event monitoring  
 - `/v2/api/image-history?all=true` - Image metadata and session statistics

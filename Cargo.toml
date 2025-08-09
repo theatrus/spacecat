@@ -2,6 +2,12 @@
 name = "spacecat"
 version = "0.1.0"
 edition = "2024"
+license = "Apache-2.0"
+authors = ["SpaceCat Contributors"]
+description = "SpaceCat - Astronomical Observation System for telescope automation and monitoring"
+repository = "https://github.com/theatrus/spacecat"
+keywords = ["astronomy", "telescope", "automation", "spacecat"]
+categories = ["science", "api-bindings"]
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
