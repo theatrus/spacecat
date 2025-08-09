@@ -1,6 +1,7 @@
 use crate::config::ApiConfig;
 use crate::events::EventHistoryResponse;
 use crate::images::{ImageHistoryResponse, ImageResponse, ThumbnailResponse};
+use crate::sequence::SequenceResponse;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -204,6 +205,19 @@ impl SpaceCatApiClient {
     /// Fetch all image history (equivalent to ?all=true parameter)
     pub async fn get_all_image_history(&self) -> Result<ImageHistoryResponse, ApiError> {
         self.get_image_history_with_params(&[("all", "true")]).await
+    }
+
+    /// Fetch current sequence information from the /sequence endpoint
+    pub async fn get_sequence(&self) -> Result<SequenceResponse, ApiError> {
+        self.get_sequence_with_params(&[]).await
+    }
+
+    /// Fetch sequence information with custom query parameters
+    pub async fn get_sequence_with_params(
+        &self,
+        params: &[(&str, &str)],
+    ) -> Result<SequenceResponse, ApiError> {
+        self.generic_request_with_retry("/sequence/json", params).await
     }
 
     /// Fetch a specific image by index with autoPrepare=true by default

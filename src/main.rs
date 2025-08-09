@@ -15,7 +15,7 @@ use dual_poller::DualPoller;
 use events::EventHistoryResponse;
 use images::ImageHistoryResponse;
 use poller::EventPoller;
-use sequence::SequenceResponse;
+use sequence::{SequenceResponse, extract_current_target};
 use std::fs;
 use std::time::Duration;
 
@@ -198,6 +198,13 @@ async fn cmd_sequence(file: &str) -> Result<(), Box<dyn std::error::Error>> {
                     container.status,
                     container.items.len()
                 );
+            }
+
+            // Test the new extract_current_target utility function
+            if let Some(target) = extract_current_target(&seq) {
+                println!("Current active target: {}", target);
+            } else {
+                println!("No active target found");
             }
         }
         Err(e) => {

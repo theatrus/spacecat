@@ -2,6 +2,7 @@ use crate::api::SpaceCatClient;
 use crate::discord::{DiscordWebhook, Embed, colors};
 use crate::events::Event;
 use crate::images::ImageMetadata;
+use crate::sequence::{SequenceResponse, extract_current_target};
 use std::collections::HashSet;
 use std::time::Duration;
 use tokio::time::sleep;
@@ -11,6 +12,8 @@ pub struct DualPoller {
     event_seen: HashSet<String>,
     image_seen: HashSet<String>,
     discord_webhook: Option<DiscordWebhook>,
+    current_target: Option<String>,
+    current_sequence: Option<SequenceResponse>,
 }
 
 impl DualPoller {
@@ -20,6 +23,8 @@ impl DualPoller {
             event_seen: HashSet::new(),
             image_seen: HashSet::new(),
             discord_webhook: None,
+            current_target: None,
+            current_sequence: None,
         }
     }
 
@@ -40,6 +45,9 @@ impl DualPoller {
         }
 
         loop {
+            // Poll sequence for target information
+            self.poll_sequence().await;
+
             // Poll events
             match self.client.get_event_history().await {
                 Ok(events) => {
@@ -140,6 +148,9 @@ impl DualPoller {
 
     fn print_new_image(&self, image: &ImageMetadata) {
         println!("[NEW IMAGE] {}", image.date);
+        if let Some(target) = &self.current_target {
+            println!("  Target: {}", target);
+        }
         println!("  Camera: {}", image.camera_name);
         println!("  Type: {}", image.image_type);
         println!("  Filter: {}", image.filter);
@@ -194,9 +205,16 @@ impl DualPoller {
             _ => colors::CYAN,
         };
 
-        let embed = Embed::new()
+        let mut embed = Embed::new()
             .title(&format!("📸 New {} Frame Captured", image.image_type))
-            .color(color)
+            .color(color);
+
+        // Add target information if available
+        if let Some(target) = &self.current_target {
+            embed = embed.field("Target", target, true);
+        }
+
+        embed = embed
             .field("Camera", &image.camera_name, true)
             .field("Tracking RMS", &image.rms_text, true)
             .field("Filter", &image.filter, true)
@@ -225,6 +243,64 @@ impl DualPoller {
                     eprintln!("Failed to send image to Discord: {}", e);
                 }
             }
+        }
+    }
+
+    async fn poll_sequence(&mut self) {
+        match self.client.get_sequence().await {
+            Ok(sequence) => {
+                let new_target = extract_current_target(&sequence);
+                // Check if target changed
+                if new_target != self.current_target {
+                    if let (Some(old_target), Some(new_target_name)) = (&self.current_target, &new_target) {
+                        println!("[TARGET CHANGE] {} -> {}", old_target, new_target_name);
+                        if let Some(webhook) = &self.discord_webhook {
+                            self.send_target_change_to_discord(webhook, old_target, new_target_name).await;
+                        }
+                    } else if let Some(new_target_name) = &new_target {
+                        println!("[TARGET START] {}", new_target_name);
+                        if let Some(webhook) = &self.discord_webhook {
+                            self.send_target_start_to_discord(webhook, new_target_name).await;
+                        }
+                    }
+                    
+                    self.current_target = new_target;
+                }
+                
+                self.current_sequence = Some(sequence);
+            }
+            Err(e) => {
+                // Only log sequence errors occasionally to avoid spam
+                if self.current_sequence.is_none() {
+                    eprintln!("Error fetching sequence (will retry silently): {}", e);
+                }
+            }
+        }
+    }
+
+
+    async fn send_target_change_to_discord(&self, webhook: &DiscordWebhook, old_target: &str, new_target: &str) {
+        let embed = Embed::new()
+            .title("🎯 Target Change")
+            .color(colors::CYAN)
+            .field("Previous Target", old_target, true)
+            .field("New Target", new_target, true)
+            .timestamp(&chrono::Utc::now().to_rfc3339());
+
+        if let Err(e) = webhook.execute_with_embed(None, embed).await {
+            eprintln!("Failed to send target change to Discord: {}", e);
+        }
+    }
+
+    async fn send_target_start_to_discord(&self, webhook: &DiscordWebhook, target: &str) {
+        let embed = Embed::new()
+            .title("🎯 Target Started")
+            .color(colors::GREEN)
+            .field("Target", target, false)
+            .timestamp(&chrono::Utc::now().to_rfc3339());
+
+        if let Err(e) = webhook.execute_with_embed(None, embed).await {
+            eprintln!("Failed to send target start to Discord: {}", e);
         }
     }
 }
