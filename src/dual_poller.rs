@@ -249,13 +249,64 @@ impl DualPoller {
         }
 
         let color = match event.event.as_str() {
+            // Camera events - Green tones for positive, Red for negative
+            event_types::CAMERA_CONNECTED => colors::GREEN,
+            event_types::CAMERA_DISCONNECTED => colors::RED,
             event_types::IMAGE_SAVE => colors::GREEN,
+
+            // Filterwheel events - Blue tones
+            event_types::FILTERWHEEL_CONNECTED => colors::BLUE,
+            event_types::FILTERWHEEL_DISCONNECTED => colors::RED,
             event_types::FILTERWHEEL_CHANGED => colors::BLUE,
-            event_types::SEQUENCE_START => colors::CYAN,
-            event_types::SEQUENCE_STOP => colors::ORANGE,
+
+            // Mount events - Yellow/Orange tones for operations, Green for completion
+            event_types::MOUNT_CONNECTED => colors::GREEN,
+            event_types::MOUNT_DISCONNECTED => colors::RED,
             event_types::MOUNT_PARKED => colors::YELLOW,
+            event_types::MOUNT_UNPARKED => colors::YELLOW,
+            event_types::MOUNT_SLEW => colors::ORANGE,
             event_types::MOUNT_BEFORE_FLIP => colors::ORANGE,
             event_types::MOUNT_AFTER_FLIP => colors::GREEN,
+
+            // Focuser events - Purple tones
+            event_types::FOCUSER_CONNECTED => colors::GREEN,
+            event_types::FOCUSER_DISCONNECTED => colors::RED,
+            event_types::FOCUS_START => colors::PURPLE,
+            event_types::FOCUS_END => colors::PURPLE,
+            event_types::AUTOFOCUS_FINISHED => colors::PURPLE,
+
+            // Rotator events - Cyan tones
+            event_types::ROTATOR_CONNECTED => colors::GREEN,
+            event_types::ROTATOR_DISCONNECTED => colors::RED,
+            event_types::ROTATOR_MOVED => colors::CYAN,
+            event_types::ROTATOR_SYNCED => colors::CYAN,
+
+            // Guider events - Blue/Cyan tones
+            event_types::GUIDER_CONNECTED => colors::GREEN,
+            event_types::GUIDER_DISCONNECTED => colors::RED,
+            event_types::GUIDER_START => colors::BLUE,
+            event_types::GUIDER_DITHER => colors::CYAN,
+
+            // Sequence events - Bright colors for visibility
+            event_types::SEQUENCE_START => colors::CYAN,
+            event_types::SEQUENCE_STOP => colors::ORANGE,
+            event_types::SEQUENCE_PAUSE => colors::YELLOW,
+            event_types::SEQUENCE_RESUME => colors::CYAN,
+            event_types::SEQUENCE_FINISHED => colors::GREEN,
+            event_types::ADV_SEQ_STOP => colors::ORANGE,
+
+            // Exposure events - Star-like colors
+            event_types::EXPOSURE_START => colors::YELLOW,
+            event_types::EXPOSURE_END => colors::GREEN,
+
+            // System/Safety events - Red for disconnections
+            event_types::FLAT_DISCONNECTED => colors::RED,
+            event_types::WEATHER_DISCONNECTED => colors::RED,
+            event_types::SWITCH_DISCONNECTED => colors::RED,
+            event_types::DOME_DISCONNECTED => colors::RED,
+            event_types::SAFETY_DISCONNECTED => colors::RED,
+
+            // Fallback patterns
             _ if event.event.contains("ERROR") => colors::RED,
             _ if event.event.contains("WARNING") => colors::ORANGE,
             _ => colors::GRAY,

@@ -440,7 +440,8 @@ async fn cmd_poll(interval: u64, count: u32) -> Result<(), Box<dyn std::error::E
                         println!("    → {} image saves in this batch", image_saves.len());
                     }
 
-                    let filter_changes = result.get_events_by_type(event_types::FILTERWHEEL_CHANGED);
+                    let filter_changes =
+                        result.get_events_by_type(event_types::FILTERWHEEL_CHANGED);
                     if !filter_changes.is_empty() {
                         println!(
                             "    → {} filter changes in this batch",

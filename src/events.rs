@@ -58,6 +58,10 @@ pub mod event_types {
     pub const ROTATOR_CONNECTED: &str = "ROTATOR-CONNECTED";
     pub const GUIDER_CONNECTED: &str = "GUIDER-CONNECTED";
     pub const GUIDER_DISCONNECTED: &str = "GUIDER-DISCONNECTED";
+    pub const GUIDER_START: &str = "GUIDER-START";
+    pub const GUIDER_DITHER: &str = "GUIDER-DITHER";
+    pub const ROTATOR_MOVED: &str = "ROTATOR-MOVED";
+    pub const ROTATOR_SYNCED: &str = "ROTATOR-SYNCED";
     pub const FLAT_DISCONNECTED: &str = "FLAT-DISCONNECTED";
     pub const WEATHER_DISCONNECTED: &str = "WEATHER-DISCONNECTED";
     pub const SWITCH_DISCONNECTED: &str = "SWITCH-DISCONNECTED";
@@ -69,12 +73,13 @@ pub mod event_types {
     pub const SEQUENCE_STOP: &str = "SEQUENCE-STOP";
     pub const SEQUENCE_PAUSE: &str = "SEQUENCE-PAUSE";
     pub const SEQUENCE_RESUME: &str = "SEQUENCE-RESUME";
-    pub const GUIDER_DITHER: &str = "GUIDER-DITHER";
+    pub const SEQUENCE_FINISHED: &str = "SEQUENCE-FINISHED";
     pub const EXPOSURE_START: &str = "EXPOSURE-START";
     pub const EXPOSURE_END: &str = "EXPOSURE-END";
     pub const MOUNT_SLEW: &str = "MOUNT-SLEW";
     pub const FOCUS_START: &str = "FOCUS-START";
     pub const FOCUS_END: &str = "FOCUS-END";
+    pub const ADV_SEQ_STOP: &str = "ADV-SEQ-STOP";
 }
 
 impl EventHistoryResponse {

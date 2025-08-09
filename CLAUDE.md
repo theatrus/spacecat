@@ -68,9 +68,10 @@ Uses `config.json` for API and Discord settings:
 - **Equipment Events**: Real-time monitoring of astronomical equipment:
   - Camera operations (connect/disconnect, image capture)
   - Filterwheel management (filter changes between HA, OIII, SII, R, G, B, L)
-  - Mount control (parking/unparking, positioning, slewing)
-  - Focuser, rotator, and guider operations
+  - Mount control (parking/unparking, positioning, slewing, meridian flips)
+  - Focuser, rotator, and guider operations (start, sync, move, dither)
   - Autofocus completion with detailed results
+  - Sequence management (start/stop/pause/resume/finished, advanced sequence stop)
   - Weather monitoring and safety systems
 
 - **Image History**: Comprehensive image metadata tracking:
@@ -110,7 +111,7 @@ Uses `config.json` for API and Discord settings:
   - Configurable timeout and retry attempts
 
 - **Discord Integration**: Real-time notifications via Discord webhooks:
-  - Event notifications with color-coded embeds
+  - Event notifications with comprehensive color-coded embeds organized by equipment type
   - Image capture alerts with detailed metadata and thumbnails
   - Configurable image cooldown to prevent Discord spam (default 60 seconds)
   - Skipped image counting with summary in next notification
