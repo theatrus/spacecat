@@ -143,5 +143,6 @@ The system provides comprehensive CLI commands for all functionality. All comman
 - `cargo run -- poll` - Real-time event polling with configurable intervals
 - `cargo run -- dual-poll` - Combined event/image monitoring with Discord integration
 - `cargo run -- last-autofocus` - Display detailed autofocus analysis and quality metrics
+- `cargo run -- mount-info` - Display comprehensive mount status, position, and capabilities
 
 The system successfully demonstrates live telescope operation monitoring with 90 calibration images across 7 filters and real-time event tracking.
