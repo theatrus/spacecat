@@ -155,3 +155,28 @@ The system provides comprehensive CLI commands for all functionality. All comman
 - `cargo run -- mount-info` - Display comprehensive mount status, position, and capabilities
 
 The system successfully demonstrates live telescope operation monitoring with 90 calibration images across 7 filters and real-time event tracking.
+
+## GitHub Automation
+
+### Continuous Integration
+- **CI Pipeline**: Automated testing on Linux, Windows, and macOS with stable and beta Rust
+- **Code Quality**: Formatting checks with `rustfmt`, linting with `clippy`
+- **Security**: Dependency vulnerability scanning with `cargo audit`
+- **Coverage**: Code coverage reporting with `tarpaulin` (main branch only)
+
+### Release Automation
+Automated binary building on GitHub tag creation (`v*.*.*`):
+
+- **Linux x86_64**: `spacecat-linux-x86_64` - Standard Linux systems
+- **Linux aarch64**: `spacecat-linux-aarch64` - ARM64 systems (Raspberry Pi 4, etc.)
+- **Windows x64**: `spacecat-windows-x64.exe` - 64-bit Windows systems
+
+Release process:
+1. Update version in `Cargo.toml`
+2. Create git tag: `git tag v1.0.0 && git push origin v1.0.0`
+3. GitHub Actions automatically builds cross-platform binaries
+4. Creates GitHub release with all artifacts
+
+### Dependency Management
+- **Dependabot**: Weekly dependency updates for Cargo and GitHub Actions
+- **Security**: Automated vulnerability scanning and alerts
