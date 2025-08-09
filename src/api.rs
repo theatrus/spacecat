@@ -349,7 +349,7 @@ impl SpaceCatApiClient {
         &self,
         params: &[(&str, &str)],
     ) -> Result<MountInfoResponse, ApiError> {
-        self.generic_request_with_retry("/equipment/mount", params)
+        self.generic_request_with_retry("/equipment/mount/info", params)
             .await
     }
 }

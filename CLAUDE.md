@@ -17,11 +17,12 @@ SpaceCat is a Rust-based astronomical observation system that interfaces with Sp
 
 ### Core Modules
 
-- **`src/main.rs`**: Main application with CLI commands for API-only operations: sequence parsing, event monitoring, image analysis, autofocus data, and real-time polling
+- **`src/main.rs`**: Main application with CLI commands for API-only operations: sequence parsing, event monitoring, image analysis, mount information, autofocus data, and real-time polling
 - **`src/config.rs`**: JSON-based configuration system with validation and error handling
 - **`src/api.rs`**: HTTP client with generic retry logic for SpaceCat API endpoints
 - **`src/events.rs`**: Event history structures and analysis methods
 - **`src/images.rs`**: Image metadata structures and session statistics
+- **`src/mount.rs`**: Mount information structures, status parsing, and position tracking
 - **`src/sequence.rs`**: Sequence management, container parsing, and target extraction utilities
 - **`src/autofocus.rs`**: Autofocus data structures, parsing, and analysis methods
 - **`src/poller.rs`**: Real-time event polling with deduplication
@@ -35,6 +36,7 @@ The system connects to SpaceCat API at `http://192.168.0.82:1888` with endpoints
 - `/v2/api/image-history?all=true` - Image metadata and session statistics
 - `/v2/api/sequence/json` - Current sequence status and target information
 - `/v2/api/equipment/focuser/last-af` - Last autofocus session data
+- `/v2/api/equipment/mount` - Mount status, position, and capabilities
 - `/v2/api/image/{index}` - Individual image data with base64 encoding
 - `/v2/api/image/thumbnail/{index}` - Thumbnail images for previews
 
@@ -65,7 +67,7 @@ Uses `config.json` for API and Discord settings:
 - **Equipment Events**: Real-time monitoring of astronomical equipment:
   - Camera operations (connect/disconnect, image capture)
   - Filterwheel management (filter changes between HA, OIII, SII, R, G, B, L)
-  - Mount control (parking/unparking, positioning)
+  - Mount control (parking/unparking, positioning, slewing)
   - Focuser, rotator, and guider operations
   - Autofocus completion with detailed results
   - Weather monitoring and safety systems
@@ -76,6 +78,15 @@ Uses `config.json` for API and Discord settings:
   - Filter analysis (broadband vs narrowband)
   - Calibration frame management
   - Target tracking and identification
+
+- **Mount Information**: Comprehensive mount status and control monitoring:
+  - Real-time position tracking (RA/Dec, Alt/Az coordinates)
+  - Connection and operational status (connected, tracking, parked, slewing)
+  - Meridian flip timing and pier side information
+  - Site location data (latitude, longitude, elevation)
+  - Mount capabilities and supported operations
+  - Tracking modes and guide rates
+  - Integration with sequence monitoring for target coordination
 
 - **Autofocus System**: Advanced autofocus analysis and monitoring:
   - Real-time autofocus completion detection via AUTOFOCUS-FINISHED events
