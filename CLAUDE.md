@@ -57,7 +57,8 @@ Uses `config.json` for API and Discord settings:
   },
   "discord": {
     "webhook_url": "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN",
-    "enabled": true
+    "enabled": true,
+    "image_cooldown_seconds": 60
   }
 }
 ```
@@ -111,6 +112,8 @@ Uses `config.json` for API and Discord settings:
 - **Discord Integration**: Real-time notifications via Discord webhooks:
   - Event notifications with color-coded embeds
   - Image capture alerts with detailed metadata and thumbnails
+  - Configurable image cooldown to prevent Discord spam (default 60 seconds)
+  - Skipped image counting with summary in next notification
   - Autofocus completion notifications with quality metrics
   - Target change notifications for sequence monitoring
   - Configurable via config.json

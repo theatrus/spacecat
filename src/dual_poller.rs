@@ -8,7 +8,7 @@ use crate::sequence::{
     meridian_flip_time_formatted_with_clock,
 };
 use std::collections::HashSet;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::time::sleep;
 
 pub struct DualPoller {
@@ -19,6 +19,9 @@ pub struct DualPoller {
     current_target: Option<String>,
     current_meridian_flip_time: Option<f64>,
     current_sequence: Option<SequenceResponse>,
+    last_discord_image_time: Option<Instant>,
+    discord_image_cooldown: Duration,
+    skipped_images_count: u32,
 }
 
 impl DualPoller {
@@ -31,6 +34,9 @@ impl DualPoller {
             current_target: None,
             current_meridian_flip_time: None,
             current_sequence: None,
+            last_discord_image_time: None,
+            discord_image_cooldown: Duration::from_secs(60), // Default 60 seconds
+            skipped_images_count: 0,
         }
     }
 
@@ -40,6 +46,11 @@ impl DualPoller {
     ) -> Result<Self, Box<dyn std::error::Error>> {
         self.discord_webhook = Some(DiscordWebhook::new(webhook_url.to_string())?);
         Ok(self)
+    }
+
+    pub fn with_discord_image_cooldown(mut self, cooldown_seconds: u64) -> Self {
+        self.discord_image_cooldown = Duration::from_secs(cooldown_seconds);
+        self
     }
 
     pub async fn start_polling(&mut self, poll_interval: Duration) {
@@ -101,7 +112,25 @@ impl DualPoller {
                         if self.image_seen.insert(key) {
                             self.print_new_image(&image);
                             if let Some(webhook) = &self.discord_webhook {
-                                self.send_image_to_discord(webhook, &image, index).await;
+                                // Check if we should send this image to Discord based on cooldown
+                                let should_send = match self.last_discord_image_time {
+                                    None => true, // First image, always send
+                                    Some(last_time) => last_time.elapsed() >= self.discord_image_cooldown,
+                                };
+
+                                if should_send {
+                                    self.send_image_to_discord(webhook, &image, index, self.skipped_images_count).await;
+                                    self.last_discord_image_time = Some(Instant::now());
+                                    // Reset skipped count after sending
+                                    if self.skipped_images_count > 0 {
+                                        println!("  Sent image to Discord (including {} skipped images)", self.skipped_images_count);
+                                    }
+                                    self.skipped_images_count = 0;
+                                } else {
+                                    self.skipped_images_count += 1;
+                                    let remaining = self.discord_image_cooldown - self.last_discord_image_time.unwrap().elapsed();
+                                    println!("  Skipping Discord notification (cooldown: {:.0}s remaining)", remaining.as_secs_f32());
+                                }
                             }
                         }
                     }
@@ -246,6 +275,7 @@ impl DualPoller {
         webhook: &DiscordWebhook,
         image: &ImageMetadata,
         index: usize,
+        skipped_count: u32,
     ) {
         let color = match image.image_type.as_str() {
             "LIGHT" => colors::GREEN,
@@ -255,13 +285,24 @@ impl DualPoller {
             _ => colors::CYAN,
         };
 
+        let title = if skipped_count > 0 {
+            format!("📸 New {} Frame Captured (+{} skipped)", image.image_type, skipped_count)
+        } else {
+            format!("📸 New {} Frame Captured", image.image_type)
+        };
+
         let mut embed = Embed::new()
-            .title(&format!("📸 New {} Frame Captured", image.image_type))
+            .title(&title)
             .color(color);
 
         // Add target information if available
         if let Some(target) = &self.current_target {
             embed = embed.field("Target", target, true);
+        }
+
+        // Add skipped images summary if any
+        if skipped_count > 0 {
+            embed = embed.field("Images Since Last Post", &format!("{} images", skipped_count + 1), true);
         }
 
         // Add meridian flip time if available and within the next hour

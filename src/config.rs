@@ -29,10 +29,16 @@ pub struct DiscordConfig {
     pub webhook_url: String,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+    #[serde(default = "default_image_cooldown_seconds")]
+    pub image_cooldown_seconds: u64,
 }
 
 fn default_enabled() -> bool {
     true
+}
+
+fn default_image_cooldown_seconds() -> u64 {
+    60 // Default to 60 seconds between Discord image posts
 }
 
 #[derive(Debug)]
