@@ -238,7 +238,6 @@ impl ImageMetadata {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json;
 
     #[test]
     fn test_image_metadata_parsing() {
@@ -428,13 +427,13 @@ mod tests {
 
             // Test image analysis
             let stats = images.get_session_stats();
-            println!("Session stats:\n{}", stats);
+            println!("Session stats:\n{stats}");
 
             let type_counts = images.count_images_by_type();
-            println!("Image type counts: {:?}", type_counts);
+            println!("Image type counts: {type_counts:?}");
 
             let filter_counts = images.count_images_by_filter();
-            println!("Filter counts: {:?}", filter_counts);
+            println!("Filter counts: {filter_counts:?}");
 
             let light_frames = images.get_light_frames();
             println!("Found {} light frames", light_frames.len());
@@ -450,7 +449,7 @@ mod tests {
                 let max_temp = temperatures
                     .iter()
                     .fold(f64::NEG_INFINITY, |a, &b| a.max(b));
-                println!("Temperature range: {:.1}°C to {:.1}°C", min_temp, max_temp);
+                println!("Temperature range: {min_temp:.1}°C to {max_temp:.1}°C");
             }
         } else {
             println!("example_image-history.json not found, skipping file test");
@@ -478,7 +477,7 @@ mod tests {
                 }
             }
             Err(e) => {
-                panic!("Failed to decode test base64: {}", e);
+                panic!("Failed to decode test base64: {e}");
             }
         }
     }

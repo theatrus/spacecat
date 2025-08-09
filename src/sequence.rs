@@ -1,4 +1,3 @@
-use chrono;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -173,7 +172,7 @@ impl SequenceResponse {
     /// Get global triggers from the first item if it exists
     pub fn get_global_triggers(&self) -> Option<GlobalTriggers> {
         self.response
-            .get(0)?
+            .first()?
             .as_object()?
             .get("GlobalTriggers")
             .and_then(|v| serde_json::from_value(v.clone()).ok())
@@ -254,10 +253,10 @@ pub fn extract_current_target(sequence: &SequenceResponse) -> Option<String> {
                     }
 
                     // Also search nested items
-                    if let Some(items) = obj.get("Items").and_then(|v| v.as_array()) {
-                        if let Some(nested_target) = search_containers(items) {
-                            return Some(nested_target);
-                        }
+                    if let Some(items) = obj.get("Items").and_then(|v| v.as_array())
+                        && let Some(nested_target) = search_containers(items)
+                    {
+                        return Some(nested_target);
                     }
                 }
             }
@@ -281,7 +280,7 @@ pub fn extract_current_target(sequence: &SequenceResponse) -> Option<String> {
 /// * `None` - If no meridian flip trigger is found or TimeToFlip is not available
 pub fn extract_meridian_flip_time(sequence: &SequenceResponse) -> Option<f64> {
     // Get global triggers from the first item
-    let global_triggers_item = sequence.response.get(0)?;
+    let global_triggers_item = sequence.response.first()?;
     let global_triggers_array = global_triggers_item
         .as_object()?
         .get("GlobalTriggers")?
@@ -289,16 +288,13 @@ pub fn extract_meridian_flip_time(sequence: &SequenceResponse) -> Option<f64> {
 
     // Search for the Meridian Flip trigger
     for trigger in global_triggers_array {
-        if let Some(trigger_obj) = trigger.as_object() {
-            if let Some(name) = trigger_obj.get("Name").and_then(|v| v.as_str()) {
-                if name == "Meridian Flip_Trigger" {
-                    // Extract TimeToFlip value
-                    if let Some(time_to_flip) =
-                        trigger_obj.get("TimeToFlip").and_then(|v| v.as_f64())
-                    {
-                        return Some(time_to_flip);
-                    }
-                }
+        if let Some(trigger_obj) = trigger.as_object()
+            && let Some(name) = trigger_obj.get("Name").and_then(|v| v.as_str())
+            && name == "Meridian Flip_Trigger"
+        {
+            // Extract TimeToFlip value
+            if let Some(time_to_flip) = trigger_obj.get("TimeToFlip").and_then(|v| v.as_f64()) {
+                return Some(time_to_flip);
             }
         }
     }
@@ -316,7 +312,7 @@ pub fn meridian_flip_time_formatted(hours: f64) -> String {
     let total_minutes = (hours * 60.0) as i32;
     let hrs = total_minutes / 60;
     let mins = total_minutes % 60;
-    format!("{:02}:{:02}", hrs, mins)
+    format!("{hrs:02}:{mins:02}")
 }
 
 /// Convert meridian flip time from hours to a detailed format string with wall-clock time
@@ -324,7 +320,7 @@ pub fn meridian_flip_time_formatted_with_clock(hours: f64) -> String {
     let total_minutes = (hours * 60.0) as i32;
     let hrs = total_minutes / 60;
     let mins = total_minutes % 60;
-    let duration_str = format!("{:02}:{:02}", hrs, mins);
+    let duration_str = format!("{hrs:02}:{mins:02}");
 
     // Calculate wall-clock time when meridian flip will occur
     let now = chrono::Utc::now();
@@ -334,7 +330,7 @@ pub fn meridian_flip_time_formatted_with_clock(hours: f64) -> String {
     let local_flip_time = meridian_flip_time.with_timezone(&chrono::Local);
     let clock_time = local_flip_time.format("%H:%M:%S").to_string();
 
-    format!("{} (at {})", duration_str, clock_time)
+    format!("{duration_str} (at {clock_time})")
 }
 
 /// Check if a container name represents a system container rather than a target
@@ -357,7 +353,6 @@ fn is_system_container(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json;
 
     #[test]
     fn test_extract_current_target() {
@@ -521,7 +516,7 @@ mod tests {
 
             // Test target extraction from real file
             let target = extract_current_target(&sequence);
-            println!("Found target in example file: {:?}", target);
+            println!("Found target in example file: {target:?}");
 
             // Test container extraction
             let containers = sequence.get_containers();
@@ -534,17 +529,13 @@ mod tests {
 
             // Test meridian flip time extraction from real file
             let meridian_flip_time = extract_meridian_flip_time(&sequence);
-            println!(
-                "Found meridian flip time in example file: {:?}",
-                meridian_flip_time
-            );
+            println!("Found meridian flip time in example file: {meridian_flip_time:?}");
 
             if let Some(time_hours) = meridian_flip_time {
                 let time_minutes = meridian_flip_time_minutes(time_hours);
                 let time_formatted = meridian_flip_time_formatted(time_hours);
                 println!(
-                    "Meridian flip in {:.3} hours ({:.1} minutes, {})",
-                    time_hours, time_minutes, time_formatted
+                    "Meridian flip in {time_hours:.3} hours ({time_minutes:.1} minutes, {time_formatted})"
                 );
             }
         } else {

@@ -147,10 +147,10 @@ impl Event {
 
     /// Get the equipment name from the event (e.g., "CAMERA" from "CAMERA-CONNECTED")
     pub fn get_equipment_name(&self) -> Option<&str> {
-        if self.is_connection_event() {
-            if let Some(pos) = self.event.rfind('-') {
-                return Some(&self.event[..pos]);
-            }
+        if self.is_connection_event()
+            && let Some(pos) = self.event.rfind('-')
+        {
+            return Some(&self.event[..pos]);
         }
         None
     }
@@ -165,7 +165,6 @@ impl Event {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json;
 
     #[test]
     fn test_event_parsing() {
@@ -303,7 +302,7 @@ mod tests {
 
             // Test event analysis
             let counts = events.count_events_by_type();
-            println!("Event type counts: {:?}", counts);
+            println!("Event type counts: {counts:?}");
 
             let filter_changes = events.get_filterwheel_changes();
             println!("Found {} filter wheel changes", filter_changes.len());

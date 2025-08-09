@@ -203,8 +203,8 @@ mod tests {
             println!("Mount info parsed successfully:");
             println!("  Connected: {}", mount_info.is_connected());
             println!("  Tracking: {}", mount_info.is_tracking());
-            println!("  Coordinates: {} {}", ra, dec);
-            println!("  Time to flip: {:.3}h", flip_time);
+            println!("  Coordinates: {ra} {dec}");
+            println!("  Time to flip: {flip_time:.3}h");
             println!("  Side of pier: {}", mount_info.get_side_of_pier());
         } else {
             println!("example_equipment_mount_info.json not found, skipping file test");
