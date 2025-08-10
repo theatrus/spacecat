@@ -364,15 +364,23 @@ jobs:
           asset_name: ${{ steps.rpm_info.outputs.RPM_NAME }}
           asset_content_type: application/x-rpm
 
-      - name: Upload SRPM to release
+      - name: Get SRPM file info
+        id: srpm_info
         run: |
           SRPM_FILE=$(find ~/rpmbuild/SRPMS -name "spacecat-*.src.rpm" -type f | head -n1)
           if [ -n "$SRPM_FILE" ]; then
-            SRPM_NAME=$(basename "$SRPM_FILE")
+            echo "SRPM_FILE=$SRPM_FILE" >> $GITHUB_OUTPUT
+            echo "SRPM_NAME=$(basename $SRPM_FILE)" >> $GITHUB_OUTPUT
             cp "$SRPM_FILE" ./
-            curl -X POST \
-              -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-              -H "Content-Type: application/x-rpm" \
-              --data-binary "@./$SRPM_NAME" \
-              "${{ needs.create-release.outputs.upload_url }}?name=$SRPM_NAME"
           fi
+
+      - name: Upload SRPM to release
+        if: steps.srpm_info.outputs.SRPM_FILE != ''
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./${{ steps.srpm_info.outputs.SRPM_NAME }}
+          asset_name: ${{ steps.srpm_info.outputs.SRPM_NAME }}
+          asset_content_type: application/x-rpm
