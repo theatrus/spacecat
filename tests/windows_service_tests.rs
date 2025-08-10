@@ -13,9 +13,11 @@ mod tests {
         // on non-Windows platforms
 
         let result = install_service();
+        eprintln!("Result {:?}", result);
         assert!(result.is_err());
 
         let result = uninstall_service();
+        eprintln!("Result {:?}", result);
         assert!(result.is_err());
 
         let result = start_service();
