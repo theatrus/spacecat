@@ -36,7 +36,7 @@ mod tests {
     fn test_windows_service_unavailable() {
         // On non-Windows platforms, we can't test the actual functions
         // but we can at least ensure this test compiles and runs
-        assert!(true);
+        // No assertions needed - successful compilation is the test
     }
 
     #[cfg(windows)]
