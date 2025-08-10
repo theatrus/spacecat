@@ -1,0 +1,191 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*" 
+           Name="SpaceCat" 
+           Language="1033" 
+           Version="0.1.0.0" 
+           Manufacturer="SpaceCat Team" 
+           UpgradeCode="7E8F5D42-3A1B-4C8E-B9F2-1A2B3C4D5E6F">
+    
+    <Package InstallerVersion="200" 
+             Compressed="yes" 
+             InstallScope="perMachine" 
+             Platform="x64"
+             Description="SpaceCat Astronomical Observation System"
+             Comments="Monitor and control astronomical equipment with Discord integration" />
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- Define installation directory -->
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLFOLDER" Name="SpaceCat">
+          <!-- Main application files -->
+          <Component Id="MainExecutable" Guid="A1B2C3D4-5E6F-7A8B-9C0D-E1F2A3B4C5D6" Win64="yes">
+            <File Id="SpaceCatExe" 
+                  Source="$(var.SourceDir)\spacecat.exe" 
+                  KeyPath="yes">
+              <Shortcut Id="StartMenuShortcut" 
+                        Directory="ProgramMenuFolder" 
+                        Name="SpaceCat" 
+                        Description="SpaceCat Astronomical Observation System"
+                        WorkingDirectory="INSTALLFOLDER"
+                        Icon="SpaceCatIcon.exe"
+                        Advertise="yes" />
+            </File>
+            
+            <!-- Add PATH environment variable -->
+            <Environment Id="PATH" 
+                         Name="PATH" 
+                         Value="[INSTALLFOLDER]" 
+                         Permanent="no" 
+                         Part="last" 
+                         Action="set" 
+                         System="yes" />
+          </Component>
+
+          <!-- Configuration file template -->
+          <Component Id="ConfigTemplate" Guid="B2C3D4E5-6F7A-8B9C-0D1E-F2A3B4C5D6E7" Win64="yes">
+            <File Id="ConfigTemplateFile" 
+                  Source="$(var.SourceDir)\config.example.json" 
+                  Name="config.example.json" 
+                  KeyPath="yes" />
+          </Component>
+
+          <!-- README and documentation -->
+          <Component Id="Documentation" Guid="C3D4E5F6-7A8B-9C0D-1E2F-A3B4C5D6E7F8" Win64="yes">
+            <File Id="ReadmeFile" 
+                  Source="$(var.SourceDir)\README.md" 
+                  Name="README.md" 
+                  KeyPath="yes" />
+          </Component>
+        </Directory>
+      </Directory>
+
+      <!-- Program menu shortcuts -->
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="ApplicationProgramsFolder" Name="SpaceCat">
+          <Component Id="ApplicationShortcuts" Guid="D4E5F6A7-8B9C-0D1E-2F3A-B4C5D6E7F8A9">
+            <Shortcut Id="UninstallProduct" 
+                      Name="Uninstall SpaceCat" 
+                      Description="Uninstalls SpaceCat"
+                      Target="[System64Folder]msiexec.exe" 
+                      Arguments="/x [ProductCode]" />
+            
+            <Shortcut Id="ConfigureService" 
+                      Name="Configure SpaceCat Service" 
+                      Description="Install or configure the SpaceCat Windows Service"
+                      Target="[INSTALLFOLDER]spacecat.exe" 
+                      Arguments="windows-service --help"
+                      WorkingDirectory="INSTALLFOLDER" />
+            
+            <RemoveFolder Id="ApplicationProgramsFolder" On="uninstall" />
+            <RegistryValue Root="HKCU" 
+                           Key="Software\SpaceCat" 
+                           Name="installed" 
+                           Type="integer" 
+                           Value="1" 
+                           KeyPath="yes" />
+          </Component>
+        </Directory>
+      </Directory>
+
+      <!-- ProgramData folder for service configuration -->
+      <Directory Id="CommonAppDataFolder">
+        <Directory Id="SpaceCatDataFolder" Name="SpaceCat">
+          <Component Id="ServiceConfigFolder" Guid="E5F6A7B8-9C0D-1E2F-3A4B-C5D6E7F8A9B0">
+            <CreateFolder>
+              <Permission User="Everyone" GenericAll="yes" />
+            </CreateFolder>
+            <RemoveFolder Id="RemoveSpaceCatDataFolder" On="uninstall" />
+            <RegistryValue Root="HKLM" 
+                           Key="Software\SpaceCat" 
+                           Name="DataPath" 
+                           Type="string" 
+                           Value="[SpaceCatDataFolder]" 
+                           KeyPath="yes" />
+          </Component>
+        </Directory>
+      </Directory>
+    </Directory>
+
+    <!-- Features to install -->
+    <Feature Id="ProductFeature" 
+             Title="SpaceCat" 
+             Level="1"
+             Description="The complete SpaceCat installation"
+             Display="expand"
+             ConfigurableDirectory="INSTALLFOLDER">
+      <ComponentRef Id="MainExecutable" />
+      <ComponentRef Id="ConfigTemplate" />
+      <ComponentRef Id="Documentation" />
+      <ComponentRef Id="ApplicationShortcuts" />
+      <ComponentRef Id="ServiceConfigFolder" />
+      
+      <Feature Id="WindowsServiceFeature" 
+               Title="Windows Service" 
+               Level="1"
+               Description="Install SpaceCat as a Windows Service for automatic monitoring">
+        <!-- Service installation will be done via custom action -->
+      </Feature>
+    </Feature>
+
+    <!-- Custom actions for service management -->
+    <CustomAction Id="InstallService" 
+                  Directory="INSTALLFOLDER" 
+                  ExeCommand='"[INSTALLFOLDER]spacecat.exe" windows-service install' 
+                  Execute="deferred" 
+                  Return="ignore" 
+                  Impersonate="no" />
+    
+    <CustomAction Id="UninstallService" 
+                  Directory="INSTALLFOLDER" 
+                  ExeCommand='"[INSTALLFOLDER]spacecat.exe" windows-service uninstall' 
+                  Execute="deferred" 
+                  Return="ignore" 
+                  Impersonate="no" />
+    
+    <CustomAction Id="StopService" 
+                  Directory="INSTALLFOLDER" 
+                  ExeCommand='"[INSTALLFOLDER]spacecat.exe" windows-service stop' 
+                  Execute="deferred" 
+                  Return="ignore" 
+                  Impersonate="no" />
+
+    <!-- Installation sequence -->
+    <InstallExecuteSequence>
+      <!-- Stop service before uninstall/upgrade -->
+      <Custom Action="StopService" Before="UninstallService">
+        REMOVE~="ALL" OR UPGRADINGPRODUCTCODE
+      </Custom>
+      
+      <!-- Uninstall service before removing files -->
+      <Custom Action="UninstallService" Before="RemoveFiles">
+        REMOVE~="ALL" AND NOT UPGRADINGPRODUCTCODE
+      </Custom>
+      
+      <!-- Install service after files are installed -->
+      <Custom Action="InstallService" After="InstallFiles">
+        NOT REMOVE AND &amp;WindowsServiceFeature=3
+      </Custom>
+    </InstallExecuteSequence>
+
+    <!-- UI Configuration -->
+    <UIRef Id="WixUI_FeatureTree" />
+    <UIRef Id="WixUI_ErrorProgressText" />
+    
+    <!-- License agreement -->
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.SourceDir)\LICENSE.rtf" />
+    
+    <!-- Icon for Add/Remove Programs -->
+    <Icon Id="SpaceCatIcon.exe" SourceFile="$(var.SourceDir)\spacecat.exe" />
+    <Property Id="ARPPRODUCTICON" Value="SpaceCatIcon.exe" />
+    
+    <!-- Properties for Add/Remove Programs -->
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/yourusername/spacecat" />
+    <Property Id="ARPURLUPDATEINFO" Value="https://github.com/yourusername/spacecat/releases" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/yourusername/spacecat/wiki" />
+    
+  </Product>
+</Wix>
