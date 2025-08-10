@@ -32,8 +32,8 @@ jobs:
             ### Downloads
             - **Linux x86_64**: spacecat-linux-x86_64
             - **Linux aarch64**: spacecat-linux-aarch64  
-            - **Windows x64**: spacecat-windows-x64.exe
-            - **Windows Installer**: SpaceCat-${{ github.ref_name }}-x64.msi
+            - **Windows x64**: spacecat-windows-x64.exe (native build)
+            - **Windows Installer**: SpaceCat-${{ github.ref_name }}-x64.msi (includes service support)
             
             ### Features
             - Astronomical observation system for SpaceCat API
@@ -66,12 +66,6 @@ jobs:
             os: ubuntu-latest
             binary_name: spacecat
             asset_name: spacecat-linux-aarch64
-            
-          # Windows x64
-          - target: x86_64-pc-windows-gnu
-            os: ubuntu-latest
-            binary_name: spacecat.exe
-            asset_name: spacecat-windows-x64.exe
 
     steps:
       - name: Checkout code
@@ -83,33 +77,17 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Install cross-compilation tools
-        if: matrix.target != 'x86_64-unknown-linux-gnu'
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
-          case "${{ matrix.target }}" in
-            aarch64-unknown-linux-gnu)
-              sudo apt-get update
-              sudo apt-get install -y gcc-aarch64-linux-gnu
-              ;;
-            x86_64-pc-windows-gnu)
-              sudo apt-get update
-              sudo apt-get install -y gcc-mingw-w64-x86-64
-              ;;
-          esac
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
 
       - name: Configure cross-compilation environment
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
-          case "${{ matrix.target }}" in
-            aarch64-unknown-linux-gnu)
-              echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
-              echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
-              echo "CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++" >> $GITHUB_ENV
-              ;;
-            x86_64-pc-windows-gnu)
-              echo "CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc" >> $GITHUB_ENV
-              echo "CC_x86_64_pc_windows_gnu=x86_64-w64-mingw32-gcc" >> $GITHUB_ENV
-              echo "CXX_x86_64_pc_windows_gnu=x86_64-w64-mingw32-g++" >> $GITHUB_ENV
-              ;;
-          esac
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+          echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+          echo "CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++" >> $GITHUB_ENV
 
       - name: Cache cargo dependencies
         uses: actions/cache@v4
@@ -130,7 +108,6 @@ jobs:
           cargo build --release --target ${{ matrix.target }} --verbose
 
       - name: Strip binary (Linux only)
-        if: matrix.target != 'x86_64-pc-windows-gnu'
         run: |
           case "${{ matrix.target }}" in
             x86_64-unknown-linux-gnu)
@@ -193,8 +170,8 @@ jobs:
       - name: Check formatting
         run: cargo fmt --check
 
-  build-msi:
-    name: Build Windows MSI Installer
+  build-windows:
+    name: Build Windows Binary and MSI Installer
     needs: create-release
     runs-on: windows-latest
     steps:
@@ -218,8 +195,20 @@ jobs:
             ${{ runner.os }}-cargo-msi-
             ${{ runner.os }}-cargo-
 
-      - name: Build release binary
+      - name: Build Windows binary
         run: cargo build --release --verbose
+        env:
+          RUST_BACKTRACE: 1
+
+      - name: Upload Windows binary to release
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./target/release/spacecat.exe
+          asset_name: spacecat-windows-x64.exe
+          asset_content_type: application/octet-stream
 
       - name: Install WiX Toolset
         run: |
