@@ -19,15 +19,19 @@ mod tests {
         assert!(result.is_err());
 
         let result = start_service();
+        eprintln!("Result {:?}", result);
         assert!(result.is_err());
 
         let result = stop_service();
+        eprintln!("Result {:?}", result);
         assert!(result.is_err());
 
         let result = service_status();
+        eprintln!("Result {:?}", result);
         assert!(result.is_err());
 
         let result = run_service();
+        eprintln!("Result {:?}", result);
         assert!(result.is_err());
     }
 
