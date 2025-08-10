@@ -191,6 +191,43 @@ jobs:
           echo "Testing Windows service command availability..."
           cargo run -- windows-service --help
 
+  test-arm64:
+    name: Test ARM64 Native Build
+    runs-on: ubuntu-24.04-arm64
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: arm64-native-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            arm64-native-cargo-
+
+      - name: Check compilation
+        run: cargo check --verbose
+
+      - name: Run tests
+        run: cargo test --verbose
+
+      - name: Build release
+        run: cargo build --release --verbose
+
+      - name: Verify binary architecture
+        run: |
+          file target/release/spacecat
+          ldd target/release/spacecat || true
+
   test-msi-build:
     name: Test MSI Build
     runs-on: windows-latest
