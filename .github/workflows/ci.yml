@@ -190,3 +190,74 @@ jobs:
           cargo run -- --help
           echo "Testing Windows service command availability..."
           cargo run -- windows-service --help
+
+  test-msi-build:
+    name: Test MSI Build
+    runs-on: windows-latest
+    # Run MSI build test on PRs or when commit message contains [msi]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-msi-test-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-msi-test-
+            ${{ runner.os }}-cargo-
+
+      - name: Build release binary
+        run: cargo build --release --verbose
+        env:
+          RUST_BACKTRACE: 1
+
+      - name: Install WiX Toolset
+        run: |
+          # Download and install WiX Toolset v3.14
+          $wixUrl = "https://github.com/wixtoolset/wix3/releases/download/wix314rtm/wix314.exe"
+          $wixInstaller = "$env:TEMP\wix314.exe"
+          Invoke-WebRequest -Uri $wixUrl -OutFile $wixInstaller
+          Start-Process -FilePath $wixInstaller -ArgumentList "/install", "/quiet", "/norestart" -Wait
+          # Add WiX to PATH
+          $env:PATH += ";${env:ProgramFiles(x86)}\WiX Toolset v3.14\bin"
+          echo "${env:ProgramFiles(x86)}\WiX Toolset v3.14\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Test MSI build
+        run: |
+          Set-Location installer
+          .\build-msi.ps1 -Version "0.0.0-ci" -SkipBuild
+        env:
+          RUST_BACKTRACE: 1
+
+      - name: Verify MSI was created
+        run: |
+          if (Test-Path "installer\output\SpaceCat-0.0.0-ci-x64.msi") {
+            $msiFile = Get-Item "installer\output\SpaceCat-0.0.0-ci-x64.msi"
+            $sizeMB = [math]::Round($msiFile.Length / 1MB, 2)
+            Write-Host "✅ MSI created successfully: $($msiFile.Name) ($sizeMB MB)" -ForegroundColor Green
+            Write-Host "🔍 MSI build test passed - installer can be built from current code" -ForegroundColor Cyan
+          } else {
+            Write-Host "❌ MSI file not found" -ForegroundColor Red
+            Get-ChildItem -Path "installer" -Recurse -Name
+            exit 1
+          }
+
+      - name: Upload MSI artifact (for debugging)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-msi-build-failure
+          path: |
+            installer/output/
+            installer/*.log
+          retention-days: 7
