@@ -118,31 +118,6 @@ jobs:
       - name: Run security audit
         run: cargo audit
 
-  coverage:
-    name: Code Coverage
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install cargo-tarpaulin
-        run: cargo install cargo-tarpaulin
-
-      - name: Generate code coverage
-        run: cargo tarpaulin --verbose --all-features --workspace --timeout 120 --out Xml
-
-      - name: Generate platform-specific coverage
-        run: cargo tarpaulin --verbose --workspace --timeout 120 --out Xml --output-dir coverage-platform
-
-      - name: Upload to codecov.io
-        uses: codecov/codecov-action@v5
-        with:
-          fail_ci_if_error: false
-
   windows-service:
     name: Windows Service Support
     runs-on: windows-latest
@@ -193,7 +168,7 @@ jobs:
 
   test-arm64:
     name: Test ARM64 Native Build
-    runs-on: ubuntu-24.04-arm64
+    runs-on: ubuntu-24.04-arm
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
