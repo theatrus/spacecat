@@ -8,3 +8,6 @@ pub mod images;
 pub mod mount;
 pub mod poller;
 pub mod sequence;
+pub mod service_wrapper;
+#[cfg(windows)]
+pub mod windows_service;

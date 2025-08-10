@@ -4,7 +4,6 @@ use spacecat::{
     api::SpaceCatApiClient,
     autofocus::AutofocusResponse,
     config::Config,
-    discord_updater::DiscordUpdater,
     events::{EventDetails, EventHistoryResponse, event_types},
     images::ImageHistoryResponse,
     mount::MountInfoResponse,
@@ -13,7 +12,12 @@ use spacecat::{
         SequenceResponse, extract_current_target, extract_meridian_flip_time,
         meridian_flip_time_formatted_with_clock,
     },
+    service_wrapper::ServiceWrapper,
 };
+
+#[cfg(windows)]
+use spacecat::windows_service;
+
 use std::time::Duration;
 
 #[derive(Parser)]
@@ -78,6 +82,29 @@ enum Commands {
     LastAutofocus,
     /// Get mount information from API
     MountInfo,
+    /// Windows service management commands
+    #[cfg(windows)]
+    WindowsService {
+        #[command(subcommand)]
+        action: WindowsServiceAction,
+    },
+}
+
+#[cfg(windows)]
+#[derive(Subcommand)]
+enum WindowsServiceAction {
+    /// Install the service
+    Install,
+    /// Uninstall the service
+    Uninstall,
+    /// Start the service
+    Start,
+    /// Stop the service
+    Stop,
+    /// Check service status
+    Status,
+    /// Run as service (internal command used by service manager)
+    Run,
 }
 
 #[tokio::main]
@@ -146,6 +173,13 @@ async fn main() {
         Commands::MountInfo => {
             if let Err(e) = cmd_mount_info().await {
                 eprintln!("MountInfo command failed: {e}");
+                std::process::exit(1);
+            }
+        }
+        #[cfg(windows)]
+        Commands::WindowsService { action } => {
+            if let Err(e) = cmd_windows_service(action).await {
+                eprintln!("WindowsService command failed: {e}");
                 std::process::exit(1);
             }
         }
@@ -454,33 +488,10 @@ async fn cmd_poll(interval: u64, count: u32) -> Result<(), Box<dyn std::error::E
 }
 
 async fn cmd_discord_updater(interval: u64) -> Result<(), Box<dyn std::error::Error>> {
-    println!("Starting Discord updater (events and images)...");
-    println!("Poll interval: {interval}s");
-    println!("Press Ctrl+C to stop\n");
-
     let config = Config::load_or_default();
-    let client = SpaceCatApiClient::new(config.api.clone())?;
-    let mut poller = DiscordUpdater::new(client);
+    let service_wrapper = ServiceWrapper::new(config)?;
 
-    // Check for Discord webhook configuration
-    if let Some(discord_config) = &config.discord {
-        if discord_config.enabled && !discord_config.webhook_url.is_empty() {
-            println!("Discord webhook configured, events will be sent to Discord");
-            let cooldown = discord_config.image_cooldown_seconds;
-            println!("Discord image cooldown: {cooldown}s");
-            poller = poller
-                .with_discord_webhook(&discord_config.webhook_url)?
-                .with_discord_image_cooldown(discord_config.image_cooldown_seconds);
-        } else if !discord_config.enabled {
-            println!("Discord webhook disabled in configuration");
-        }
-    } else {
-        println!("No Discord webhook configured (add 'discord' section to config.json to enable)");
-    }
-
-    poller.start_polling(Duration::from_secs(interval)).await;
-
-    Ok(())
+    service_wrapper.run_cli(interval).await
 }
 
 async fn cmd_last_autofocus() -> Result<(), Box<dyn std::error::Error>> {
@@ -1093,4 +1104,40 @@ fn get_connection_event_info(event_name: &str) -> (&'static str, &'static str) {
     } else {
         ("📋", "Connection event")
     }
+}
+
+#[cfg(windows)]
+async fn cmd_windows_service(
+    action: WindowsServiceAction,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match action {
+        WindowsServiceAction::Install => {
+            println!("Installing Windows service...");
+            windows_service::install_service()?;
+        }
+        WindowsServiceAction::Uninstall => {
+            println!("Uninstalling Windows service...");
+            windows_service::uninstall_service()?;
+        }
+        WindowsServiceAction::Start => {
+            println!("Starting Windows service...");
+            windows_service::start_service()?;
+        }
+        WindowsServiceAction::Stop => {
+            println!("Stopping Windows service...");
+            windows_service::stop_service()?;
+        }
+        WindowsServiceAction::Status => {
+            println!("Checking Windows service status...");
+            windows_service::service_status()?;
+        }
+        WindowsServiceAction::Run => {
+            // This is called by the Windows Service Manager
+            // It should not be called directly by users
+            return windows_service::run_service()
+                .map_err(|e| format!("Service runtime error: {}", e).into());
+        }
+    }
+
+    Ok(())
 }

@@ -38,6 +38,7 @@ jobs:
             - Discord webhook integration
             - Mount information and meridian flip tracking
             - Autofocus analysis and reporting
+            - **Windows service support** (automatically available on Windows)
             
             See [CLAUDE.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/CLAUDE.md) for detailed documentation.
           draft: false

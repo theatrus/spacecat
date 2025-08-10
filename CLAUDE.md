@@ -30,6 +30,8 @@ automation.
 - **`src/autofocus.rs`**: Autofocus data structures, parsing, and analysis methods
 - **`src/poller.rs`**: Real-time event polling with deduplication
 - **`src/discord_updater.rs`**: Combined event and image polling with Discord integration and autofocus detection
+- **`src/service_wrapper.rs`**: Service abstraction layer for running as CLI or background service
+- **`src/windows_service.rs`**: Windows service integration (Windows-only, conditionally compiled)
 
 ### API Integration
 
@@ -125,6 +127,16 @@ Uses `config.json` for API and Discord settings:
   - Mount information includes RA/Dec, Alt/Az, pier side, tracking status, and sidereal time
   - Configurable via config.json
   - Non-blocking operation that won't interrupt observations
+
+- **Windows Service Support**: Production-ready Windows service integration (optional):
+  - Full Windows service lifecycle management (install/uninstall/start/stop)
+  - Automatic startup with Windows boot
+  - Background execution without user login required
+  - Windows Event Log integration for centralized logging
+  - System-wide configuration storage (`C:\ProgramData\SpaceCat\config.json`)
+  - Graceful shutdown handling with proper service status reporting
+  - Platform-specific compilation (automatically available on Windows)
+  - Compatible with Windows 10/11 and Windows Server 2016+
 
 - **Testing**: Comprehensive unit test coverage with file-based testing:
   - All modules include unit tests for data parsing and analysis
