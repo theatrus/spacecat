@@ -35,15 +35,7 @@ jobs:
             - **Windows x64**: spacecat-windows-x64.exe (native build)
             - **Windows Installer**: SpaceCat-${{ github.ref_name }}-x64.msi (includes service support)
             - **RPM Package**: spacecat-*.rpm (Fedora/RHEL/CentOS with systemd service)
-            
-            ### Features
-            - Astronomical observation system for SpaceCat API
-            - Real-time event and image monitoring
-            - Discord webhook integration
-            - Mount information and meridian flip tracking
-            - Autofocus analysis and reporting
-            - **Windows service support** (automatically available on Windows)
-            
+
             ### RPM Installation (Fedora/RHEL/CentOS)
             
             ```bash
@@ -114,7 +106,7 @@ jobs:
   build-linux-arm64:
     name: Build Linux ARM64
     needs: create-release
-    runs-on: ubuntu-24.04-arm64
+    runs-on: ubuntu-24.04-arm
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
