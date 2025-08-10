@@ -34,6 +34,7 @@ jobs:
             - **Linux aarch64**: spacecat-linux-aarch64  
             - **Windows x64**: spacecat-windows-x64.exe (native build)
             - **Windows Installer**: SpaceCat-${{ github.ref_name }}-x64.msi (includes service support)
+            - **RPM Package**: spacecat-*.rpm (Fedora/RHEL/CentOS with systemd service)
             
             ### Features
             - Astronomical observation system for SpaceCat API
@@ -42,6 +43,20 @@ jobs:
             - Mount information and meridian flip tracking
             - Autofocus analysis and reporting
             - **Windows service support** (automatically available on Windows)
+            
+            ### RPM Installation (Fedora/RHEL/CentOS)
+            
+            ```bash
+            # Download and install the RPM
+            wget https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/spacecat-*.rpm
+            sudo dnf install ./spacecat-*.rpm
+            
+            # Configure the service
+            sudo vim /etc/spacecat/config.json
+            
+            # Enable and start the service
+            sudo systemctl enable --now spacecat.service
+            ```
             
             See [CLAUDE.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/CLAUDE.md) for detailed documentation.
           draft: false
@@ -255,3 +270,109 @@ jobs:
         with:
           name: windows-installer
           path: ./installer/output/*.msi
+
+  build-rpm:
+    name: Build RPM Package
+    needs: create-release
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:latest
+    
+    steps:
+      - name: Install build dependencies
+        run: |
+          dnf update -y
+          dnf install -y rpm-build rpm-devel rust cargo systemd-rpm-macros \
+                         openssl-devel git tar gzip make
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get version from tag
+        id: version
+        run: |
+          VERSION="${{ github.ref_name }}"
+          VERSION="${VERSION#v}"  # Remove 'v' prefix
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "Building RPM version: $VERSION"
+
+      - name: Create RPM build environment
+        run: |
+          mkdir -p ~/rpmbuild/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
+
+      - name: Build Rust binary
+        run: |
+          export RUST_BACKTRACE=1
+          cargo build --release --verbose
+
+      - name: Create source tarball
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          TEMP_DIR=$(mktemp -d)
+          SOURCE_DIR="$TEMP_DIR/spacecat-$VERSION"
+          
+          mkdir -p "$SOURCE_DIR"
+          cp -r . "$SOURCE_DIR/"
+          
+          # Remove build artifacts and development files
+          rm -rf "$SOURCE_DIR/target"
+          rm -rf "$SOURCE_DIR/.git"
+          rm -f "$SOURCE_DIR/.gitignore"
+          rm -f "$SOURCE_DIR"/*.jpg "$SOURCE_DIR"/*.png
+          
+          cd "$TEMP_DIR"
+          tar -czf ~/rpmbuild/SOURCES/spacecat-$VERSION.tar.gz spacecat-$VERSION
+          
+          # Clean up
+          rm -rf "$TEMP_DIR"
+
+      - name: Copy spec file
+        run: |
+          cp packaging/rpm/spacecat.spec ~/rpmbuild/SPECS/
+
+      - name: Build RPM
+        run: |
+          cd ~/rpmbuild
+          rpmbuild -ba SPECS/spacecat.spec
+
+      - name: List built packages
+        run: |
+          echo "Built packages:"
+          find ~/rpmbuild/RPMS -name "*.rpm" -type f
+          find ~/rpmbuild/SRPMS -name "*.rpm" -type f
+
+      - name: Get RPM file info
+        id: rpm_info
+        run: |
+          RPM_FILE=$(find ~/rpmbuild/RPMS -name "spacecat-*.rpm" -type f | head -n1)
+          if [ -n "$RPM_FILE" ]; then
+            echo "RPM_FILE=$RPM_FILE" >> $GITHUB_OUTPUT
+            echo "RPM_NAME=$(basename $RPM_FILE)" >> $GITHUB_OUTPUT
+            rpm -qip "$RPM_FILE"
+            cp "$RPM_FILE" ./
+          fi
+
+      - name: Upload RPM to release
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./${{ steps.rpm_info.outputs.RPM_NAME }}
+          asset_name: ${{ steps.rpm_info.outputs.RPM_NAME }}
+          asset_content_type: application/x-rpm
+
+      - name: Upload SRPM to release
+        run: |
+          SRPM_FILE=$(find ~/rpmbuild/SRPMS -name "spacecat-*.src.rpm" -type f | head -n1)
+          if [ -n "$SRPM_FILE" ]; then
+            SRPM_NAME=$(basename "$SRPM_FILE")
+            cp "$SRPM_FILE" ./
+            curl -X POST \
+              -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Content-Type: application/x-rpm" \
+              --data-binary "@./$SRPM_NAME" \
+              "${{ needs.create-release.outputs.upload_url }}?name=$SRPM_NAME"
+          fi
