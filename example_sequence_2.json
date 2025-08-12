@@ -1,0 +1,460 @@
+{
+  "Response": [
+    {
+      "GlobalTriggers": [
+        {
+          "Status": "CREATED",
+          "TimeToFlip": 1.1690078382777778,
+          "Name": "Meridian Flip_Trigger"
+        },
+        {
+          "DeltaHFR": 5,
+          "SampleSize": 10,
+          "HFRTrendPercentage": 6.39,
+          "Name": "AF After HFR Increase_Trigger",
+          "OriginalHFR": 2.987599488681206,
+          "Status": "FINISHED"
+        },
+        {
+          "Name": "AF After Filter Change_Trigger",
+          "Status": "FINISHED"
+        },
+        {
+          "Status": "CREATED",
+          "DeltaTemperature": 0,
+          "Name": "AF After Temperature Change_Trigger",
+          "TargetTemperature": 5
+        }
+      ]
+    },
+    {
+      "Status": "FINISHED",
+      "Conditions": [],
+      "Items": [
+        {
+          "Status": "FINISHED",
+          "Conditions": [],
+          "Items": [
+            {
+              "Status": "FINISHED",
+              "MinCoolingTime": 0,
+              "Temperature": -10,
+              "Name": "Cool Camera"
+            },
+            {
+              "Name": "Unpark Scope",
+              "Status": "FINISHED"
+            }
+          ],
+          "Triggers": [],
+          "Name": "Basic Sequence Startup_Container"
+        }
+      ],
+      "Triggers": [],
+      "Name": "Start_Container"
+    },
+    {
+      "Status": "RUNNING",
+      "Conditions": [],
+      "Items": [
+        {
+          "Status": "RUNNING",
+          "Conditions": [],
+          "Items": [
+            {
+              "Status": "FINISHED",
+              "Name": "Slew, center and rotate",
+              "Coordinates": {
+                "RA": 20.975664130555554,
+                "RAString": "20:58:32",
+                "RADegrees": 314.6349619583333,
+                "Dec": 43.72138516388889,
+                "DecString": "43° 43' 17\"",
+                "Epoch": "J2000",
+                "DateTime": {
+                  "Now": "2025-08-11T23:32:35.7537738-07:00",
+                  "UtcNow": "2025-08-12T06:32:35.7537812Z"
+                }
+              }
+            },
+            {
+              "Name": "Run Autofocus",
+              "Status": "FINISHED"
+            },
+            {
+              "Status": "FINISHED",
+              "ForceCalibration": false,
+              "Name": "Start Guiding"
+            },
+            {
+              "Status": "RUNNING",
+              "Conditions": [],
+              "Items": [
+                {
+                  "Status": "RUNNING",
+                  "Conditions": [
+                    {
+                      "Status": "CREATED",
+                      "Altitude": 0,
+                      "CurrentAltitude": 76.29,
+                      "Name": "Loop while Altitude Above Horizon_Condition",
+                      "ExpectedTime": "02:22"
+                    }
+                  ],
+                  "Items": [
+                    {
+                      "Filter": "HA",
+                      "DitherProgressExposures": 0,
+                      "Offset": -1,
+                      "DitherTargetExposures": 3,
+                      "Name": "Smart Exposure",
+                      "Iterations": 12,
+                      "Type": "LIGHT",
+                      "ExposureTime": 300,
+                      "Gain": -1,
+                      "Status": "FINISHED",
+                      "Binning": {
+                        "Name": "1x1",
+                        "X": 1,
+                        "Y": 1
+                      },
+                      "ExposureCount": 12
+                    },
+                    {
+                      "Filter": "OIII",
+                      "DitherProgressExposures": 0,
+                      "Offset": -1,
+                      "DitherTargetExposures": 3,
+                      "Name": "Smart Exposure",
+                      "Iterations": 12,
+                      "Type": "LIGHT",
+                      "ExposureTime": 300,
+                      "Gain": -1,
+                      "Status": "RUNNING",
+                      "Binning": {
+                        "Name": "1x1",
+                        "X": 1,
+                        "Y": 1
+                      },
+                      "ExposureCount": 9
+                    },
+                    {
+                      "Filter": "SII",
+                      "DitherProgressExposures": 0,
+                      "Offset": -1,
+                      "DitherTargetExposures": 3,
+                      "Name": "Smart Exposure",
+                      "Iterations": 12,
+                      "Type": "LIGHT",
+                      "ExposureTime": 300,
+                      "Gain": -1,
+                      "Status": "CREATED",
+                      "Binning": {
+                        "Name": "1x1",
+                        "X": 1,
+                        "Y": 1
+                      },
+                      "ExposureCount": 0
+                    }
+                  ],
+                  "Triggers": [],
+                  "Name": "20x300s_Container"
+                }
+              ],
+              "Triggers": [
+                {
+                  "Status": "CREATED",
+                  "Drift": 0.6694193837896026,
+                  "TargetDrift": 10,
+                  "Name": "Center After Drift_Trigger",
+                  "Coordinates": {
+                    "Coordinates": {
+                      "RA": 20.975664130555554,
+                      "RAString": "20:58:32",
+                      "RADegrees": 314.6349619583333,
+                      "Dec": 43.72138516388889,
+                      "DecString": "43° 43' 17\"",
+                      "Epoch": "J2000",
+                      "DateTime": {
+                        "Now": "2025-08-11T23:32:35.7538803-07:00",
+                        "UtcNow": "2025-08-12T06:32:35.7538831Z"
+                      }
+                    },
+                    "RAHours": 20,
+                    "RAMinutes": 58,
+                    "RASeconds": 32.39087,
+                    "NegativeDec": false,
+                    "DecDegrees": 43,
+                    "DecMinutes": 43,
+                    "DecSeconds": 16.98659
+                  }
+                }
+              ],
+              "Name": "Target Imaging Instructions_Container"
+            }
+          ],
+          "Triggers": [],
+          "Name": "North American_Container"
+        },
+        {
+          "Status": "CREATED",
+          "Conditions": [],
+          "Items": [
+            {
+              "Status": "CREATED",
+              "Name": "Slew, center and rotate",
+              "Coordinates": {
+                "RA": 22.531931897222222,
+                "RAString": "22:31:55",
+                "RADegrees": 337.97897845833336,
+                "Dec": 40.699962022222216,
+                "DecString": "40° 42' 00\"",
+                "Epoch": "J2000",
+                "DateTime": {
+                  "Now": "2025-08-11T23:32:35.753926-07:00",
+                  "UtcNow": "2025-08-12T06:32:35.7539281Z"
+                }
+              }
+            },
+            {
+              "Name": "Run Autofocus",
+              "Status": "CREATED"
+            },
+            {
+              "Status": "CREATED",
+              "ForceCalibration": false,
+              "Name": "Start Guiding"
+            },
+            {
+              "Status": "CREATED",
+              "Conditions": [],
+              "Items": [
+                {
+                  "Status": "CREATED",
+                  "Conditions": [
+                    {
+                      "Status": "CREATED",
+                      "TargetTime": "2025-08-12T05:11:42.999995-07:00",
+                      "Name": "Loop Until Time_Condition",
+                      "RemainingTime": "05:39:07.2463729"
+                    }
+                  ],
+                  "Items": [
+                    {
+                      "Filter": "HA",
+                      "DitherProgressExposures": 0,
+                      "Offset": -1,
+                      "DitherTargetExposures": 3,
+                      "Name": "Smart Exposure",
+                      "Iterations": 5,
+                      "Type": "LIGHT",
+                      "ExposureTime": 300,
+                      "Gain": -1,
+                      "Status": "CREATED",
+                      "Binning": {
+                        "Name": "1x1",
+                        "X": 1,
+                        "Y": 1
+                      },
+                      "ExposureCount": 5
+                    },
+                    {
+                      "Filter": "OIII",
+                      "DitherProgressExposures": 0,
+                      "Offset": -1,
+                      "DitherTargetExposures": 3,
+                      "Name": "Smart Exposure",
+                      "Iterations": 5,
+                      "Type": "LIGHT",
+                      "ExposureTime": 300,
+                      "Gain": -1,
+                      "Status": "CREATED",
+                      "Binning": {
+                        "Name": "1x1",
+                        "X": 1,
+                        "Y": 1
+                      },
+                      "ExposureCount": 5
+                    },
+                    {
+                      "Filter": "B",
+                      "DitherProgressExposures": 6,
+                      "Offset": -1,
+                      "DitherTargetExposures": 15,
+                      "Name": "Smart Exposure",
+                      "Iterations": 60,
+                      "Type": "LIGHT",
+                      "ExposureTime": 30,
+                      "Gain": -1,
+                      "Status": "CREATED",
+                      "Binning": {
+                        "Name": "1x1",
+                        "X": 1,
+                        "Y": 1
+                      },
+                      "ExposureCount": 0
+                    },
+                    {
+                      "Filter": "G",
+                      "DitherProgressExposures": 6,
+                      "Offset": -1,
+                      "DitherTargetExposures": 15,
+                      "Name": "Smart Exposure",
+                      "Iterations": 60,
+                      "Type": "LIGHT",
+                      "ExposureTime": 30,
+                      "Gain": -1,
+                      "Status": "CREATED",
+                      "Binning": {
+                        "Name": "1x1",
+                        "X": 1,
+                        "Y": 1
+                      },
+                      "ExposureCount": 4
+                    },
+                    {
+                      "Filter": "SII",
+                      "DitherProgressExposures": 0,
+                      "Offset": -1,
+                      "DitherTargetExposures": 3,
+                      "Name": "Smart Exposure",
+                      "Iterations": 5,
+                      "Type": "LIGHT",
+                      "ExposureTime": 300,
+                      "Gain": -1,
+                      "Status": "CREATED",
+                      "Binning": {
+                        "Name": "1x1",
+                        "X": 1,
+                        "Y": 1
+                      },
+                      "ExposureCount": 0
+                    },
+                    {
+                      "Filter": "L",
+                      "DitherProgressExposures": 6,
+                      "Offset": -1,
+                      "DitherTargetExposures": 15,
+                      "Name": "Smart Exposure",
+                      "Iterations": 60,
+                      "Type": "LIGHT",
+                      "ExposureTime": 30,
+                      "Gain": -1,
+                      "Status": "CREATED",
+                      "Binning": {
+                        "Name": "1x1",
+                        "X": 1,
+                        "Y": 1
+                      },
+                      "ExposureCount": 60
+                    },
+                    {
+                      "Filter": "R",
+                      "DitherProgressExposures": 6,
+                      "Offset": -1,
+                      "DitherTargetExposures": 15,
+                      "Name": "Smart Exposure",
+                      "Iterations": 60,
+                      "Type": "LIGHT",
+                      "ExposureTime": 30,
+                      "Gain": -1,
+                      "Status": "CREATED",
+                      "Binning": {
+                        "Name": "1x1",
+                        "X": 1,
+                        "Y": 1
+                      },
+                      "ExposureCount": 60
+                    }
+                  ],
+                  "Triggers": [],
+                  "Name": "20x300s_Container"
+                }
+              ],
+              "Triggers": [
+                {
+                  "Status": "CREATED",
+                  "Drift": 0,
+                  "TargetDrift": 10,
+                  "Name": "Center After Drift_Trigger",
+                  "Coordinates": {
+                    "Coordinates": {
+                      "RA": 22.531931897222222,
+                      "RAString": "22:31:55",
+                      "RADegrees": 337.97897845833336,
+                      "Dec": 40.699962022222216,
+                      "DecString": "40° 42' 00\"",
+                      "Epoch": "J2000",
+                      "DateTime": {
+                        "Now": "2025-08-11T23:32:35.754004-07:00",
+                        "UtcNow": "2025-08-12T06:32:35.7540057Z"
+                      }
+                    },
+                    "RAHours": 22,
+                    "RAMinutes": 31,
+                    "RASeconds": 54.95483,
+                    "NegativeDec": false,
+                    "DecDegrees": 40,
+                    "DecMinutes": 41,
+                    "DecSeconds": 59.86328
+                  }
+                }
+              ],
+              "Name": "Target Imaging Instructions_Container"
+            }
+          ],
+          "Triggers": [],
+          "Name": "Gecko Nebula_Container"
+        }
+      ],
+      "Triggers": [],
+      "Name": "Targets_Container"
+    },
+    {
+      "Status": "CREATED",
+      "Conditions": [],
+      "Items": [
+        {
+          "Status": "CREATED",
+          "Conditions": [],
+          "Items": [
+            {
+              "Name": "Rotate by mechanical angle",
+              "Status": "CREATED"
+            },
+            {
+              "Status": "CREATED",
+              "Conditions": [],
+              "Items": [
+                {
+                  "Status": "CREATED",
+                  "Text": "This group here will be executed in parallel.",
+                  "Name": "Annotation"
+                },
+                {
+                  "Status": "CREATED",
+                  "Name": "Warm Camera",
+                  "MinWarmingTime": 0
+                },
+                {
+                  "Name": "Park Scope",
+                  "Status": "CREATED"
+                }
+              ],
+              "Triggers": [],
+              "Name": "Parallel End of Sequence Instructions_Container"
+            }
+          ],
+          "Triggers": [],
+          "Name": "Basic Sequence End_Container"
+        }
+      ],
+      "Triggers": [],
+      "Name": "End_Container"
+    }
+  ],
+  "Error": "",
+  "StatusCode": 200,
+  "Success": true,
+  "Type": "API"
+}
