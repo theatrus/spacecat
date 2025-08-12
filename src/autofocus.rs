@@ -1,4 +1,43 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+
+/// Custom deserializer for f64 that handles "NaN" strings
+fn deserialize_f64_or_nan<'de, D>(deserializer: D) -> Result<f64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde::de::{self, Visitor};
+    use std::fmt;
+
+    struct F64OrNanVisitor;
+
+    impl<'de> Visitor<'de> for F64OrNanVisitor {
+        type Value = f64;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            formatter.write_str("a number or \"NaN\"")
+        }
+
+        fn visit_f64<E>(self, value: f64) -> Result<f64, E>
+        where
+            E: de::Error,
+        {
+            Ok(value)
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<f64, E>
+        where
+            E: de::Error,
+        {
+            if value == "NaN" {
+                Ok(f64::NAN)
+            } else {
+                value.parse().map_err(de::Error::custom)
+            }
+        }
+    }
+
+    deserializer.deserialize_any(F64OrNanVisitor)
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "PascalCase")]
@@ -38,6 +77,7 @@ pub struct AutofocusData {
 #[serde(rename_all = "PascalCase")]
 pub struct FocusPoint {
     pub position: i32,
+    #[serde(deserialize_with = "deserialize_f64_or_nan")]
     pub value: f64,
     pub error: f64,
 }
@@ -194,23 +234,28 @@ mod tests {
         assert_eq!(af_data.filter, "OIII");
         assert_eq!(af_data.auto_focuser_name, "NINA");
         assert_eq!(af_data.star_detector_name, "NINA");
-        assert_eq!(af_data.temperature, 26.8);
+        assert_eq!(af_data.temperature, 21.3);
         assert_eq!(af_data.method, "STARHFR");
         assert_eq!(af_data.fitting, "TRENDHYPERBOLIC");
 
         // Test focus points
-        assert_eq!(af_data.calculated_focus_point.position, 4146);
-        assert_eq!(af_data.calculated_focus_point.value, 2.9420331693319604);
+        assert_eq!(af_data.calculated_focus_point.position, 4068);
+        assert_eq!(af_data.calculated_focus_point.value, 2.90813054456021);
         assert_eq!(af_data.calculated_focus_point.error, 0.0);
+
+        // Test that initial focus point has NaN value (properly parsed)
+        assert_eq!(af_data.initial_focus_point.position, 4092);
+        assert!(af_data.initial_focus_point.value.is_nan());
+        assert_eq!(af_data.initial_focus_point.error, 0.0);
 
         // Test measure points
         assert_eq!(af_data.measure_points.len(), 10);
-        assert_eq!(af_data.measure_points[0].position, 4058);
-        assert_eq!(af_data.measure_points[0].value, 4.650582372113996);
+        assert_eq!(af_data.measure_points[0].position, 3992);
+        assert!((af_data.measure_points[0].value - 3.9320351318958195).abs() < 1e-10);
 
         // Test R-squared values
-        assert_eq!(af_data.r_squares.hyperbolic, 0.970086228706008);
-        assert_eq!(af_data.r_squares.quadratic, 0.944310012215433);
+        assert!((af_data.r_squares.hyperbolic - 0.9894178774335628).abs() < 1e-10);
+        assert!((af_data.r_squares.quadratic - 0.9810757827720883).abs() < 1e-10);
 
         // Test backlash compensation
         assert_eq!(
@@ -227,17 +272,17 @@ mod tests {
         let response: AutofocusResponse = serde_json::from_str(&json_content).unwrap();
 
         // Test convenience methods
-        assert_eq!(response.get_calculated_position(), 4146);
-        assert_eq!(response.get_calculated_hfr(), 2.9420331693319604);
+        assert_eq!(response.get_calculated_position(), 4068);
+        assert_eq!(response.get_calculated_hfr(), 2.90813054456021);
         assert_eq!(response.get_filter(), "OIII");
-        assert_eq!(response.get_temperature(), 26.8);
+        assert_eq!(response.get_temperature(), 21.3);
         assert_eq!(response.get_method(), "STARHFR");
         assert_eq!(response.get_fitting(), "TRENDHYPERBOLIC");
         assert_eq!(response.get_measurement_count(), 10);
 
         // Test R-squared analysis
         let best_r_squared = response.get_best_r_squared();
-        assert!(best_r_squared > 0.97); // Should be the hyperbolic fit
+        assert!(best_r_squared > 0.98); // Should be the hyperbolic fit (0.9894)
 
         // Test success criteria
         assert!(response.is_successful());
@@ -251,8 +296,8 @@ mod tests {
 
         // Test focus range analysis
         let (min_pos, max_pos) = af_data.get_focus_range();
-        assert_eq!(min_pos, 4058);
-        assert_eq!(max_pos, 4238);
+        assert_eq!(min_pos, 3992);
+        assert_eq!(max_pos, 4172);
 
         // Test position ordering
         let positions = af_data.get_focus_positions();
@@ -264,6 +309,6 @@ mod tests {
         assert_eq!(hfr_values.len(), 10);
 
         let best_hfr = af_data.get_best_measured_hfr().unwrap();
-        assert!(best_hfr < 3.1); // Should find the minimum HFR
+        assert!(best_hfr < 3.1); // Should find the minimum HFR (around 3.009)
     }
 }

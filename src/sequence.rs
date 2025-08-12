@@ -662,4 +662,60 @@ mod tests {
         assert!(short_duration.contains("00:15"));
         assert!(short_duration.contains("at "));
     }
+
+    #[test]
+    fn test_load_sequence_2_from_file() {
+        // Test loading the second example sequence file if it exists
+        if let Ok(json_content) = std::fs::read_to_string("example_sequence_2.json") {
+            let sequence: Result<SequenceResponse, _> = serde_json::from_str(&json_content);
+            assert!(
+                sequence.is_ok(),
+                "Should be able to parse example_sequence_2.json"
+            );
+
+            let sequence = sequence.unwrap();
+            assert!(sequence.success, "Sequence should indicate success");
+            assert_eq!(sequence.status_code, 200, "Should have status code 200");
+            assert!(!sequence.response.is_empty(), "Should have response items");
+
+            // Test target extraction from real file - should be "North American" (currently running)
+            let target = extract_current_target(&sequence);
+            println!("Found target in example_sequence_2.json: {target:?}");
+            assert_eq!(target, Some("North American".to_string()));
+
+            // Test container extraction
+            let containers = sequence.get_containers();
+            println!(
+                "Found {} containers in example_sequence_2.json",
+                containers.len()
+            );
+            assert!(!containers.is_empty());
+
+            // Test global triggers
+            if let Some(triggers) = sequence.get_global_triggers() {
+                println!("Found {} global triggers", triggers.global_triggers.len());
+                assert_eq!(triggers.global_triggers.len(), 4); // Should have 4 global triggers
+            }
+
+            // Test meridian flip time extraction from real file
+            let meridian_flip_time = extract_meridian_flip_time(&sequence);
+            println!("Found meridian flip time in example_sequence_2.json: {meridian_flip_time:?}");
+
+            // Should have meridian flip time
+            assert!(meridian_flip_time.is_some());
+            let time_hours = meridian_flip_time.unwrap();
+            // Should be around 1.169 hours based on the file content
+            assert!((time_hours - 1.1690078382777778).abs() < 0.0001);
+
+            if let Some(time_hours) = meridian_flip_time {
+                let time_minutes = meridian_flip_time_minutes(time_hours);
+                let time_formatted = meridian_flip_time_formatted(time_hours);
+                println!(
+                    "Meridian flip in {time_hours:.3} hours ({time_minutes:.1} minutes, {time_formatted})"
+                );
+            }
+        } else {
+            println!("example_sequence_2.json not found, skipping file test");
+        }
+    }
 }
