@@ -29,7 +29,18 @@ pub enum EventDetails {
         #[serde(rename = "Previous")]
         previous: FilterInfo,
     },
-    // Add other event details as needed
+    TargetStart {
+        #[serde(rename = "TargetName")]
+        target_name: String,
+        #[serde(rename = "ProjectName")]
+        project_name: String,
+        #[serde(rename = "Rotation")]
+        rotation: f64,
+        #[serde(rename = "TargetEndTime")]
+        target_end_time: String,
+        #[serde(rename = "Coordinates")]
+        coordinates: TargetCoordinates,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,6 +48,20 @@ pub enum EventDetails {
 pub struct FilterInfo {
     pub name: String,
     pub id: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct TargetCoordinates {
+    #[serde(rename = "RA")]
+    pub ra: f64,
+    pub dec: f64,
+    #[serde(rename = "RAString")]
+    pub ra_string: String,
+    pub dec_string: String,
+    pub epoch: String,
+    #[serde(rename = "RADegrees")]
+    pub ra_degrees: f64,
 }
 
 // Event type constants for easier matching
@@ -80,6 +105,8 @@ pub mod event_types {
     pub const FOCUS_START: &str = "FOCUS-START";
     pub const FOCUS_END: &str = "FOCUS-END";
     pub const ADV_SEQ_STOP: &str = "ADV-SEQ-STOP";
+    pub const FOCUSER_USER_FOCUSED: &str = "FOCUSER-USER-FOCUSED";
+    pub const TS_TARGETSTART: &str = "TS-TARGETSTART";
 }
 
 impl EventHistoryResponse {
@@ -281,6 +308,51 @@ mod tests {
         assert_eq!(counts.get(event_types::FILTERWHEEL_CHANGED), Some(&1));
         assert_eq!(counts.get(event_types::AUTOFOCUS_FINISHED), Some(&1));
         assert_eq!(counts.get(event_types::CAMERA_CONNECTED), Some(&1));
+    }
+
+    #[test]
+    fn test_ts_targetstart_event() {
+        let event_json = r#"{
+            "TargetEndTime": "2025-08-17T04:10:06.5191486",
+            "Time": "2025-08-17T05:21:02.1200663",
+            "Event": "TS-TARGETSTART",
+            "TargetName": "Pickering Triangle",
+            "Rotation": 90,
+            "ProjectName": "Pickering Triangle",
+            "Coordinates": {
+                "RA": 20.822777777777777,
+                "Dec": 31.415,
+                "RAString": "20:49:22",
+                "DecString": "31° 24' 54\"",
+                "Epoch": "J2000",
+                "RADegrees": 312.34166666666664
+            }
+        }"#;
+
+        let event: Event = serde_json::from_str(event_json).unwrap();
+        assert_eq!(event.event, event_types::TS_TARGETSTART);
+
+        if let Some(EventDetails::TargetStart {
+            target_name,
+            project_name,
+            coordinates,
+            rotation,
+            target_end_time,
+        }) = event.details
+        {
+            assert_eq!(target_name, "Pickering Triangle");
+            assert_eq!(project_name, "Pickering Triangle");
+            assert_eq!(rotation, 90.0);
+            assert_eq!(target_end_time, "2025-08-17T04:10:06.5191486");
+            assert_eq!(coordinates.ra, 20.822777777777777);
+            assert_eq!(coordinates.dec, 31.415);
+            assert_eq!(coordinates.ra_string, "20:49:22");
+            assert_eq!(coordinates.dec_string, "31° 24' 54\"");
+            assert_eq!(coordinates.epoch, "J2000");
+            assert_eq!(coordinates.ra_degrees, 312.34166666666664);
+        } else {
+            panic!("Expected TargetStart details");
+        }
     }
 
     #[test]
