@@ -18,24 +18,32 @@ impl ServiceWrapper {
 
     /// Run the chat updater as a regular CLI application
     pub async fn run_cli(&self, interval: u64) -> Result<(), Box<dyn std::error::Error>> {
+        let mut chat_updater = self.create_chat_updater().await?;
+        chat_updater
+            .start_polling(Duration::from_secs(interval))
+            .await;
+        Ok(())
+    }
+
+    /// Create a configured ChatUpdater instance
+    pub async fn create_chat_updater(&self) -> Result<ChatUpdater, Box<dyn std::error::Error>> {
         // Create API client
         let client = SpaceCatApiClient::new(self.config.api.clone())?;
 
         // Create chat service manager
         let mut chat_manager = ChatServiceManager::new();
 
-        // Add Discord service if configured
-        if let Some(discord_config) = &self.config.discord
-            && discord_config.enabled
-        {
-            let discord_service = DiscordChatService::new(&discord_config.webhook_url)?;
-            chat_manager.add_service(Box::new(discord_service));
-        }
-
-        // Add chat services from new config structure
+        // Add Discord service (prioritize new config over legacy)
         if let Some(discord_config) = &self.config.chat.discord
             && discord_config.enabled
         {
+            println!("Initializing Discord chat service...");
+            let discord_service = DiscordChatService::new(&discord_config.webhook_url)?;
+            chat_manager.add_service(Box::new(discord_service));
+        } else if let Some(discord_config) = &self.config.discord
+            && discord_config.enabled
+        {
+            println!("Using legacy Discord configuration...");
             let discord_service = DiscordChatService::new(&discord_config.webhook_url)?;
             chat_manager.add_service(Box::new(discord_service));
         }
@@ -43,6 +51,7 @@ impl ServiceWrapper {
         if let Some(matrix_config) = &self.config.chat.matrix
             && matrix_config.enabled
         {
+            println!("Initializing Matrix chat service...");
             let matrix_service = MatrixChatService::new(
                 &matrix_config.homeserver_url,
                 &matrix_config.username,
@@ -53,16 +62,16 @@ impl ServiceWrapper {
             chat_manager.add_service(Box::new(matrix_service));
         }
 
+        if chat_manager.service_count() == 0 {
+            println!("Warning: No chat services configured. Running in monitoring-only mode.");
+        }
+
         // Create chat updater
-        let mut chat_updater = ChatUpdater::new(client)
+        let chat_updater = ChatUpdater::new(client)
             .with_chat_manager(chat_manager)
             .with_image_cooldown(self.config.image_cooldown_seconds);
 
-        // Start polling
-        chat_updater
-            .start_polling(Duration::from_secs(interval))
-            .await;
-        Ok(())
+        Ok(chat_updater)
     }
 
     /// Get the configuration for inspection
@@ -87,49 +96,11 @@ mod windows_service_impl {
             let rt = tokio::runtime::Runtime::new()?;
 
             rt.block_on(async {
-                // Create API client
-                let client = SpaceCatApiClient::new(self.config.api.clone())
-                    .map_err(|e| format!("Failed to create API client: {}", e))?;
-
-                // Create chat service manager
-                let mut chat_manager = ChatServiceManager::new();
-
-                // Add Discord service if configured (legacy config)
-                if let Some(discord_config) = &self.config.discord
-                    && discord_config.enabled
-                {
-                    let discord_service = DiscordChatService::new(&discord_config.webhook_url)
-                        .map_err(|e| format!("Failed to create Discord service: {}", e))?;
-                    chat_manager.add_service(Box::new(discord_service));
-                }
-
-                // Add chat services from new config structure
-                if let Some(discord_config) = &self.config.chat.discord
-                    && discord_config.enabled
-                {
-                    let discord_service = DiscordChatService::new(&discord_config.webhook_url)
-                        .map_err(|e| format!("Failed to create Discord service: {}", e))?;
-                    chat_manager.add_service(Box::new(discord_service));
-                }
-
-                if let Some(matrix_config) = &self.config.chat.matrix
-                    && matrix_config.enabled
-                {
-                    let matrix_service = MatrixChatService::new(
-                        &matrix_config.homeserver_url,
-                        &matrix_config.username,
-                        &matrix_config.password,
-                        &matrix_config.room_id,
-                    )
+                // Create chat updater using the factory method
+                let chat_updater = self
+                    .create_chat_updater()
                     .await
-                    .map_err(|e| format!("Failed to create Matrix service: {}", e))?;
-                    chat_manager.add_service(Box::new(matrix_service));
-                }
-
-                // Create chat updater
-                let mut chat_updater = ChatUpdater::new(client)
-                    .with_chat_manager(chat_manager)
-                    .with_image_cooldown(self.config.image_cooldown_seconds);
+                    .map_err(|e| format!("Failed to create chat updater: {}", e))?;
 
                 // Run the service loop with graceful shutdown
                 self.run_service_loop(chat_updater, Duration::from_secs(5), shutdown_rx)
