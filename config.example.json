@@ -19,9 +19,8 @@
       "homeserver_url": "https://matrix.org",
       "username": "@spacecat_bot:matrix.org",
       "password": "your_bot_password",
-      "room_id": "\!SpaceCatObservatory:matrix.org",
+      "room_id": "!SpaceCatObservatory:matrix.org",
       "enabled": true
     }
   }
 }
-EOF < /dev/null
