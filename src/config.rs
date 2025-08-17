@@ -1,3 +1,4 @@
+use crate::chat::ChatConfig;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
@@ -8,6 +9,10 @@ pub struct Config {
     pub logging: LoggingConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub discord: Option<DiscordConfig>,
+    #[serde(default)]
+    pub chat: ChatConfig,
+    #[serde(default = "default_image_cooldown_seconds")]
+    pub image_cooldown_seconds: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -215,6 +220,50 @@ impl Config {
                     .starts_with("https://discordapp.com/api/webhooks/")
             {
                 return Err("Discord webhook URL must be a valid Discord webhook URL".to_string());
+            }
+        }
+
+        // Validate chat service configurations
+        if let Some(discord) = &self.chat.discord {
+            if discord.enabled && discord.webhook_url.is_empty() {
+                return Err(
+                    "Discord webhook URL cannot be empty when Discord is enabled".to_string(),
+                );
+            }
+
+            if discord.enabled
+                && !discord
+                    .webhook_url
+                    .starts_with("https://discord.com/api/webhooks/")
+                && !discord
+                    .webhook_url
+                    .starts_with("https://discordapp.com/api/webhooks/")
+            {
+                return Err("Discord webhook URL must be a valid Discord webhook URL".to_string());
+            }
+        }
+
+        if let Some(matrix) = &self.chat.matrix
+            && matrix.enabled
+        {
+            if matrix.homeserver_url.is_empty() {
+                return Err(
+                    "Matrix homeserver URL cannot be empty when Matrix is enabled".to_string(),
+                );
+            }
+            if matrix.username.is_empty() {
+                return Err("Matrix username cannot be empty when Matrix is enabled".to_string());
+            }
+            if matrix.password.is_empty() {
+                return Err("Matrix password cannot be empty when Matrix is enabled".to_string());
+            }
+            if matrix.room_id.is_empty() {
+                return Err("Matrix room ID cannot be empty when Matrix is enabled".to_string());
+            }
+            if !matrix.homeserver_url.starts_with("https://")
+                && !matrix.homeserver_url.starts_with("http://")
+            {
+                return Err("Matrix homeserver URL must start with http:// or https://".to_string());
             }
         }
 

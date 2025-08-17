@@ -3,8 +3,9 @@ use clap::{Parser, Subcommand};
 use spacecat::{
     api::SpaceCatApiClient,
     autofocus::AutofocusResponse,
+    chat::{ChatServiceManager, DiscordChatService, MatrixChatService},
+    chat_updater::ChatUpdater,
     config::Config,
-    discord_updater,
     events::{EventDetails, EventHistoryResponse, event_types},
     images::ImageHistoryResponse,
     mount::MountInfoResponse,
@@ -72,8 +73,8 @@ enum Commands {
         #[arg(short, long, default_value = "5")]
         count: u32,
     },
-    /// Update Discord with events and images in real-time
-    DiscordUpdater {
+    /// Update chat services with events and images in real-time
+    ChatUpdater {
         /// Poll interval in seconds
         #[arg(short, long, default_value = "5")]
         interval: u64,
@@ -158,9 +159,9 @@ async fn main() {
                 std::process::exit(1);
             }
         }
-        Commands::DiscordUpdater { interval } => {
-            if let Err(e) = cmd_discord_updater(interval).await {
-                eprintln!("DiscordUpdater command failed: {e}");
+        Commands::ChatUpdater { interval } => {
+            if let Err(e) = cmd_chat_updater(interval).await {
+                eprintln!("ChatUpdater command failed: {e}");
                 std::process::exit(1);
             }
         }
@@ -487,19 +488,53 @@ async fn cmd_poll(interval: u64, count: u32) -> Result<(), Box<dyn std::error::E
     Ok(())
 }
 
-async fn cmd_discord_updater(interval: u64) -> Result<(), Box<dyn std::error::Error>> {
+async fn cmd_chat_updater(interval: u64) -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::load_or_default();
     let client = SpaceCatApiClient::new(config.api)?;
 
-    let mut updater = discord_updater::DiscordUpdater::new(client);
+    let mut chat_manager = ChatServiceManager::new();
 
-    if let Some(discord_config) = config.discord {
-        updater = updater.with_discord_image_cooldown(discord_config.image_cooldown_seconds);
-
-        if discord_config.enabled {
-            updater = updater.with_discord_webhook(&discord_config.webhook_url)?;
-        }
+    // Initialize Discord service if configured
+    if let Some(discord_config) = &config.chat.discord
+        && discord_config.enabled
+    {
+        println!("Initializing Discord chat service...");
+        let discord_service = DiscordChatService::new(&discord_config.webhook_url)?;
+        chat_manager.add_service(Box::new(discord_service));
     }
+
+    // Initialize Matrix service if configured
+    if let Some(matrix_config) = &config.chat.matrix
+        && matrix_config.enabled
+    {
+        println!("Initializing Matrix chat service...");
+        let matrix_service = MatrixChatService::new(
+            &matrix_config.homeserver_url,
+            &matrix_config.username,
+            &matrix_config.password,
+            &matrix_config.room_id,
+        )
+        .await?;
+        chat_manager.add_service(Box::new(matrix_service));
+    }
+
+    // Backward compatibility: also check legacy discord config
+    if let Some(discord_config) = &config.discord
+        && discord_config.enabled
+        && config.chat.discord.is_none()
+    {
+        println!("Using legacy Discord configuration...");
+        let discord_service = DiscordChatService::new(&discord_config.webhook_url)?;
+        chat_manager.add_service(Box::new(discord_service));
+    }
+
+    if chat_manager.service_count() == 0 {
+        println!("Warning: No chat services configured. Running in monitoring-only mode.");
+    }
+
+    let mut updater = ChatUpdater::new(client)
+        .with_chat_manager(chat_manager)
+        .with_image_cooldown(config.image_cooldown_seconds);
 
     updater.start_polling(Duration::from_secs(interval)).await;
     Ok(())

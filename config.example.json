@@ -9,9 +9,19 @@
     "enable_file_logging": false,
     "log_file": "spacecat.log"
   },
-  "discord": {
-    "webhook_url": "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN",
-    "enabled": true,
-    "image_cooldown_seconds": 60
+  "image_cooldown_seconds": 60,
+  "chat": {
+    "discord": {
+      "webhook_url": "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN",
+      "enabled": true
+    },
+    "matrix": {
+      "homeserver_url": "https://matrix.org",
+      "username": "@your_bot:matrix.org",
+      "password": "your_bot_password",
+      "room_id": "\!your_room_id:matrix.org",
+      "enabled": true
+    }
   }
 }
+EOF < /dev/null
