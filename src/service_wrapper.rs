@@ -4,6 +4,7 @@ use crate::api::SpaceCatApiClient;
 use crate::chat::{ChatServiceManager, DiscordChatService, MatrixChatService};
 use crate::chat_updater::ChatUpdater;
 use crate::config::Config;
+use crate::error::{ChatError, ServiceError, ServiceResult, SpaceCatError};
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -12,13 +13,14 @@ pub struct ServiceWrapper {
 }
 
 impl ServiceWrapper {
-    pub fn new(config: Config) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(config: Config) -> ServiceResult<Self> {
         Ok(Self { config })
     }
 
     /// Run the chat updater as a regular CLI application
-    pub async fn run_cli(&self, interval: u64) -> Result<(), Box<dyn std::error::Error>> {
-        let mut chat_updater = self.create_chat_updater().await?;
+    pub async fn run_cli(&self, interval: u64) -> ServiceResult<()> {
+        let mut chat_updater = self.create_chat_updater().await
+            .map_err(|e| ServiceError::Initialization { reason: e.to_string() })?;
         chat_updater
             .start_polling(Duration::from_secs(interval))
             .await;
@@ -26,9 +28,10 @@ impl ServiceWrapper {
     }
 
     /// Create a configured ChatUpdater instance
-    pub async fn create_chat_updater(&self) -> Result<ChatUpdater, Box<dyn std::error::Error>> {
+    pub async fn create_chat_updater(&self) -> Result<ChatUpdater, SpaceCatError> {
         // Create API client
-        let client = SpaceCatApiClient::new(self.config.api.clone())?;
+        let client = SpaceCatApiClient::new(self.config.api.clone())
+            .map_err(SpaceCatError::Api)?;
 
         // Create chat service manager
         let mut chat_manager = ChatServiceManager::new();
@@ -38,13 +41,21 @@ impl ServiceWrapper {
             && discord_config.enabled
         {
             println!("Initializing Discord chat service...");
-            let discord_service = DiscordChatService::new(&discord_config.webhook_url)?;
+            let discord_service = DiscordChatService::new(&discord_config.webhook_url)
+                .map_err(|e| SpaceCatError::Chat(ChatError::Initialization {
+                    service_name: "Discord".to_string(),
+                    reason: e.to_string(),
+                }))?;
             chat_manager.add_service(Box::new(discord_service));
         } else if let Some(discord_config) = &self.config.discord
             && discord_config.enabled
         {
             println!("Using legacy Discord configuration...");
-            let discord_service = DiscordChatService::new(&discord_config.webhook_url)?;
+            let discord_service = DiscordChatService::new(&discord_config.webhook_url)
+                .map_err(|e| SpaceCatError::Chat(ChatError::Initialization {
+                    service_name: "Discord (legacy)".to_string(),
+                    reason: e.to_string(),
+                }))?;
             chat_manager.add_service(Box::new(discord_service));
         }
 
@@ -58,7 +69,11 @@ impl ServiceWrapper {
                 &matrix_config.password,
                 &matrix_config.room_id,
             )
-            .await?;
+            .await
+            .map_err(|e| SpaceCatError::Chat(ChatError::Initialization {
+                service_name: "Matrix".to_string(),
+                reason: e.to_string(),
+            }))?;
             chat_manager.add_service(Box::new(matrix_service));
         }
 
@@ -91,16 +106,21 @@ mod windows_service_impl {
         pub fn run_with_shutdown(
             &self,
             shutdown_rx: mpsc::Receiver<()>,
-        ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        ) -> ServiceResult<()> {
             // Create a Tokio runtime for the service
-            let rt = tokio::runtime::Runtime::new()?;
+            let rt = tokio::runtime::Runtime::new()
+                .map_err(|e| ServiceError::Initialization { 
+                    reason: format!("Failed to create Tokio runtime: {}", e) 
+                })?;
 
             rt.block_on(async {
                 // Create chat updater using the factory method
                 let chat_updater = self
                     .create_chat_updater()
                     .await
-                    .map_err(|e| format!("Failed to create chat updater: {}", e))?;
+                    .map_err(|e| ServiceError::Initialization { 
+                        reason: format!("Failed to create chat updater: {}", e) 
+                    })?;
 
                 // Run the service loop with graceful shutdown
                 self.run_service_loop(chat_updater, Duration::from_secs(5), shutdown_rx)
@@ -114,10 +134,12 @@ mod windows_service_impl {
             mut chat_updater: ChatUpdater,
             poll_interval: Duration,
             shutdown_rx: mpsc::Receiver<()>,
-        ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        ) -> ServiceResult<()> {
             // Initialize baseline
             if let Err(e) = chat_updater.initialize_baseline().await {
-                return Err(format!("Failed to initialize baseline: {}", e).into());
+                return Err(ServiceError::Runtime { 
+                    reason: format!("Failed to initialize baseline: {}", e) 
+                });
             }
 
             println!(
@@ -154,7 +176,9 @@ impl ServiceWrapper {
     pub fn run_with_shutdown(
         &self,
         _shutdown_rx: mpsc::Receiver<()>,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        Err("Windows service support is not available on this platform".into())
+    ) -> ServiceResult<()> {
+        Err(ServiceError::Runtime { 
+            reason: "Windows service support is not available on this platform".to_string() 
+        })
     }
 }

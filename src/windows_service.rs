@@ -243,6 +243,7 @@ mod implementation {
 
         // Run the chat updater with graceful shutdown support
         service_wrapper.run_with_shutdown(shutdown_rx)
+            .map_err(|e| format!("Service error: {}", e).into())
     }
 
     fn get_service_config_path()

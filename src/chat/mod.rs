@@ -5,9 +5,9 @@ pub use discord_service::DiscordChatService;
 pub use matrix_service::MatrixChatService;
 
 use crate::api::SpaceCatApiClient;
+use crate::error::ChatError;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use std::error::Error;
 
 /// Represents a field in a chat message
 #[derive(Debug, Clone)]
@@ -94,8 +94,7 @@ pub struct ChatConfig {
 #[async_trait]
 pub trait ChatService: Send + Sync {
     /// Send a message to the chat service
-    async fn send_message(&self, message: &ChatMessage)
-    -> Result<(), Box<dyn Error + Send + Sync>>;
+    async fn send_message(&self, message: &ChatMessage) -> Result<(), ChatError>;
 
     /// Send a message with an image attachment
     async fn send_message_with_image(
@@ -103,7 +102,7 @@ pub trait ChatService: Send + Sync {
         message: &ChatMessage,
         image_data: &[u8],
         filename: &str,
-    ) -> Result<(), Box<dyn Error + Send + Sync>>;
+    ) -> Result<(), ChatError>;
 
     /// Get the service name for logging
     fn service_name(&self) -> &'static str;

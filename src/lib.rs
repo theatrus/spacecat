@@ -4,6 +4,7 @@ pub mod chat;
 pub mod chat_updater;
 pub mod config;
 pub mod discord;
+pub mod error;
 pub mod events;
 pub mod images;
 pub mod mount;

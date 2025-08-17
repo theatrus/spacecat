@@ -21,6 +21,7 @@ matrix-sdk = "0.13"
 url = "2.5"
 async-trait = "0.1"
 mime = "0.3"
+thiserror = "1.0"
 
 # Windows service dependencies (Windows only)
 [target.'cfg(windows)'.dependencies]
