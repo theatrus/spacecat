@@ -21,6 +21,9 @@ matrix-sdk = "0.13"
 url = "2.5"
 async-trait = "0.1"
 mime = "0.3"
+thiserror = "1.0"
+# SQLite bundled to avoid libsqlite3 dependency issues on Windows CI/releases
+libsqlite3-sys = { version = "0.33", features = ["bundled"] }
 
 # Windows service dependencies (Windows only)
 [target.'cfg(windows)'.dependencies]

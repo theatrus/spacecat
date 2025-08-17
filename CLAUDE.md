@@ -220,7 +220,8 @@ Release process:
   - tokio = "1" (latest: 1.47)
   - clap = "4" (latest: 4.5)
   - matrix-sdk = "0.13" (upgraded from 0.8)
-  - serde = "1.0", reqwest = "0.12", base64 = "0.22"
+  - libsqlite3-sys = "0.33" (bundled SQLite for cross-platform builds)
+  - serde = "1.0", reqwest = "0.12", base64 = "0.22", thiserror = "1.0"
 
 ## Recent Updates
 
@@ -241,4 +242,6 @@ Release process:
 - **matrix-sdk**: 0.8 → 0.13 (API compatibility updates)
 - **tokio**: 1.0 → 1.47 (latest async runtime)
 - **clap**: 4.0 → 4.5 (latest CLI framework)
+- **libsqlite3-sys**: Added bundled SQLite for Windows CI/release builds
+- **thiserror**: Added custom error types replacing Box<dyn Error>
 - Updated integration tests for new command names

@@ -1602,6 +1602,7 @@ version = "0.33.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "947e6816f7825b2b45027c2c32e7085da9934defa535de4a6a46b10a4d5257fa"
 dependencies = [
+ "cc",
  "pkg-config",
  "vcpkg",
 ]
@@ -3077,11 +3078,13 @@ dependencies = [
  "base64",
  "chrono",
  "clap",
+ "libsqlite3-sys",
  "matrix-sdk",
  "mime",
  "reqwest",
  "serde",
  "serde_json",
+ "thiserror 1.0.69",
  "tokio",
  "url",
  "winapi",

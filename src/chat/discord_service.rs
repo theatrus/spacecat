@@ -1,25 +1,25 @@
 use super::{ChatMessage, ChatService};
 use crate::discord::{DiscordWebhook, Embed, colors};
+use crate::error::ChatError;
 use async_trait::async_trait;
-use std::error::Error;
 
 pub struct DiscordChatService {
     webhook: DiscordWebhook,
 }
 
 impl DiscordChatService {
-    pub fn new(webhook_url: &str) -> Result<Self, Box<dyn Error>> {
-        let webhook = DiscordWebhook::new(webhook_url.to_string())?;
+    pub fn new(webhook_url: &str) -> Result<Self, ChatError> {
+        let webhook =
+            DiscordWebhook::new(webhook_url.to_string()).map_err(|e| ChatError::Discord {
+                message: e.to_string(),
+            })?;
         Ok(Self { webhook })
     }
 }
 
 #[async_trait]
 impl ChatService for DiscordChatService {
-    async fn send_message(
-        &self,
-        message: &ChatMessage,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    async fn send_message(&self, message: &ChatMessage) -> Result<(), ChatError> {
         let mut embed = Embed::new().title(&message.title);
 
         if let Some(color) = message.color {
@@ -40,7 +40,12 @@ impl ChatService for DiscordChatService {
             embed = embed.footer(footer_text, None);
         }
 
-        self.webhook.execute_with_embed(None, embed).await?;
+        self.webhook
+            .execute_with_embed(None, embed)
+            .await
+            .map_err(|e| ChatError::Discord {
+                message: e.to_string(),
+            })?;
         Ok(())
     }
 
@@ -49,7 +54,7 @@ impl ChatService for DiscordChatService {
         message: &ChatMessage,
         image_data: &[u8],
         filename: &str,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    ) -> Result<(), ChatError> {
         let mut embed = Embed::new().title(&message.title);
 
         if let Some(color) = message.color {
@@ -72,7 +77,10 @@ impl ChatService for DiscordChatService {
 
         self.webhook
             .execute_with_file(None, Some(embed), image_data, filename)
-            .await?;
+            .await
+            .map_err(|e| ChatError::Discord {
+                message: e.to_string(),
+            })?;
         Ok(())
     }
 
