@@ -4,6 +4,7 @@ use spacecat::{
     api::SpaceCatApiClient,
     autofocus::AutofocusResponse,
     config::Config,
+    discord_updater,
     events::{EventDetails, EventHistoryResponse, event_types},
     images::ImageHistoryResponse,
     mount::MountInfoResponse,
@@ -12,7 +13,6 @@ use spacecat::{
         SequenceResponse, extract_current_target, extract_meridian_flip_time,
         meridian_flip_time_formatted_with_clock,
     },
-    service_wrapper::ServiceWrapper,
 };
 
 #[cfg(windows)]
@@ -489,9 +489,20 @@ async fn cmd_poll(interval: u64, count: u32) -> Result<(), Box<dyn std::error::E
 
 async fn cmd_discord_updater(interval: u64) -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::load_or_default();
-    let service_wrapper = ServiceWrapper::new(config)?;
+    let client = SpaceCatApiClient::new(config.api)?;
 
-    service_wrapper.run_cli(interval).await
+    let mut updater = discord_updater::DiscordUpdater::new(client);
+
+    if let Some(discord_config) = config.discord {
+        updater = updater.with_discord_image_cooldown(discord_config.image_cooldown_seconds);
+
+        if discord_config.enabled {
+            updater = updater.with_discord_webhook(&discord_config.webhook_url)?;
+        }
+    }
+
+    updater.start_polling(Duration::from_secs(interval)).await;
+    Ok(())
 }
 
 async fn cmd_last_autofocus() -> Result<(), Box<dyn std::error::Error>> {
