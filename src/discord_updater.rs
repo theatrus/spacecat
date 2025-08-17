@@ -23,6 +23,7 @@ pub struct DiscordUpdater {
     last_discord_image_time: Option<Instant>,
     discord_image_cooldown: Duration,
     skipped_images_count: u32,
+    ts_target: Option<String>, // Target from TS-TARGETSTART event
 }
 
 impl DiscordUpdater {
@@ -38,6 +39,7 @@ impl DiscordUpdater {
             last_discord_image_time: None,
             discord_image_cooldown: Duration::from_secs(60), // Default 60 seconds
             skipped_images_count: 0,
+            ts_target: None,
         }
     }
 
@@ -89,6 +91,48 @@ impl DiscordUpdater {
                         if self.event_seen.insert(key) {
                             self.print_new_event(&event);
 
+                            // Handle TS-TARGETSTART events to override target from sequence
+                            if event.event == event_types::TS_TARGETSTART
+                                && let Some(crate::events::EventDetails::TargetStart {
+                                    ref target_name,
+                                    ..
+                                }) = event.details
+                                && target_name != "Sequential Instruction Set"
+                            {
+                                let old_target = self.ts_target.clone();
+                                // Only update and log if the target actually changed
+                                if old_target.as_ref() != Some(target_name) {
+                                    self.ts_target = Some(target_name.clone());
+                                    println!(
+                                        "[TS-TARGETSTART] Target override: {} -> {}",
+                                        old_target.as_deref().unwrap_or("None"),
+                                        target_name
+                                    );
+
+                                    // Send to Discord if we have a webhook configured
+                                    if let Some(webhook) = &self.discord_webhook {
+                                        // Only send notification if this is truly a target change
+                                        if old_target.is_some() {
+                                            self.send_ts_target_change_to_discord(
+                                                webhook,
+                                                old_target.as_ref().unwrap(),
+                                                target_name,
+                                                &event,
+                                            )
+                                            .await;
+                                        } else {
+                                            // First target - send as target start
+                                            self.send_ts_target_start_to_discord(
+                                                webhook,
+                                                target_name,
+                                                &event,
+                                            )
+                                            .await;
+                                        }
+                                    }
+                                }
+                            }
+
                             // Handle autofocus-finished events
                             if event.event == event_types::AUTOFOCUS_FINISHED {
                                 self.handle_autofocus_finished(&event).await;
@@ -103,7 +147,10 @@ impl DiscordUpdater {
                                     self.send_mount_event_to_discord(webhook, &event).await;
                                 }
                             } else if let Some(webhook) = &self.discord_webhook {
-                                self.send_event_to_discord(webhook, &event).await;
+                                // Don't send TS-TARGETSTART events here since they're handled above
+                                if event.event != event_types::TS_TARGETSTART {
+                                    self.send_event_to_discord(webhook, &event).await;
+                                }
                             }
                         }
                     }
@@ -169,6 +216,36 @@ impl DiscordUpdater {
 
         // Get initial events
         let events = self.client.get_event_history().await?;
+
+        // Find the most recent TS-TARGETSTART event to initialize the target
+        let mut latest_ts_target: Option<(String, String)> = None; // (time, target_name)
+
+        for event in &events.response {
+            // Check for TS-TARGETSTART events
+            if event.event == event_types::TS_TARGETSTART
+                && let Some(crate::events::EventDetails::TargetStart {
+                    ref target_name, ..
+                }) = event.details
+                && target_name != "Sequential Instruction Set"
+            {
+                // Update if this is the first or a later event
+                if latest_ts_target.is_none()
+                    || latest_ts_target
+                        .as_ref()
+                        .map(|(time, _)| time < &event.time)
+                        .unwrap_or(false)
+                {
+                    latest_ts_target = Some((event.time.clone(), target_name.clone()));
+                }
+            }
+        }
+
+        // Set the TS target if found
+        if let Some((time, target)) = latest_ts_target {
+            self.ts_target = Some(target.clone());
+            println!("Found TS-TARGETSTART target from {}: {}", time, target);
+        }
+
         for event in events.response {
             // Skip filterwheel changed events where the filter didn't actually change
             // This can happen when the filterwheel reports its position without actually moving
@@ -204,6 +281,11 @@ impl DiscordUpdater {
         format!("{}|{}", image.date, image.camera_name)
     }
 
+    /// Get the effective target - prefer TS-TARGETSTART target over sequence target
+    fn get_effective_target(&self) -> Option<&String> {
+        self.ts_target.as_ref().or(self.current_target.as_ref())
+    }
+
     fn print_new_event(&self, event: &Event) {
         println!("[NEW EVENT] {}", event.time);
         println!("  Type: {}", event.event);
@@ -215,7 +297,7 @@ impl DiscordUpdater {
 
     fn print_new_image(&self, image: &ImageMetadata) {
         println!("[NEW IMAGE] {}", image.date);
-        if let Some(target) = &self.current_target {
+        if let Some(target) = self.get_effective_target() {
             println!("  Target: {target}");
         }
         if let Some(meridian_flip_hours) = self.current_meridian_flip_time {
@@ -302,6 +384,9 @@ impl DiscordUpdater {
             event_types::DOME_DISCONNECTED => colors::RED,
             event_types::SAFETY_DISCONNECTED => colors::RED,
 
+            // Target events
+            event_types::TS_TARGETSTART => colors::CYAN,
+
             // Fallback patterns
             _ if event.event.contains("ERROR") => colors::RED,
             _ if event.event.contains("WARNING") => colors::ORANGE,
@@ -310,6 +395,7 @@ impl DiscordUpdater {
 
         let title = match event.event.as_str() {
             event_types::FILTERWHEEL_CHANGED => "🔄 Filter Changed".to_string(),
+            event_types::TS_TARGETSTART => "🎯 Target Started".to_string(),
             _ => format!("📡 {}", event.event),
         };
 
@@ -334,6 +420,27 @@ impl DiscordUpdater {
                             true,
                         )
                         .field("New", &format!("{} (ID: {})", new.name, new.id), true);
+                }
+                crate::events::EventDetails::TargetStart {
+                    target_name,
+                    project_name,
+                    coordinates,
+                    rotation,
+                    ..
+                } => {
+                    embed = embed
+                        .field("Target", target_name, false)
+                        .field("Project", project_name, true)
+                        .field("Rotation", &format!("{}°", rotation), true)
+                        .field(
+                            "Coordinates",
+                            &format!(
+                                "RA: {}\nDec: {}",
+                                coordinates.ra_string, coordinates.dec_string
+                            ),
+                            true,
+                        )
+                        .field("Epoch", &coordinates.epoch, true);
                 }
             }
         }
@@ -370,7 +477,7 @@ impl DiscordUpdater {
         let mut embed = Embed::new().title(&title).color(color);
 
         // Add target information if available
-        if let Some(target) = &self.current_target {
+        if let Some(target) = self.get_effective_target() {
             embed = embed.field("Target", target, true);
         }
 
@@ -433,13 +540,19 @@ impl DiscordUpdater {
     async fn poll_sequence(&mut self) {
         match self.client.get_sequence().await {
             Ok(sequence) => {
-                let new_target = extract_current_target(&sequence);
+                let new_sequence_target = extract_current_target(&sequence);
                 let new_meridian_flip_time = extract_meridian_flip_time(&sequence);
 
-                // Check if target changed
-                if new_target != self.current_target {
+                // Update sequence target (but don't use it for display if we have TS target)
+                let old_sequence_target = self.current_target.clone();
+                self.current_target = new_sequence_target.clone();
+                self.current_meridian_flip_time = new_meridian_flip_time;
+                self.current_sequence = Some(sequence);
+
+                // Only log sequence target changes if we're not overriding with TS target
+                if self.ts_target.is_none() && new_sequence_target != old_sequence_target {
                     if let (Some(old_target), Some(new_target_name)) =
-                        (&self.current_target, &new_target)
+                        (&old_sequence_target, &new_sequence_target)
                     {
                         println!("[TARGET CHANGE] {old_target} -> {new_target_name}");
                         if let Some(meridian_flip_hours) = new_meridian_flip_time {
@@ -456,7 +569,7 @@ impl DiscordUpdater {
                             )
                             .await;
                         }
-                    } else if let Some(new_target_name) = &new_target {
+                    } else if let Some(new_target_name) = &new_sequence_target {
                         println!("[TARGET START] {new_target_name}");
                         if let Some(meridian_flip_hours) = new_meridian_flip_time {
                             let formatted_time =
@@ -472,15 +585,17 @@ impl DiscordUpdater {
                             .await;
                         }
                     }
-
-                    self.current_target = new_target;
-                    self.current_meridian_flip_time = new_meridian_flip_time;
-                } else {
-                    // Even if target didn't change, update meridian flip time
-                    self.current_meridian_flip_time = new_meridian_flip_time;
+                } else if self.ts_target.is_some() && new_sequence_target != old_sequence_target {
+                    // Log that sequence target changed but we're using TS target
+                    if let (Some(old), Some(new)) = (&old_sequence_target, &new_sequence_target) {
+                        println!(
+                            "[SEQUENCE TARGET CHANGE] {} -> {} (using TS target: {})",
+                            old,
+                            new,
+                            self.ts_target.as_ref().unwrap()
+                        );
+                    }
                 }
-
-                self.current_sequence = Some(sequence);
             }
             Err(e) => {
                 // Only log sequence errors occasionally to avoid spam
@@ -566,7 +681,7 @@ impl DiscordUpdater {
             .field("Time", &event.time, true);
 
         // Add current target if available
-        if let Some(target) = &self.current_target {
+        if let Some(target) = self.get_effective_target() {
             embed = embed.field("Current Target", target, true);
         }
 
@@ -765,5 +880,107 @@ impl DiscordUpdater {
             }
         }
         embed
+    }
+
+    async fn send_ts_target_change_to_discord(
+        &self,
+        webhook: &DiscordWebhook,
+        old_target: &str,
+        new_target: &str,
+        event: &Event,
+    ) {
+        let mut embed = Embed::new()
+            .title("🎯 Target Change (TS)")
+            .color(colors::CYAN)
+            .field("Previous Target", old_target, true)
+            .field("New Target", new_target, true);
+
+        // Add coordinates from the event if available
+        if let Some(crate::events::EventDetails::TargetStart {
+            coordinates,
+            rotation,
+            project_name,
+            ..
+        }) = &event.details
+        {
+            embed = embed
+                .field("Project", project_name, true)
+                .field("Rotation", &format!("{}°", rotation), true)
+                .field(
+                    "Coordinates",
+                    &format!(
+                        "RA: {}\nDec: {}",
+                        coordinates.ra_string, coordinates.dec_string
+                    ),
+                    false,
+                );
+        }
+
+        // Add meridian flip time if available
+        if let Some(meridian_flip_hours) = self.current_meridian_flip_time {
+            let formatted_time = meridian_flip_time_formatted_with_clock(meridian_flip_hours);
+            embed = embed.field("Meridian Flip In", &formatted_time, true);
+        }
+
+        // Try to fetch mount info
+        if let Ok(mount_info) = self.client.get_mount_info().await {
+            embed = self.add_mount_info_to_embed(embed, &mount_info);
+        }
+
+        let embed = embed.timestamp(&chrono::Utc::now().to_rfc3339());
+
+        if let Err(e) = webhook.execute_with_embed(None, embed).await {
+            eprintln!("Failed to send TS target change to Discord: {e}");
+        }
+    }
+
+    async fn send_ts_target_start_to_discord(
+        &self,
+        webhook: &DiscordWebhook,
+        target: &str,
+        event: &Event,
+    ) {
+        let mut embed = Embed::new()
+            .title("🎯 Target Started (TS)")
+            .color(colors::GREEN)
+            .field("Target", target, false);
+
+        // Add coordinates from the event if available
+        if let Some(crate::events::EventDetails::TargetStart {
+            coordinates,
+            rotation,
+            project_name,
+            ..
+        }) = &event.details
+        {
+            embed = embed
+                .field("Project", project_name, true)
+                .field("Rotation", &format!("{}°", rotation), true)
+                .field(
+                    "Coordinates",
+                    &format!(
+                        "RA: {}\nDec: {}",
+                        coordinates.ra_string, coordinates.dec_string
+                    ),
+                    false,
+                );
+        }
+
+        // Add meridian flip time if available
+        if let Some(meridian_flip_hours) = self.current_meridian_flip_time {
+            let formatted_time = meridian_flip_time_formatted_with_clock(meridian_flip_hours);
+            embed = embed.field("Meridian Flip In", &formatted_time, true);
+        }
+
+        // Try to fetch mount info
+        if let Ok(mount_info) = self.client.get_mount_info().await {
+            embed = self.add_mount_info_to_embed(embed, &mount_info);
+        }
+
+        let embed = embed.timestamp(&chrono::Utc::now().to_rfc3339());
+
+        if let Err(e) = webhook.execute_with_embed(None, embed).await {
+            eprintln!("Failed to send TS target start to Discord: {e}");
+        }
     }
 }

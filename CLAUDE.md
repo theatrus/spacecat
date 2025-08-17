@@ -78,6 +78,7 @@ Uses `config.json` for API and Discord settings:
   - Autofocus completion with detailed results
   - Sequence management (start/stop/pause/resume/finished, advanced sequence stop)
   - Weather monitoring and safety systems
+  - TS-TARGETSTART events for actual target tracking (overrides sequence targets)
 
 - **Image History**: Comprehensive image metadata tracking:
   - Session statistics (exposure times, filter counts, temperature ranges)
@@ -125,6 +126,11 @@ Uses `config.json` for API and Discord settings:
   - Mount meridian flip events (MOUNT-BEFORE-FLIP, MOUNT-AFTER-FLIP) with detailed position info
   - Mount park events (MOUNT-PARKED) with position, site location, and tracking status
   - Mount information includes RA/Dec, Alt/Az, pier side, tracking status, and sidereal time
+  - TS-TARGETSTART event handling:
+    - Automatically detects and uses actual observation targets from TS-TARGETSTART events
+    - Overrides sequence targets (which may show "Sequential Instruction Set")
+    - Tracks the most recent target from event history on startup
+    - Updates target display in real-time as new TS-TARGETSTART events arrive
   - Configurable via config.json
   - Non-blocking operation that won't interrupt observations
 
@@ -146,9 +152,10 @@ Uses `config.json` for API and Discord settings:
 
 ### Data Structures
 
-- **Events**: Timestamped equipment state changes with optional details (including AUTOFOCUS-FINISHED events)
+- **Events**: Timestamped equipment state changes with optional details (including AUTOFOCUS-FINISHED and TS-TARGETSTART events)
   - All event types are defined as constants in `event_types` module for type-safe matching
   - No string literals in event matching - all comparisons use predefined constants
+  - TS-TARGETSTART events include target name, coordinates, rotation, and project information
 - **Images**: Metadata including exposure times, filters, temperatures, statistics
 - **Sequences**: Container-based automation with triggers, conditions, and target extraction
 - **Autofocus**: Comprehensive focus session data with measurement points, curve fitting results, and quality metrics

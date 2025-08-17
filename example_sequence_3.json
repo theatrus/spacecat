@@ -1,0 +1,157 @@
+{
+  "Response": [
+    {
+      "GlobalTriggers": [
+        {
+          "Status": "CREATED",
+          "TimeToFlip": 4.191712046194445,
+          "Name": "Meridian Flip_Trigger"
+        },
+        {
+          "HFRTrendPercentage": 0,
+          "Name": "AF After HFR Increase_Trigger",
+          "SampleSize": 10,
+          "DeltaHFR": 5,
+          "Status": "CREATED",
+          "OriginalHFR": 0
+        },
+        {
+          "Name": "AF After Filter Change_Trigger",
+          "Status": "FINISHED"
+        },
+        {
+          "TargetTemperature": 5,
+          "DeltaTemperature": 0,
+          "Status": "CREATED",
+          "Name": "AF After Temperature Change_Trigger"
+        }
+      ]
+    },
+    {
+      "Items": [
+        {
+          "Items": [
+            {
+              "Name": "Robocopy Start",
+              "Status": "FINISHED"
+            },
+            {
+              "Temperature": -10,
+              "Status": "FINISHED",
+              "MinCoolingTime": 0,
+              "Name": "Cool Camera"
+            },
+            {
+              "Name": "Unpark Scope",
+              "Status": "FINISHED"
+            }
+          ],
+          "Conditions": [],
+          "Status": "FINISHED",
+          "Triggers": [],
+          "Name": "Basic Sequence Startup_Container"
+        }
+      ],
+      "Conditions": [],
+      "Status": "FINISHED",
+      "Triggers": [],
+      "Name": "Start_Container"
+    },
+    {
+      "Items": [
+        {
+          "Items": [
+            {
+              "Items": [],
+              "Conditions": [],
+              "Status": "RUNNING",
+              "Triggers": [
+                {
+                  "TargetDrift": 10,
+                  "Coordinates": {
+                    "Coordinates": {
+                      "RA": 0,
+                      "RAString": "00:00:00",
+                      "RADegrees": 0,
+                      "Dec": 0,
+                      "DecString": "00° 00' 00\"",
+                      "Epoch": "J2000",
+                      "DateTime": {
+                        "Now": "2025-08-16T22:31:30.0575448-07:00",
+                        "UtcNow": "2025-08-17T05:31:30.0575539Z"
+                      }
+                    },
+                    "RAHours": 0,
+                    "RAMinutes": 0,
+                    "RASeconds": 0,
+                    "NegativeDec": false,
+                    "DecDegrees": 0,
+                    "DecMinutes": 0,
+                    "DecSeconds": 0
+                  },
+                  "Status": "CREATED",
+                  "Drift": 0,
+                  "Name": "Center After Drift_Trigger"
+                }
+              ],
+              "Name": "Target Scheduler Container_Container"
+            }
+          ],
+          "Conditions": [],
+          "Status": "RUNNING",
+          "Triggers": [],
+          "Name": "Sequential Instruction Set_Container"
+        }
+      ],
+      "Conditions": [],
+      "Status": "RUNNING",
+      "Triggers": [],
+      "Name": "Targets_Container"
+    },
+    {
+      "Items": [
+        {
+          "Items": [
+            {
+              "Name": "Rotate by mechanical angle",
+              "Status": "CREATED"
+            },
+            {
+              "Items": [
+                {
+                  "MinWarmingTime": 1,
+                  "Status": "CREATED",
+                  "Name": "Warm Camera"
+                },
+                {
+                  "Name": "Park Scope",
+                  "Status": "CREATED"
+                }
+              ],
+              "Conditions": [],
+              "Status": "CREATED",
+              "Triggers": [],
+              "Name": "Parallel End of Sequence Instructions_Container"
+            },
+            {
+              "Name": "Robocopy Stop",
+              "Status": "CREATED"
+            }
+          ],
+          "Conditions": [],
+          "Status": "CREATED",
+          "Triggers": [],
+          "Name": "Basic Sequence End_Container"
+        }
+      ],
+      "Conditions": [],
+      "Status": "CREATED",
+      "Triggers": [],
+      "Name": "End_Container"
+    }
+  ],
+  "Error": "",
+  "StatusCode": 200,
+  "Success": true,
+  "Type": "API"
+}

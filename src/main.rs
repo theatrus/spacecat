@@ -1061,6 +1061,21 @@ fn display_last_events(events: &EventHistoryResponse, count: usize) {
                         previous.name, new.name
                     );
                 }
+                EventDetails::TargetStart {
+                    target_name,
+                    project_name,
+                    coordinates,
+                    rotation,
+                    ..
+                } => {
+                    println!("  Details: Target started: {}", target_name);
+                    println!("    Project: {}", project_name);
+                    println!(
+                        "    Coordinates: {} {}",
+                        coordinates.ra_string, coordinates.dec_string
+                    );
+                    println!("    Rotation: {}°", rotation);
+                }
             }
         }
 
@@ -1088,6 +1103,7 @@ fn get_event_type_info(event_name: &str) -> (&'static str, &'static str) {
         event_types::MOUNT_SLEW => ("🔭", "Mount slewing to target"),
         event_types::FOCUS_START => ("🔍", "Auto-focus started"),
         event_types::FOCUS_END => ("✅", "Auto-focus completed"),
+        event_types::TS_TARGETSTART => ("🎯", "Target started"),
         _ => ("📋", "System event"),
     }
 }
