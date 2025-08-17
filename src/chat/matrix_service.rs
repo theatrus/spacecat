@@ -1,7 +1,7 @@
 use super::{ChatMessage, ChatService};
 use async_trait::async_trait;
 use matrix_sdk::{
-    Client, Room,
+    Client, EncryptionState, Room,
     config::SyncSettings,
     ruma::{OwnedRoomId, events::room::message::RoomMessageEventContent},
 };
@@ -62,8 +62,11 @@ impl MatrixChatService {
         for room in &joined_rooms {
             let room_name = room.name().unwrap_or("Unnamed room".to_string());
             let member_count = room.active_members_count();
-            let is_encrypted = room.is_encrypted().await.unwrap_or(false);
-            let encryption_status = if is_encrypted { "🔒" } else { "🔓" };
+            let encryption_state = room.encryption_state();
+            let encryption_status = match encryption_state {
+                EncryptionState::Encrypted => "🔒",
+                _ => "🔓",
+            };
 
             println!(
                 "  - {} {} ({}) - {} members",
