@@ -24,9 +24,9 @@ mod implementation {
 
     // Service configuration constants
     const SERVICE_NAME: &str = "SpaceCat";
-    const SERVICE_DISPLAY_NAME: &str = "SpaceCat Discord Updater";
+    const SERVICE_DISPLAY_NAME: &str = "SpaceCat Chat Updater";
     const SERVICE_DESCRIPTION: &str =
-        "SpaceCat astronomical observation system Discord updater service";
+        "SpaceCat astronomical observation system chat updater service for Discord and Matrix";
 
     pub fn install_service() -> Result<(), Box<dyn std::error::Error>> {
         let manager_access = ServiceManagerAccess::CONNECT | ServiceManagerAccess::CREATE_SERVICE;
@@ -196,7 +196,7 @@ mod implementation {
         status_handle.set_service_status(next_status)?;
 
         // Run the actual service logic
-        let service_result = run_discord_updater_service(shutdown_rx);
+        let service_result = run_chat_updater_service(shutdown_rx);
 
         // Tell the system that service has stopped.
         status_handle.set_service_status(ServiceStatus {
@@ -216,7 +216,7 @@ mod implementation {
             .map_err(|_e| windows_service::Error::Winapi(std::io::Error::from_raw_os_error(1)))
     }
 
-    fn run_discord_updater_service(
+    fn run_chat_updater_service(
         shutdown_rx: mpsc::Receiver<()>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // Load configuration from Windows service location
@@ -241,7 +241,7 @@ mod implementation {
         let service_wrapper = ServiceWrapper::new(config)
             .map_err(|e| format!("Failed to create service wrapper: {}", e))?;
 
-        // Run the discord updater with graceful shutdown support
+        // Run the chat updater with graceful shutdown support
         service_wrapper.run_with_shutdown(shutdown_rx)
     }
 

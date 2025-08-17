@@ -119,7 +119,7 @@ impl ChatUpdater {
         }
     }
 
-    async fn initialize_baseline(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn initialize_baseline(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         println!("Fetching initial baseline...");
 
         // Load events and find latest TS-TARGETSTART
@@ -231,7 +231,7 @@ impl ChatUpdater {
         }
     }
 
-    async fn poll_events(&mut self) {
+    pub async fn poll_events(&mut self) {
         match self.client.get_event_history().await {
             Ok(events) => {
                 for event in events.response {
@@ -342,7 +342,7 @@ impl ChatUpdater {
         }
     }
 
-    async fn poll_sequence(&mut self) {
+    pub async fn poll_sequence(&mut self) {
         match self.client.get_sequence().await {
             Ok(sequence) => {
                 let new_sequence_target = extract_current_target(&sequence);
@@ -397,7 +397,7 @@ impl ChatUpdater {
         }
     }
 
-    async fn poll_images(&mut self) {
+    pub async fn poll_images(&mut self) {
         match self.client.get_all_image_history().await {
             Ok(images) => {
                 for (index, image) in images.response.iter().enumerate() {
