@@ -490,9 +490,10 @@ async fn cmd_poll(interval: u64, count: u32) -> Result<(), Box<dyn std::error::E
 
 async fn cmd_chat_updater(interval: u64) -> Result<(), SpaceCatError> {
     let config = Config::load_or_default();
-    let service_wrapper = ServiceWrapper::new(config)
-        .map_err(SpaceCatError::Service)?;
-    service_wrapper.run_cli(interval).await
+    let service_wrapper = ServiceWrapper::new(config).map_err(SpaceCatError::Service)?;
+    service_wrapper
+        .run_cli(interval)
+        .await
         .map_err(SpaceCatError::Service)
 }
 

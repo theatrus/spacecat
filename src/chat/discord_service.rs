@@ -9,18 +9,17 @@ pub struct DiscordChatService {
 
 impl DiscordChatService {
     pub fn new(webhook_url: &str) -> Result<Self, ChatError> {
-        let webhook = DiscordWebhook::new(webhook_url.to_string())
-            .map_err(|e| ChatError::Discord { message: e.to_string() })?;
+        let webhook =
+            DiscordWebhook::new(webhook_url.to_string()).map_err(|e| ChatError::Discord {
+                message: e.to_string(),
+            })?;
         Ok(Self { webhook })
     }
 }
 
 #[async_trait]
 impl ChatService for DiscordChatService {
-    async fn send_message(
-        &self,
-        message: &ChatMessage,
-    ) -> Result<(), ChatError> {
+    async fn send_message(&self, message: &ChatMessage) -> Result<(), ChatError> {
         let mut embed = Embed::new().title(&message.title);
 
         if let Some(color) = message.color {
@@ -41,8 +40,12 @@ impl ChatService for DiscordChatService {
             embed = embed.footer(footer_text, None);
         }
 
-        self.webhook.execute_with_embed(None, embed).await
-            .map_err(|e| ChatError::Discord { message: e.to_string() })?;
+        self.webhook
+            .execute_with_embed(None, embed)
+            .await
+            .map_err(|e| ChatError::Discord {
+                message: e.to_string(),
+            })?;
         Ok(())
     }
 
@@ -75,7 +78,9 @@ impl ChatService for DiscordChatService {
         self.webhook
             .execute_with_file(None, Some(embed), image_data, filename)
             .await
-            .map_err(|e| ChatError::Discord { message: e.to_string() })?;
+            .map_err(|e| ChatError::Discord {
+                message: e.to_string(),
+            })?;
         Ok(())
     }
 

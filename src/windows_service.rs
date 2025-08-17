@@ -242,7 +242,8 @@ mod implementation {
             .map_err(|e| format!("Failed to create service wrapper: {}", e))?;
 
         // Run the chat updater with graceful shutdown support
-        service_wrapper.run_with_shutdown(shutdown_rx)
+        service_wrapper
+            .run_with_shutdown(shutdown_rx)
             .map_err(|e| format!("Service error: {}", e).into())
     }
 

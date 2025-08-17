@@ -226,6 +226,8 @@ spacecat.exe windows-service uninstall
 - **Git**: For version control
 - **OpenSSL development headers**: For HTTPS support
 
+**Note**: SQLite is bundled statically, so no external SQLite installation is required.
+
 ```bash
 # Fedora/RHEL/CentOS
 sudo dnf install rust cargo openssl-devel git

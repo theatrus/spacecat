@@ -20,12 +20,12 @@ impl MatrixChatService {
         password: &str,
         room_id: &str,
     ) -> Result<Self, ChatError> {
-        let homeserver_url = Url::parse(homeserver_url)
-            .map_err(|e| ChatError::Initialization {
-                service_name: "Matrix".to_string(),
-                reason: format!("Invalid homeserver URL: {}", e),
-            })?;
-        let client = Client::new(homeserver_url).await
+        let homeserver_url = Url::parse(homeserver_url).map_err(|e| ChatError::Initialization {
+            service_name: "Matrix".to_string(),
+            reason: format!("Invalid homeserver URL: {}", e),
+        })?;
+        let client = Client::new(homeserver_url)
+            .await
             .map_err(|e| ChatError::Initialization {
                 service_name: "Matrix".to_string(),
                 reason: format!("Failed to create Matrix client: {}", e),
@@ -95,11 +95,10 @@ impl MatrixChatService {
             }
         });
 
-        let room_id: OwnedRoomId = room_id.try_into()
-            .map_err(|e| ChatError::Initialization {
-                service_name: "Matrix".to_string(),
-                reason: format!("Invalid room ID: {}", e),
-            })?;
+        let room_id: OwnedRoomId = room_id.try_into().map_err(|e| ChatError::Initialization {
+            service_name: "Matrix".to_string(),
+            reason: format!("Invalid room ID: {}", e),
+        })?;
 
         // Verify the target room is accessible
         if let Some(target_room) = client.get_room(&room_id) {
@@ -145,16 +144,14 @@ impl MatrixChatService {
 
 #[async_trait]
 impl ChatService for MatrixChatService {
-    async fn send_message(
-        &self,
-        message: &ChatMessage,
-    ) -> Result<(), ChatError> {
+    async fn send_message(&self, message: &ChatMessage) -> Result<(), ChatError> {
         let room = self.get_room().await?;
         let formatted_message = self.format_message(message);
 
         let content =
             RoomMessageEventContent::text_html(formatted_message.clone(), formatted_message);
-        room.send(content).await
+        room.send(content)
+            .await
             .map_err(|e| ChatError::MessageSend {
                 service_name: "Matrix".to_string(),
                 reason: e.to_string(),
@@ -175,7 +172,8 @@ impl ChatService for MatrixChatService {
         let formatted_message = self.format_message(message);
         let content =
             RoomMessageEventContent::text_html(formatted_message.clone(), formatted_message);
-        room.send(content).await
+        room.send(content)
+            .await
             .map_err(|e| ChatError::MessageSend {
                 service_name: "Matrix".to_string(),
                 reason: e.to_string(),
@@ -190,7 +188,8 @@ impl ChatService for MatrixChatService {
             "image/jpeg" // Default fallback
         };
 
-        let mime = mime_type.parse::<mime::Mime>()
+        let mime = mime_type
+            .parse::<mime::Mime>()
             .map_err(|e| ChatError::MessageSend {
                 service_name: "Matrix".to_string(),
                 reason: format!("Invalid MIME type: {}", e),
