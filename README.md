@@ -4,7 +4,7 @@
 [![Rust](https://img.shields.io/badge/rust-1.89+-orange.svg)](https://www.rust-lang.org)
 [![Build Status](https://github.com/theatrus/spacecat/workflows/CI/badge.svg)](https://github.com/theatrus/spacecat/actions)
 
-**SpaceCat** is a Rust-based tool for posting to Discord events from a [NINA](https://nighttime-imaging.eu)
+**SpaceCat** is a Rust-based tool for posting events to multiple chat services (Discord, Matrix) from a [NINA](https://nighttime-imaging.eu)
 installation, specifically using the [Advanced API](https://github.com/christian-photo/ninaAPI) extension.
 
 ## On Vibe Coding
@@ -69,11 +69,20 @@ running it on the same system.
   "logging": {
     "level": "info"
   },
-  "discord": {
-    "enabled": true,
-    "webhook_url": "https://discord.com/api/webhooks/YOUR_WEBHOOK_URL",
-    "image_cooldown_seconds": 60
-  }
+  "chat": {
+    "discord": {
+      "enabled": true,
+      "webhook_url": "https://discord.com/api/webhooks/YOUR_WEBHOOK_URL"
+    },
+    "matrix": {
+      "homeserver_url": "https://matrix.example.com",
+      "username": "@spacecat:matrix.example.com",
+      "password": "your_matrix_password",
+      "room_id": "!roomid:matrix.example.com",
+      "enabled": false
+    }
+  },
+  "image_cooldown_seconds": 60
 }
 ```
 
@@ -108,8 +117,8 @@ spacecat get-thumbnail 5 --output "image_5.jpg" --image-type "LIGHT"
 # Poll for new events (5 cycles, 2 second intervals)
 spacecat poll --interval 2 --count 5
 
-# Start continuous Discord updates (recommended)
-spacecat discord-updater --interval 5
+# Start continuous chat updates (recommended)
+spacecat chat-updater --interval 5
 
 # Get latest autofocus results
 spacecat last-autofocus
@@ -160,6 +169,54 @@ spacecat.exe windows-service uninstall
 ```
 
 **Note**: Windows service functionality is automatically available when running on Windows.
+
+## ✨ Features
+
+- **Multi-Platform Chat**: Send notifications to Discord and/or Matrix simultaneously
+- **Smart Target Tracking**: Automatically detects actual observation targets from TS-TARGETSTART events
+- **Real-time Monitoring**: Live updates for equipment events, image captures, and autofocus sessions
+- **Rich Notifications**: Color-coded embeds with detailed telescope status and metadata
+- **Auto-Configuration**: Matrix bot auto-joins room invitations and shows startup status
+- **Image Sharing**: Automatic thumbnail downloads and sharing with configurable cooldowns
+- **Windows Service**: Production-ready background service support on Windows
+- **Comprehensive CLI**: Full command-line interface for all functionality
+
+## 🤖 Chat Services
+
+### Discord Setup
+
+1. Create a Discord webhook in your server:
+   - Go to Server Settings → Integrations → Webhooks
+   - Create a new webhook and copy the URL
+   - Add the URL to your `config.json`
+
+### Matrix Setup
+
+1. Create a Matrix account and room:
+   - Register an account on your Matrix homeserver
+   - Create or join a room for SpaceCat notifications
+   - Get the room ID (starts with `!`)
+
+2. Configure Matrix in `config.json`:
+   ```json
+   {
+     "chat": {
+       "matrix": {
+         "homeserver_url": "https://matrix.org",
+         "username": "@spacecat:matrix.org", 
+         "password": "your_password",
+         "room_id": "!your_room_id:matrix.org",
+         "enabled": true
+       }
+     }
+   }
+   ```
+
+3. SpaceCat will automatically:
+   - Log into Matrix with provided credentials
+   - Join any pending room invitations
+   - List all joined rooms on startup
+   - Send formatted messages with telescope data
 
 ## 🏗️ Development
 
@@ -218,15 +275,24 @@ cargo fmt
 }
 ```
 
-### Discord Integration
+### Chat Service Integration
 
 ```json
 {
-  "discord": {
-    "enabled": true,                            // Enable Discord notifications
-    "webhook_url": "https://discord.com/...",  // Discord webhook URL
-    "image_cooldown_seconds": 60               // Cooldown between image posts
-  }
+  "chat": {
+    "discord": {
+      "enabled": true,                          // Enable Discord notifications
+      "webhook_url": "https://discord.com/..." // Discord webhook URL
+    },
+    "matrix": {
+      "homeserver_url": "https://matrix.org",   // Matrix homeserver URL
+      "username": "@bot:matrix.org",            // Matrix username
+      "password": "password",                   // Matrix password
+      "room_id": "!room:matrix.org",            // Target room ID
+      "enabled": false                          // Enable Matrix notifications
+    }
+  },
+  "image_cooldown_seconds": 60                 // Cooldown between image posts
 }
 ```
 

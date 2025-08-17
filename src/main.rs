@@ -4,7 +4,6 @@ use spacecat::{
     api::SpaceCatApiClient,
     autofocus::AutofocusResponse,
     config::Config,
-    discord_updater,
     events::{EventDetails, EventHistoryResponse, event_types},
     images::ImageHistoryResponse,
     mount::MountInfoResponse,
@@ -13,6 +12,7 @@ use spacecat::{
         SequenceResponse, extract_current_target, extract_meridian_flip_time,
         meridian_flip_time_formatted_with_clock,
     },
+    service_wrapper::ServiceWrapper,
 };
 
 #[cfg(windows)]
@@ -72,8 +72,8 @@ enum Commands {
         #[arg(short, long, default_value = "5")]
         count: u32,
     },
-    /// Update Discord with events and images in real-time
-    DiscordUpdater {
+    /// Update chat services with events and images in real-time
+    ChatUpdater {
         /// Poll interval in seconds
         #[arg(short, long, default_value = "5")]
         interval: u64,
@@ -158,9 +158,9 @@ async fn main() {
                 std::process::exit(1);
             }
         }
-        Commands::DiscordUpdater { interval } => {
-            if let Err(e) = cmd_discord_updater(interval).await {
-                eprintln!("DiscordUpdater command failed: {e}");
+        Commands::ChatUpdater { interval } => {
+            if let Err(e) = cmd_chat_updater(interval).await {
+                eprintln!("ChatUpdater command failed: {e}");
                 std::process::exit(1);
             }
         }
@@ -487,22 +487,10 @@ async fn cmd_poll(interval: u64, count: u32) -> Result<(), Box<dyn std::error::E
     Ok(())
 }
 
-async fn cmd_discord_updater(interval: u64) -> Result<(), Box<dyn std::error::Error>> {
+async fn cmd_chat_updater(interval: u64) -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::load_or_default();
-    let client = SpaceCatApiClient::new(config.api)?;
-
-    let mut updater = discord_updater::DiscordUpdater::new(client);
-
-    if let Some(discord_config) = config.discord {
-        updater = updater.with_discord_image_cooldown(discord_config.image_cooldown_seconds);
-
-        if discord_config.enabled {
-            updater = updater.with_discord_webhook(&discord_config.webhook_url)?;
-        }
-    }
-
-    updater.start_polling(Duration::from_secs(interval)).await;
-    Ok(())
+    let service_wrapper = ServiceWrapper::new(config)?;
+    service_wrapper.run_cli(interval).await
 }
 
 async fn cmd_last_autofocus() -> Result<(), Box<dyn std::error::Error>> {

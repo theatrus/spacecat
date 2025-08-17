@@ -1,6 +1,7 @@
 use crate::api::SpaceCatApiClient;
 use crate::autofocus::AutofocusResponse;
-use crate::discord::{DiscordWebhook, Embed, colors};
+use crate::chat::{ChatField, ChatMessage, ChatServiceManager};
+use crate::discord::colors;
 use crate::events::{Event, EventDetails, TargetCoordinates, event_types};
 use crate::images::ImageMetadata;
 use crate::sequence::{
@@ -27,14 +28,14 @@ enum TargetSource {
     TsTargetStart,
 }
 
-/// State management for the Discord updater
+/// State management for the chat updater
 struct UpdaterState {
     events_seen: HashSet<String>,
     images_seen: HashSet<String>,
     current_target: Option<TargetInfo>,
     meridian_flip_time: Option<f64>,
     sequence: Option<SequenceResponse>,
-    last_discord_image_time: Option<Instant>,
+    last_image_time: Option<Instant>,
     skipped_images_count: u32,
 }
 
@@ -46,7 +47,7 @@ impl UpdaterState {
             current_target: None,
             meridian_flip_time: None,
             sequence: None,
-            last_discord_image_time: None,
+            last_image_time: None,
             skipped_images_count: 0,
         }
     }
@@ -68,39 +69,40 @@ impl UpdaterState {
     }
 }
 
-/// Simplified Discord updater
-pub struct DiscordUpdater {
+/// Multi-service chat updater
+pub struct ChatUpdater {
     client: SpaceCatApiClient,
     state: UpdaterState,
-    discord_webhook: Option<DiscordWebhook>,
-    discord_image_cooldown: Duration,
+    chat_manager: ChatServiceManager,
+    image_cooldown: Duration,
 }
 
-impl DiscordUpdater {
+impl ChatUpdater {
     pub fn new(client: SpaceCatApiClient) -> Self {
         Self {
             client,
             state: UpdaterState::new(),
-            discord_webhook: None,
-            discord_image_cooldown: Duration::from_secs(60),
+            chat_manager: ChatServiceManager::new(),
+            image_cooldown: Duration::from_secs(60),
         }
     }
 
-    pub fn with_discord_webhook(
-        mut self,
-        webhook_url: &str,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
-        self.discord_webhook = Some(DiscordWebhook::new(webhook_url.to_string())?);
-        Ok(self)
+    pub fn with_chat_manager(mut self, chat_manager: ChatServiceManager) -> Self {
+        self.chat_manager = chat_manager;
+        self
     }
 
-    pub fn with_discord_image_cooldown(mut self, cooldown_seconds: u64) -> Self {
-        self.discord_image_cooldown = Duration::from_secs(cooldown_seconds);
+    pub fn with_image_cooldown(mut self, cooldown_seconds: u64) -> Self {
+        self.image_cooldown = Duration::from_secs(cooldown_seconds);
         self
     }
 
     pub async fn start_polling(&mut self, poll_interval: Duration) {
-        println!("Starting Discord updater loop (events and images)...");
+        println!("Starting chat updater loop (events and images)...");
+        println!(
+            "Chat services configured: {}",
+            self.chat_manager.service_count()
+        );
         println!("Polling interval: {poll_interval:?}");
         println!("Press Ctrl+C to stop\n");
 
@@ -117,12 +119,37 @@ impl DiscordUpdater {
         }
     }
 
-    async fn initialize_baseline(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn initialize_baseline(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         println!("Fetching initial baseline...");
 
         // Load events and find latest TS-TARGETSTART
         let events = self.client.get_event_history().await?;
         self.process_baseline_events(&events.response);
+
+        // Load sequence to get meridian flip time and potential sequence target
+        match self.client.get_sequence().await {
+            Ok(sequence) => {
+                self.state.meridian_flip_time = extract_meridian_flip_time(&sequence);
+
+                // Only use sequence target if no TS-TARGETSTART target was found
+                if self.state.current_target.is_none()
+                    && let Some(target_name) = extract_current_target(&sequence)
+                {
+                    self.state.current_target = Some(TargetInfo {
+                        name: target_name,
+                        source: TargetSource::Sequence,
+                        coordinates: None,
+                        project: None,
+                        rotation: None,
+                    });
+                }
+
+                self.state.sequence = Some(sequence);
+            }
+            Err(e) => {
+                println!("Could not load sequence during initialization: {e}");
+            }
+        }
 
         // Load images
         let images = self.client.get_all_image_history().await?;
@@ -143,6 +170,12 @@ impl DiscordUpdater {
         }
 
         println!("Now monitoring for new events and images...\n");
+
+        // Send welcome message to chat services
+        if self.chat_manager.service_count() > 0 {
+            self.send_welcome_message().await;
+        }
+
         Ok(())
     }
 
@@ -198,7 +231,7 @@ impl DiscordUpdater {
         }
     }
 
-    async fn poll_events(&mut self) {
+    pub async fn poll_events(&mut self) {
         match self.client.get_event_history().await {
             Ok(events) => {
                 for event in events.response {
@@ -269,13 +302,12 @@ impl DiscordUpdater {
                 self.state.current_target = Some(new_target.clone());
                 println!("[TS-TARGETSTART] Target: {}", target_name);
 
-                if let Some(webhook) = &self.discord_webhook {
+                if self.chat_manager.service_count() > 0 {
                     if let Some(old) = old_target {
-                        self.send_target_change_notification(webhook, &old, &new_target)
+                        self.send_target_change_notification(&old, &new_target)
                             .await;
                     } else {
-                        self.send_target_start_notification(webhook, &new_target)
-                            .await;
+                        self.send_target_start_notification(&new_target).await;
                     }
                 }
             }
@@ -290,9 +322,8 @@ impl DiscordUpdater {
             Ok(autofocus_data) => {
                 self.display_autofocus_results(&autofocus_data);
 
-                if let Some(webhook) = &self.discord_webhook {
-                    self.send_autofocus_notification(webhook, &autofocus_data)
-                        .await;
+                if self.chat_manager.service_count() > 0 {
+                    self.send_autofocus_notification(&autofocus_data).await;
                 }
             }
             Err(e) => eprintln!("Failed to fetch autofocus data: {e}"),
@@ -300,18 +331,18 @@ impl DiscordUpdater {
     }
 
     async fn handle_mount_event(&self, event: &Event) {
-        if let Some(webhook) = &self.discord_webhook {
-            self.send_mount_event_notification(webhook, event).await;
+        if self.chat_manager.service_count() > 0 {
+            self.send_mount_event_notification(event).await;
         }
     }
 
     async fn handle_generic_event(&self, event: &Event) {
-        if let Some(webhook) = &self.discord_webhook {
-            self.send_generic_event_notification(webhook, event).await;
+        if self.chat_manager.service_count() > 0 {
+            self.send_generic_event_notification(event).await;
         }
     }
 
-    async fn poll_sequence(&mut self) {
+    pub async fn poll_sequence(&mut self) {
         match self.client.get_sequence().await {
             Ok(sequence) => {
                 let new_sequence_target = extract_current_target(&sequence);
@@ -347,13 +378,12 @@ impl DiscordUpdater {
                         self.state.current_target = Some(new_target.clone());
                         println!("[SEQUENCE TARGET] {}", target_name);
 
-                        if let Some(webhook) = &self.discord_webhook {
+                        if self.chat_manager.service_count() > 0 {
                             if let Some(old) = old_target {
-                                self.send_target_change_notification(webhook, &old, &new_target)
+                                self.send_target_change_notification(&old, &new_target)
                                     .await;
                             } else {
-                                self.send_target_start_notification(webhook, &new_target)
-                                    .await;
+                                self.send_target_start_notification(&new_target).await;
                             }
                         }
                     }
@@ -367,16 +397,15 @@ impl DiscordUpdater {
         }
     }
 
-    async fn poll_images(&mut self) {
+    pub async fn poll_images(&mut self) {
         match self.client.get_all_image_history().await {
             Ok(images) => {
                 for (index, image) in images.response.iter().enumerate() {
                     if !self.state.has_seen_image(image) {
                         self.print_new_image(image);
 
-                        let webhook_url = self.discord_webhook.clone();
-                        if let Some(webhook) = webhook_url {
-                            self.handle_new_image(&webhook, image, index).await;
+                        if self.chat_manager.service_count() > 0 {
+                            self.handle_new_image(image, index).await;
                         }
                     }
                 }
@@ -385,21 +414,16 @@ impl DiscordUpdater {
         }
     }
 
-    async fn handle_new_image(
-        &mut self,
-        webhook: &DiscordWebhook,
-        image: &ImageMetadata,
-        index: usize,
-    ) {
-        let should_send = match self.state.last_discord_image_time {
+    async fn handle_new_image(&mut self, image: &ImageMetadata, index: usize) {
+        let should_send = match self.state.last_image_time {
             None => true,
-            Some(last_time) => last_time.elapsed() >= self.discord_image_cooldown,
+            Some(last_time) => last_time.elapsed() >= self.image_cooldown,
         };
 
         if should_send {
-            self.send_image_notification(webhook, image, index, self.state.skipped_images_count)
+            self.send_image_notification(image, index, self.state.skipped_images_count)
                 .await;
-            self.state.last_discord_image_time = Some(Instant::now());
+            self.state.last_image_time = Some(Instant::now());
             if self.state.skipped_images_count > 0 {
                 println!(
                     "  Sent image to Discord (including {} skipped images)",
@@ -409,10 +433,9 @@ impl DiscordUpdater {
             self.state.skipped_images_count = 0;
         } else {
             self.state.skipped_images_count += 1;
-            let remaining =
-                self.discord_image_cooldown - self.state.last_discord_image_time.unwrap().elapsed();
+            let remaining = self.image_cooldown - self.state.last_image_time.unwrap().elapsed();
             println!(
-                "  Skipping Discord notification (cooldown: {:.0}s remaining)",
+                "  Skipping chat notification (cooldown: {:.0}s remaining)",
                 remaining.as_secs_f32()
             );
         }
@@ -467,24 +490,85 @@ impl DiscordUpdater {
         println!("  Best R-squared: {:.4}", af.get_best_r_squared());
     }
 
-    // Discord notification methods
+    // Chat notification methods
+    async fn send_welcome_message(&self) {
+        let mut message =
+            ChatMessage::new("🚀 SpaceCat Observatory Monitor Started").color(colors::GREEN);
+
+        // Add current target information
+        if let Some(target) = &self.state.current_target {
+            message = message.field("Current Target", &target.name, false);
+
+            if let Some(project) = &target.project {
+                message = message.field("Project", project, true);
+            }
+
+            if let Some(coords) = &target.coordinates {
+                message = message.field(
+                    "Coordinates",
+                    &format!("RA: {}\nDec: {}", coords.ra_string, coords.dec_string),
+                    false,
+                );
+            }
+
+            if let Some(rotation) = &target.rotation {
+                message = message.field("Rotation", &format!("{}°", rotation), true);
+            }
+
+            let source_text = match target.source {
+                TargetSource::TsTargetStart => "TS-TARGETSTART event",
+                TargetSource::Sequence => "Sequence file",
+            };
+            message = message.field("Target Source", source_text, true);
+        } else {
+            message = message.field("Current Target", "None detected", false);
+        }
+
+        // Add baseline information
+        message = message
+            .field(
+                "Events in History",
+                &self.state.events_seen.len().to_string(),
+                true,
+            )
+            .field(
+                "Images in History",
+                &self.state.images_seen.len().to_string(),
+                true,
+            )
+            .field(
+                "Chat Services",
+                &self.chat_manager.service_count().to_string(),
+                true,
+            );
+
+        // Add meridian flip info if available
+        self.add_meridian_flip_info(&mut message);
+
+        // Add mount info
+        self.add_mount_info(&mut message).await;
+
+        message = message.footer("Ready to monitor telescope events and images");
+
+        self.chat_manager.send_message(&message).await;
+    }
+
     async fn send_target_change_notification(
         &self,
-        webhook: &DiscordWebhook,
         old_target: &TargetInfo,
         new_target: &TargetInfo,
     ) {
-        let mut notification = DiscordNotification::new("🎯 Target Change")
+        let mut message = ChatMessage::new("🎯 Target Change")
             .color(colors::CYAN)
             .field("Previous Target", &old_target.name, true)
             .field("New Target", &new_target.name, true);
 
         if let Some(project) = &new_target.project {
-            notification = notification.field("Project", project, true);
+            message = message.field("Project", project, true);
         }
 
         if let Some(coords) = &new_target.coordinates {
-            notification = notification.field(
+            message = message.field(
                 "Coordinates",
                 &format!("RA: {}\nDec: {}", coords.ra_string, coords.dec_string),
                 false,
@@ -492,27 +576,25 @@ impl DiscordUpdater {
         }
 
         if let Some(rotation) = &new_target.rotation {
-            notification = notification.field("Rotation", &format!("{}°", rotation), true);
+            message = message.field("Rotation", &format!("{}°", rotation), true);
         }
 
-        let notification = notification
-            .with_meridian_flip(&self.state.meridian_flip_time)
-            .with_mount_info(&self.client)
-            .await;
-        notification.send(webhook).await;
+        self.add_meridian_flip_info(&mut message);
+        self.add_mount_info(&mut message).await;
+        self.chat_manager.send_message(&message).await;
     }
 
-    async fn send_target_start_notification(&self, webhook: &DiscordWebhook, target: &TargetInfo) {
-        let mut notification = DiscordNotification::new("🎯 Target Started")
+    async fn send_target_start_notification(&self, target: &TargetInfo) {
+        let mut message = ChatMessage::new("🎯 Target Started")
             .color(colors::GREEN)
             .field("Target", &target.name, false);
 
         if let Some(project) = &target.project {
-            notification = notification.field("Project", project, true);
+            message = message.field("Project", project, true);
         }
 
         if let Some(coords) = &target.coordinates {
-            notification = notification.field(
+            message = message.field(
                 "Coordinates",
                 &format!("RA: {}\nDec: {}", coords.ra_string, coords.dec_string),
                 false,
@@ -520,17 +602,15 @@ impl DiscordUpdater {
         }
 
         if let Some(rotation) = &target.rotation {
-            notification = notification.field("Rotation", &format!("{}°", rotation), true);
+            message = message.field("Rotation", &format!("{}°", rotation), true);
         }
 
-        let notification = notification
-            .with_meridian_flip(&self.state.meridian_flip_time)
-            .with_mount_info(&self.client)
-            .await;
-        notification.send(webhook).await;
+        self.add_meridian_flip_info(&mut message);
+        self.add_mount_info(&mut message).await;
+        self.chat_manager.send_message(&message).await;
     }
 
-    async fn send_autofocus_notification(&self, webhook: &DiscordWebhook, af: &AutofocusResponse) {
+    async fn send_autofocus_notification(&self, af: &AutofocusResponse) {
         if !af.success {
             return;
         }
@@ -551,7 +631,7 @@ impl DiscordUpdater {
             position_change.to_string()
         };
 
-        DiscordNotification::new(&format!("{success_indicator} Autofocus Completed"))
+        let message = ChatMessage::new(&format!("{success_indicator} Autofocus Completed"))
             .color(color)
             .field("Filter", &af_data.filter, true)
             .field("Method", &af_data.method, true)
@@ -582,12 +662,12 @@ impl DiscordUpdater {
                 &af_data.measure_points.len().to_string(),
                 true,
             )
-            .footer(&format!("Focuser: {}", af_data.auto_focuser_name))
-            .send(webhook)
-            .await;
+            .footer(&format!("Focuser: {}", af_data.auto_focuser_name));
+
+        self.chat_manager.send_message(&message).await;
     }
 
-    async fn send_mount_event_notification(&self, webhook: &DiscordWebhook, event: &Event) {
+    async fn send_mount_event_notification(&self, event: &Event) {
         let (title, color) = match event.event.as_str() {
             event_types::MOUNT_BEFORE_FLIP => {
                 ("🔄 Mount Preparing for Meridian Flip", colors::ORANGE)
@@ -597,33 +677,32 @@ impl DiscordUpdater {
             _ => ("🔭 Mount Event", colors::GRAY),
         };
 
-        let mut notification = DiscordNotification::new(title)
+        let mut message = ChatMessage::new(title)
             .color(color)
             .field("Event", &event.event, true)
             .field("Time", &event.time, true);
 
         if let Some(target) = &self.state.current_target {
-            notification = notification.field("Current Target", &target.name, true);
+            message = message.field("Current Target", &target.name, true);
         }
 
-        let notification = notification.with_mount_info(&self.client).await;
-        notification.send(webhook).await;
+        self.add_mount_info(&mut message).await;
+        self.chat_manager.send_message(&message).await;
     }
 
-    async fn send_generic_event_notification(&self, webhook: &DiscordWebhook, event: &Event) {
+    async fn send_generic_event_notification(&self, event: &Event) {
         let color = get_event_color(&event.event);
         let title = get_event_title(&event.event);
 
-        let mut notification =
-            DiscordNotification::new(&title)
-                .color(color)
-                .field("Time", &event.time, false);
+        let mut message = ChatMessage::new(&title)
+            .color(color)
+            .field("Time", &event.time, false);
 
         // Add event-specific details
         if let Some(details) = &event.details {
             match details {
                 EventDetails::FilterWheelChange { new, previous } => {
-                    notification = notification
+                    message = message
                         .field(
                             "Filter Change",
                             &format!("{} → {}", previous.name, new.name),
@@ -643,12 +722,11 @@ impl DiscordUpdater {
             }
         }
 
-        notification.send(webhook).await;
+        self.chat_manager.send_message(&message).await;
     }
 
     async fn send_image_notification(
         &self,
-        webhook: &DiscordWebhook,
         image: &ImageMetadata,
         index: usize,
         skipped_count: u32,
@@ -670,21 +748,21 @@ impl DiscordUpdater {
             format!("📸 New {} Frame Captured", image.image_type)
         };
 
-        let mut notification = DiscordNotification::new(&title).color(color);
+        let mut message = ChatMessage::new(&title).color(color);
 
         if let Some(target) = &self.state.current_target {
-            notification = notification.field("Target", &target.name, true);
+            message = message.field("Target", &target.name, true);
         }
 
         if skipped_count > 0 {
-            notification = notification.field(
+            message = message.field(
                 "Images Since Last Post",
                 &format!("{} images", skipped_count + 1),
                 true,
             );
         }
 
-        notification = notification
+        message = message
             .field("Camera", &image.camera_name, true)
             .field("Tracking RMS", &image.rms_text, true)
             .field("Filter", &image.filter, true)
@@ -704,145 +782,63 @@ impl DiscordUpdater {
             .map(|&h| h <= 1.0)
             .unwrap_or(false)
         {
-            notification = notification.with_meridian_flip(&self.state.meridian_flip_time);
+            self.add_meridian_flip_info(&mut message);
         }
 
-        // Try to attach thumbnail
-        notification
-            .send_with_thumbnail(webhook, &self.client, index as u32)
+        // Send message with thumbnail
+        self.chat_manager
+            .send_message_with_image(&message, &self.client, index as u32)
             .await;
     }
 }
 
-// Discord notification builder
-struct DiscordNotification {
-    title: String,
-    color: u32,
-    fields: Vec<(String, String, bool)>,
-    footer: Option<String>,
-}
-
-impl DiscordNotification {
-    fn new(title: &str) -> Self {
-        Self {
-            title: title.to_string(),
-            color: colors::GRAY,
-            fields: Vec::new(),
-            footer: None,
+impl ChatUpdater {
+    /// Add meridian flip information to a message
+    fn add_meridian_flip_info(&self, message: &mut ChatMessage) {
+        if let Some(hours) = self.state.meridian_flip_time {
+            let formatted = meridian_flip_time_formatted_with_clock(hours);
+            message.fields.push(ChatField {
+                name: "Meridian Flip In".to_string(),
+                value: formatted,
+                inline: true,
+            });
         }
     }
 
-    fn color(mut self, color: u32) -> Self {
-        self.color = color;
-        self
-    }
-
-    fn field(mut self, name: &str, value: &str, inline: bool) -> Self {
-        self.fields
-            .push((name.to_string(), value.to_string(), inline));
-        self
-    }
-
-    fn footer(mut self, text: &str) -> Self {
-        self.footer = Some(text.to_string());
-        self
-    }
-
-    fn with_meridian_flip(mut self, meridian_flip_time: &Option<f64>) -> Self {
-        if let Some(hours) = meridian_flip_time {
-            let formatted = meridian_flip_time_formatted_with_clock(*hours);
-            self.fields
-                .push(("Meridian Flip In".to_string(), formatted, true));
-        }
-        self
-    }
-
-    async fn with_mount_info(mut self, client: &SpaceCatApiClient) -> Self {
-        if let Ok(mount_info) = client.get_mount_info().await
+    /// Add mount information to a message
+    async fn add_mount_info(&self, message: &mut ChatMessage) {
+        if let Ok(mount_info) = self.client.get_mount_info().await
             && mount_info.is_connected()
         {
             let (ra, dec) = mount_info.get_coordinates();
             let (alt, az) = mount_info.get_alt_az();
 
-            self.fields.push((
-                "Mount Position".to_string(),
-                format!("RA: {ra}\nDec: {dec}"),
-                true,
-            ));
-            self.fields
-                .push(("Alt/Az".to_string(), format!("Alt: {alt}\nAz: {az}"), true));
-            self.fields.push((
-                "Pier Side".to_string(),
-                mount_info.get_side_of_pier().to_string(),
-                true,
-            ));
+            message.fields.push(ChatField {
+                name: "Mount Position".to_string(),
+                value: format!("RA: {ra}\nDec: {dec}"),
+                inline: true,
+            });
+            message.fields.push(ChatField {
+                name: "Alt/Az".to_string(),
+                value: format!("Alt: {alt}\nAz: {az}"),
+                inline: true,
+            });
+            message.fields.push(ChatField {
+                name: "Pier Side".to_string(),
+                value: mount_info.get_side_of_pier().to_string(),
+                inline: true,
+            });
 
             let tracking_status = if mount_info.response.tracking_enabled {
                 "✅ Enabled"
             } else {
                 "❌ Disabled"
             };
-            self.fields
-                .push(("Tracking".to_string(), tracking_status.to_string(), true));
-        }
-        self
-    }
-
-    async fn send(self, webhook: &DiscordWebhook) {
-        let mut embed = Embed::new()
-            .title(&self.title)
-            .color(self.color)
-            .timestamp(&chrono::Utc::now().to_rfc3339());
-
-        for (name, value, inline) in self.fields {
-            embed = embed.field(&name, &value, inline);
-        }
-
-        if let Some(footer_text) = self.footer {
-            embed = embed.footer(&footer_text, None);
-        }
-
-        if let Err(e) = webhook.execute_with_embed(None, embed).await {
-            eprintln!("Failed to send Discord notification: {e}");
-        }
-    }
-
-    async fn send_with_thumbnail(
-        self,
-        webhook: &DiscordWebhook,
-        client: &SpaceCatApiClient,
-        image_index: u32,
-    ) {
-        let mut embed = Embed::new()
-            .title(&self.title)
-            .color(self.color)
-            .timestamp(&chrono::Utc::now().to_rfc3339());
-
-        for (name, value, inline) in self.fields {
-            embed = embed.field(&name, &value, inline);
-        }
-
-        if let Some(footer_text) = self.footer {
-            embed = embed.footer(&footer_text, None);
-        }
-
-        // Try to download and attach thumbnail
-        match client.get_thumbnail(image_index).await {
-            Ok(thumbnail_data) => {
-                let filename = format!("thumbnail_{}.jpg", image_index);
-                if let Err(e) = webhook
-                    .execute_with_file(None, Some(embed), &thumbnail_data.data, &filename)
-                    .await
-                {
-                    eprintln!("Failed to send image with thumbnail to Discord: {e}");
-                }
-            }
-            Err(e) => {
-                eprintln!("Failed to download thumbnail for image {image_index}: {e}");
-                if let Err(e) = webhook.execute_with_embed(None, embed).await {
-                    eprintln!("Failed to send image to Discord: {e}");
-                }
-            }
+            message.fields.push(ChatField {
+                name: "Tracking".to_string(),
+                value: tracking_status.to_string(),
+                inline: true,
+            });
         }
     }
 }

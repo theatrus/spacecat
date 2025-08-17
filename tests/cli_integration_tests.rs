@@ -14,7 +14,7 @@ mod tests {
         assert!(output.status.success());
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(stdout.contains("SpaceCat"));
-        assert!(stdout.contains("discord-updater"));
+        assert!(stdout.contains("chat-updater"));
     }
 
     #[cfg(windows)]
@@ -64,7 +64,7 @@ mod tests {
         assert!(stdout.contains("sequence"));
         assert!(stdout.contains("events"));
         assert!(stdout.contains("images"));
-        assert!(stdout.contains("discord-updater"));
+        assert!(stdout.contains("chat-updater"));
         assert!(stdout.contains("mount-info"));
     }
 }

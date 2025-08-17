@@ -1,8 +1,9 @@
 //! Service wrapper abstraction for running SpaceCat as CLI or background service
 
 use crate::api::SpaceCatApiClient;
+use crate::chat::{ChatServiceManager, DiscordChatService, MatrixChatService};
+use crate::chat_updater::ChatUpdater;
 use crate::config::Config;
-use crate::discord_updater::DiscordUpdater;
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -15,36 +16,62 @@ impl ServiceWrapper {
         Ok(Self { config })
     }
 
-    /// Run the discord updater as a regular CLI application
+    /// Run the chat updater as a regular CLI application
     pub async fn run_cli(&self, interval: u64) -> Result<(), Box<dyn std::error::Error>> {
-        println!("Starting SpaceCat Discord Updater...");
-        println!("Press Ctrl+C to stop\n");
+        let mut chat_updater = self.create_chat_updater().await?;
+        chat_updater
+            .start_polling(Duration::from_secs(interval))
+            .await;
+        Ok(())
+    }
 
+    /// Create a configured ChatUpdater instance
+    pub async fn create_chat_updater(&self) -> Result<ChatUpdater, Box<dyn std::error::Error>> {
+        // Create API client
         let client = SpaceCatApiClient::new(self.config.api.clone())?;
-        let mut poller = DiscordUpdater::new(client);
 
-        // Check for Discord webhook configuration
-        if let Some(discord_config) = &self.config.discord {
-            if discord_config.enabled && !discord_config.webhook_url.is_empty() {
-                println!("Discord webhook configured, events will be sent to Discord");
-                let cooldown = discord_config.image_cooldown_seconds;
+        // Create chat service manager
+        let mut chat_manager = ChatServiceManager::new();
 
-                poller = poller
-                    .with_discord_webhook(&discord_config.webhook_url)?
-                    .with_discord_image_cooldown(cooldown);
-
-                println!("Image cooldown set to {} seconds", cooldown);
-            } else {
-                println!("Discord webhook disabled or not configured");
-            }
-        } else {
-            println!("Discord configuration not found");
+        // Add Discord service (prioritize new config over legacy)
+        if let Some(discord_config) = &self.config.chat.discord
+            && discord_config.enabled
+        {
+            println!("Initializing Discord chat service...");
+            let discord_service = DiscordChatService::new(&discord_config.webhook_url)?;
+            chat_manager.add_service(Box::new(discord_service));
+        } else if let Some(discord_config) = &self.config.discord
+            && discord_config.enabled
+        {
+            println!("Using legacy Discord configuration...");
+            let discord_service = DiscordChatService::new(&discord_config.webhook_url)?;
+            chat_manager.add_service(Box::new(discord_service));
         }
 
-        let poll_interval = Duration::from_secs(interval);
-        poller.start_polling(poll_interval).await;
+        if let Some(matrix_config) = &self.config.chat.matrix
+            && matrix_config.enabled
+        {
+            println!("Initializing Matrix chat service...");
+            let matrix_service = MatrixChatService::new(
+                &matrix_config.homeserver_url,
+                &matrix_config.username,
+                &matrix_config.password,
+                &matrix_config.room_id,
+            )
+            .await?;
+            chat_manager.add_service(Box::new(matrix_service));
+        }
 
-        Ok(())
+        if chat_manager.service_count() == 0 {
+            println!("Warning: No chat services configured. Running in monitoring-only mode.");
+        }
+
+        // Create chat updater
+        let chat_updater = ChatUpdater::new(client)
+            .with_chat_manager(chat_manager)
+            .with_image_cooldown(self.config.image_cooldown_seconds);
+
+        Ok(chat_updater)
     }
 
     /// Get the configuration for inspection
@@ -60,7 +87,7 @@ mod windows_service_impl {
     use tokio::time::sleep;
 
     impl ServiceWrapper {
-        /// Run the discord updater as a Windows service with shutdown support
+        /// Run the chat updater as a Windows service with shutdown support
         pub fn run_with_shutdown(
             &self,
             shutdown_rx: mpsc::Receiver<()>,
@@ -69,27 +96,14 @@ mod windows_service_impl {
             let rt = tokio::runtime::Runtime::new()?;
 
             rt.block_on(async {
-                let client = SpaceCatApiClient::new(self.config.api.clone())
-                    .map_err(|e| format!("API client error: {}", e))?;
+                // Create chat updater using the factory method
+                let chat_updater = self
+                    .create_chat_updater()
+                    .await
+                    .map_err(|e| format!("Failed to create chat updater: {}", e))?;
 
-                let mut poller = DiscordUpdater::new(client);
-
-                // Configure Discord if available
-                if let Some(discord_config) = &self.config.discord
-                    && discord_config.enabled
-                    && !discord_config.webhook_url.is_empty()
-                {
-                    let cooldown = discord_config.image_cooldown_seconds;
-
-                    poller = poller
-                        .with_discord_webhook(&discord_config.webhook_url)
-                        .map_err(|e| format!("Discord webhook error: {}", e))?
-                        .with_discord_image_cooldown(cooldown);
-                }
-
-                // Run the service with shutdown monitoring
-                let poll_interval = Duration::from_secs(5); // Default 5 second interval for service
-                self.run_service_loop(poller, poll_interval, shutdown_rx)
+                // Run the service loop with graceful shutdown
+                self.run_service_loop(chat_updater, Duration::from_secs(5), shutdown_rx)
                     .await
             })
         }
@@ -97,51 +111,37 @@ mod windows_service_impl {
         /// Main service loop that can be gracefully shutdown
         async fn run_service_loop(
             &self,
-            mut poller: DiscordUpdater,
+            mut chat_updater: ChatUpdater,
             poll_interval: Duration,
             shutdown_rx: mpsc::Receiver<()>,
         ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             // Initialize baseline
-            if let Err(e) = self.initialize_baseline(&mut poller).await {
+            if let Err(e) = chat_updater.initialize_baseline().await {
                 return Err(format!("Failed to initialize baseline: {}", e).into());
             }
+
+            println!(
+                "Windows service started - polling every {:?}",
+                poll_interval
+            );
 
             loop {
                 // Check for shutdown signal (non-blocking)
                 if shutdown_rx.try_recv().is_ok() {
+                    println!("Shutdown signal received, stopping service...");
                     break;
                 }
 
-                // Poll for events and images
-                if let Err(e) = self.poll_once(&mut poller).await {
-                    // Log error but continue running
-                    eprintln!("Polling error: {}", e);
-                }
+                // Poll for events, sequence, and images
+                chat_updater.poll_sequence().await;
+                chat_updater.poll_events().await;
+                chat_updater.poll_images().await;
 
                 // Sleep for the specified interval
                 sleep(poll_interval).await;
             }
 
-            Ok(())
-        }
-
-        async fn initialize_baseline(
-            &self,
-            _poller: &mut DiscordUpdater,
-        ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-            // This is a simplified version of the initialization
-            // The actual implementation would need to access private methods of DiscordUpdater
-            // For now, we'll let the first poll cycle establish the baseline
-            Ok(())
-        }
-
-        async fn poll_once(
-            &self,
-            _poller: &mut DiscordUpdater,
-        ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-            // This would need to call the polling logic from DiscordUpdater
-            // For now, this is a placeholder - we would need to refactor DiscordUpdater
-            // to expose individual polling methods
+            println!("Windows service stopped");
             Ok(())
         }
     }
