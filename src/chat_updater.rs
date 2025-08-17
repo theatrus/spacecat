@@ -133,15 +133,16 @@ impl ChatUpdater {
 
                 // Only use sequence target if no TS-TARGETSTART target was found
                 if self.state.current_target.is_none()
-                    && let Some(target_name) = extract_current_target(&sequence) {
-                        self.state.current_target = Some(TargetInfo {
-                            name: target_name,
-                            source: TargetSource::Sequence,
-                            coordinates: None,
-                            project: None,
-                            rotation: None,
-                        });
-                    }
+                    && let Some(target_name) = extract_current_target(&sequence)
+                {
+                    self.state.current_target = Some(TargetInfo {
+                        name: target_name,
+                        source: TargetSource::Sequence,
+                        coordinates: None,
+                        project: None,
+                        rotation: None,
+                    });
+                }
 
                 self.state.sequence = Some(sequence);
             }

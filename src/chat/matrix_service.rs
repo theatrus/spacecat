@@ -30,13 +30,73 @@ impl MatrixChatService {
             .initial_device_display_name("SpaceCat")
             .await?;
 
-        // Start sync in the background
+        println!("Successfully logged into Matrix as {}", username);
+
+        // Initial sync to get room states
+        println!("Syncing with Matrix server...");
+        client.sync_once(SyncSettings::default()).await?;
+
+        // Check for invited rooms and join them
+        let invited_rooms = client.invited_rooms();
+        if !invited_rooms.is_empty() {
+            println!("Found {} room invitation(s):", invited_rooms.len());
+            for room in &invited_rooms {
+                let room_name = room.name().unwrap_or_else(|| room.room_id().to_string());
+                println!("  - Joining room: {} ({})", room_name, room.room_id());
+
+                match room.join().await {
+                    Ok(_) => println!("    ✅ Successfully joined"),
+                    Err(e) => println!("    ❌ Failed to join: {}", e),
+                }
+            }
+
+            // Sync again to update room states after joining
+            client.sync_once(SyncSettings::default()).await?;
+        } else {
+            println!("No pending room invitations");
+        }
+
+        // List all joined rooms
+        let joined_rooms = client.joined_rooms();
+        println!("Currently joined to {} room(s):", joined_rooms.len());
+        for room in &joined_rooms {
+            let room_name = room.name().unwrap_or("Unnamed room".to_string());
+            let member_count = room.active_members_count();
+            let is_encrypted = room.is_encrypted().await.unwrap_or(false);
+            let encryption_status = if is_encrypted { "🔒" } else { "🔓" };
+
+            println!(
+                "  - {} {} ({}) - {} members",
+                encryption_status,
+                room_name,
+                room.room_id(),
+                member_count
+            );
+        }
+
+        // Start background sync
         tokio::spawn({
             let client = client.clone();
-            async move { client.sync(SyncSettings::default()).await }
+            async move {
+                if let Err(e) = client.sync(SyncSettings::default()).await {
+                    eprintln!("Matrix sync error: {}", e);
+                }
+            }
         });
 
         let room_id: OwnedRoomId = room_id.try_into()?;
+
+        // Verify the target room is accessible
+        if let Some(target_room) = client.get_room(&room_id) {
+            let room_name = target_room.name().unwrap_or_else(|| room_id.to_string());
+            println!("✅ Target room found: {} ({})", room_name, room_id);
+        } else {
+            println!(
+                "⚠️  Warning: Target room {} not found in joined rooms",
+                room_id
+            );
+            println!("   Make sure the bot is invited to this room or check the room ID");
+        }
 
         Ok(Self { client, room_id })
     }
