@@ -148,8 +148,7 @@ impl ChatService for MatrixChatService {
         let room = self.get_room().await?;
         let formatted_message = self.format_message(message);
 
-        let content =
-            RoomMessageEventContent::text_html(formatted_message.clone(), formatted_message);
+        let content = RoomMessageEventContent::notice_markdown(formatted_message);
         room.send(content)
             .await
             .map_err(|e| ChatError::MessageSend {
