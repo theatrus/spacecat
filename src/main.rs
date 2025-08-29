@@ -623,22 +623,30 @@ fn display_autofocus_data(autofocus: &AutofocusResponse) {
 
     println!("\n=== Intersections ===");
     let intersections = &af_data.intersections;
-    println!(
-        "Trend Line Intersection: Position {}, Value {:.3}",
-        intersections.trend_line_intersection.position, intersections.trend_line_intersection.value
-    );
-    println!(
-        "Hyperbolic Minimum: Position {}, Value {:.3}",
-        intersections.hyperbolic_minimum.position, intersections.hyperbolic_minimum.value
-    );
-    println!(
-        "Quadratic Minimum: Position {}, Value {:.3}",
-        intersections.quadratic_minimum.position, intersections.quadratic_minimum.value
-    );
-    println!(
-        "Gaussian Maximum: Position {}, Value {:.3}",
-        intersections.gaussian_maximum.position, intersections.gaussian_maximum.value
-    );
+    if let Some(trend) = &intersections.trend_line_intersection {
+        println!(
+            "Trend Line Intersection: Position {:.1}, Value {:.3}",
+            trend.position, trend.value
+        );
+    }
+    if let Some(hyperbolic) = &intersections.hyperbolic_minimum {
+        println!(
+            "Hyperbolic Minimum: Position {:.1}, Value {:.3}",
+            hyperbolic.position, hyperbolic.value
+        );
+    }
+    if let Some(quadratic) = &intersections.quadratic_minimum {
+        println!(
+            "Quadratic Minimum: Position {:.1}, Value {:.3}",
+            quadratic.position, quadratic.value
+        );
+    }
+    if let Some(gaussian) = &intersections.gaussian_maximum {
+        println!(
+            "Gaussian Maximum: Position {:.1}, Value {:.3}",
+            gaussian.position, gaussian.value
+        );
+    }
 
     println!("\n=== Backlash Compensation ===");
     let backlash = &af_data.backlash_compensation;

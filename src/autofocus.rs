@@ -84,11 +84,20 @@ pub struct FocusPoint {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "PascalCase")]
+pub struct IntersectionPoint {
+    pub position: f64,
+    #[serde(deserialize_with = "deserialize_f64_or_nan")]
+    pub value: f64,
+    pub error: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "PascalCase")]
 pub struct Intersections {
-    pub trend_line_intersection: FocusPoint,
-    pub hyperbolic_minimum: FocusPoint,
-    pub quadratic_minimum: FocusPoint,
-    pub gaussian_maximum: FocusPoint,
+    pub trend_line_intersection: Option<IntersectionPoint>,
+    pub hyperbolic_minimum: Option<IntersectionPoint>,
+    pub quadratic_minimum: Option<IntersectionPoint>,
+    pub gaussian_maximum: Option<IntersectionPoint>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -104,9 +113,13 @@ pub struct Fittings {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "PascalCase")]
 pub struct RSquares {
+    #[serde(deserialize_with = "deserialize_f64_or_nan")]
     pub quadratic: f64,
+    #[serde(deserialize_with = "deserialize_f64_or_nan")]
     pub hyperbolic: f64,
+    #[serde(deserialize_with = "deserialize_f64_or_nan")]
     pub left_trend: f64,
+    #[serde(deserialize_with = "deserialize_f64_or_nan")]
     pub right_trend: f64,
 }
 
@@ -310,5 +323,66 @@ mod tests {
 
         let best_hfr = af_data.get_best_measured_hfr().unwrap();
         assert!(best_hfr < 3.1); // Should find the minimum HFR (around 3.009)
+    }
+
+    #[test]
+    fn test_parse_autofocus_response_2() {
+        let json_content = std::fs::read_to_string("example_last_af_2.json").unwrap();
+        let response: AutofocusResponse = serde_json::from_str(&json_content).unwrap();
+
+        // Test basic response structure
+        assert_eq!(response.status_code, 200);
+        assert!(response.success);
+        assert_eq!(response.response_type, "API");
+        assert!(response.error.is_empty());
+
+        // Test autofocus data
+        let af_data = &response.response;
+        assert_eq!(af_data.version, 2);
+        assert_eq!(af_data.filter, "SII");
+        assert_eq!(af_data.auto_focuser_name, "Hocus Focus");
+        assert_eq!(af_data.star_detector_name, "NINA");
+        assert_eq!(af_data.temperature, 24.6);
+        assert_eq!(af_data.method, "STARHFR");
+        assert_eq!(af_data.fitting, "TRENDHYPERBOLIC");
+
+        // Test focus points
+        assert_eq!(af_data.calculated_focus_point.position, 4186);
+        assert!((af_data.calculated_focus_point.value - 2.6632989580477844).abs() < 1e-10);
+        assert_eq!(af_data.calculated_focus_point.error, 0.0);
+
+        // Test initial focus point
+        assert_eq!(af_data.initial_focus_point.position, 4076);
+        assert!((af_data.initial_focus_point.value - 5.024422888144213).abs() < 1e-10);
+
+        // Test measure points
+        assert_eq!(af_data.measure_points.len(), 11);
+        assert_eq!(af_data.measure_points[0].position, 4056);
+        assert_eq!(af_data.measure_points[10].position, 4256);
+
+        // Test R-squared values
+        assert!((af_data.r_squares.hyperbolic - 0.991774159363382).abs() < 1e-10);
+        assert!(af_data.r_squares.quadratic.is_nan());
+
+        // Test intersections (only some are present in this example)
+        assert!(af_data.intersections.trend_line_intersection.is_some());
+        assert!(af_data.intersections.hyperbolic_minimum.is_some());
+        assert!(af_data.intersections.quadratic_minimum.is_none());
+        assert!(af_data.intersections.gaussian_maximum.is_none());
+
+        // Check the hyperbolic minimum has fractional position
+        if let Some(hyperbolic) = &af_data.intersections.hyperbolic_minimum {
+            assert!((hyperbolic.position - 4188.955065493704).abs() < 1e-10);
+        }
+
+        // Test that it's a successful autofocus
+        assert!(response.is_successful());
+
+        // Test focus change
+        assert_eq!(af_data.initial_focus_point.position, 4076);
+        assert_eq!(af_data.calculated_focus_point.position, 4186);
+        let position_change =
+            af_data.calculated_focus_point.position - af_data.initial_focus_point.position;
+        assert_eq!(position_change, 110);
     }
 }
