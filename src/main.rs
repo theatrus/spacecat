@@ -25,6 +25,10 @@ use std::time::Duration;
 #[command(name = "spacecat")]
 #[command(about = "SpaceCat - Astronomical Observation System", long_about = None)]
 struct Cli {
+    /// Path to configuration file
+    #[arg(short, long, default_value = "config.json", global = true)]
+    config: String,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -112,33 +116,35 @@ enum WindowsServiceAction {
 async fn main() {
     let cli = Cli::parse();
 
+    let config_path = &cli.config;
+
     match cli.command {
         Commands::Sequence => {
-            if let Err(e) = cmd_sequence().await {
+            if let Err(e) = cmd_sequence(config_path).await {
                 eprintln!("Sequence command failed: {e}");
                 std::process::exit(1);
             }
         }
         Commands::Events => {
-            if let Err(e) = cmd_events().await {
+            if let Err(e) = cmd_events(config_path).await {
                 eprintln!("Events command failed: {e}");
                 std::process::exit(1);
             }
         }
         Commands::LastEvents { count } => {
-            if let Err(e) = cmd_last_events(count).await {
+            if let Err(e) = cmd_last_events(count, config_path).await {
                 eprintln!("LastEvents command failed: {e}");
                 std::process::exit(1);
             }
         }
         Commands::Images => {
-            if let Err(e) = cmd_images().await {
+            if let Err(e) = cmd_images(config_path).await {
                 eprintln!("Images command failed: {e}");
                 std::process::exit(1);
             }
         }
         Commands::GetImage { index, params } => {
-            if let Err(e) = cmd_get_image(index, &params).await {
+            if let Err(e) = cmd_get_image(index, &params, config_path).await {
                 eprintln!("GetImage command failed: {e}");
                 std::process::exit(1);
             }
@@ -148,38 +154,40 @@ async fn main() {
             output,
             image_type,
         } => {
-            if let Err(e) = cmd_get_thumbnail(index, &output, image_type.as_deref()).await {
+            if let Err(e) =
+                cmd_get_thumbnail(index, &output, image_type.as_deref(), config_path).await
+            {
                 eprintln!("GetThumbnail command failed: {e}");
                 std::process::exit(1);
             }
         }
         Commands::Poll { interval, count } => {
-            if let Err(e) = cmd_poll(interval, count).await {
+            if let Err(e) = cmd_poll(interval, count, config_path).await {
                 eprintln!("Poll command failed: {e}");
                 std::process::exit(1);
             }
         }
         Commands::ChatUpdater { interval } => {
-            if let Err(e) = cmd_chat_updater(interval).await {
+            if let Err(e) = cmd_chat_updater(interval, config_path).await {
                 eprintln!("ChatUpdater command failed: {e}");
                 std::process::exit(1);
             }
         }
         Commands::LastAutofocus => {
-            if let Err(e) = cmd_last_autofocus().await {
+            if let Err(e) = cmd_last_autofocus(config_path).await {
                 eprintln!("LastAutofocus command failed: {e}");
                 std::process::exit(1);
             }
         }
         Commands::MountInfo => {
-            if let Err(e) = cmd_mount_info().await {
+            if let Err(e) = cmd_mount_info(config_path).await {
                 eprintln!("MountInfo command failed: {e}");
                 std::process::exit(1);
             }
         }
         #[cfg(windows)]
         Commands::WindowsService { action } => {
-            if let Err(e) = cmd_windows_service(action).await {
+            if let Err(e) = cmd_windows_service(action, config_path).await {
                 eprintln!("WindowsService command failed: {e}");
                 std::process::exit(1);
             }
@@ -187,10 +195,10 @@ async fn main() {
     }
 }
 
-async fn cmd_sequence() -> Result<(), Box<dyn std::error::Error>> {
+async fn cmd_sequence(config_path: &str) -> Result<(), Box<dyn std::error::Error>> {
     println!("Loading sequence from API...");
 
-    match load_sequence_from_api().await {
+    match load_sequence_from_api(config_path).await {
         Ok(seq) => {
             println!(
                 "Successfully loaded sequence with {} items",
@@ -240,9 +248,9 @@ async fn cmd_sequence() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn cmd_events() -> Result<(), Box<dyn std::error::Error>> {
+async fn cmd_events(config_path: &str) -> Result<(), Box<dyn std::error::Error>> {
     println!("Loading events from API...");
-    match load_event_history_from_api().await {
+    match load_event_history_from_api(config_path).await {
         Ok(events) => {
             println!(
                 "Successfully loaded {} events from API",
@@ -258,9 +266,12 @@ async fn cmd_events() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn cmd_last_events(count: usize) -> Result<(), Box<dyn std::error::Error>> {
+async fn cmd_last_events(
+    count: usize,
+    config_path: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     println!("Loading events from API...");
-    let events = match load_event_history_from_api().await {
+    let events = match load_event_history_from_api(config_path).await {
         Ok(events) => {
             println!(
                 "Successfully loaded {} events from API",
@@ -277,9 +288,9 @@ async fn cmd_last_events(count: usize) -> Result<(), Box<dyn std::error::Error>>
     Ok(())
 }
 
-async fn cmd_images() -> Result<(), Box<dyn std::error::Error>> {
+async fn cmd_images(config_path: &str) -> Result<(), Box<dyn std::error::Error>> {
     println!("Loading images from API...");
-    match load_image_history_from_api().await {
+    match load_image_history_from_api(config_path).await {
         Ok(images) => {
             println!(
                 "Successfully loaded {} images from API",
@@ -296,7 +307,11 @@ async fn cmd_images() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn cmd_get_image(index: u32, params: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+async fn cmd_get_image(
+    index: u32,
+    params: &[String],
+    config_path: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     println!("Getting image at index {index} from API...");
 
     // Parse additional parameters
@@ -309,7 +324,7 @@ async fn cmd_get_image(index: u32, params: &[String]) -> Result<(), Box<dyn std:
         }
     }
 
-    let config = Config::load_or_default();
+    let config = Config::load_or_default_from(config_path);
     let client = SpaceCatApiClient::new(config.api)?;
 
     match client.get_image_with_params(index, &param_pairs).await {
@@ -389,10 +404,11 @@ async fn cmd_get_thumbnail(
     index: u32,
     output_path: &str,
     image_type: Option<&str>,
+    config_path: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("Getting thumbnail for image at index {index} from API...");
 
-    let config = Config::load_or_default();
+    let config = Config::load_or_default_from(config_path);
     let client = SpaceCatApiClient::new(config.api)?;
 
     // Build parameters
@@ -438,11 +454,15 @@ async fn cmd_get_thumbnail(
     Ok(())
 }
 
-async fn cmd_poll(interval: u64, count: u32) -> Result<(), Box<dyn std::error::Error>> {
+async fn cmd_poll(
+    interval: u64,
+    count: u32,
+    config_path: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     println!("Starting event polling...");
     println!("Poll interval: {interval}s, Poll cycles: {count}");
 
-    let config = Config::load_or_default();
+    let config = Config::load_or_default_from(config_path);
     let client = SpaceCatApiClient::new(config.api)?;
     let mut poller = EventPoller::new(client, Duration::from_secs(interval));
 
@@ -488,8 +508,8 @@ async fn cmd_poll(interval: u64, count: u32) -> Result<(), Box<dyn std::error::E
     Ok(())
 }
 
-async fn cmd_chat_updater(interval: u64) -> Result<(), SpaceCatError> {
-    let config = Config::load_or_default();
+async fn cmd_chat_updater(interval: u64, config_path: &str) -> Result<(), SpaceCatError> {
+    let config = Config::load_or_default_from(config_path);
     let service_wrapper = ServiceWrapper::new(config).map_err(SpaceCatError::Service)?;
     service_wrapper
         .run_cli(interval)
@@ -497,9 +517,9 @@ async fn cmd_chat_updater(interval: u64) -> Result<(), SpaceCatError> {
         .map_err(SpaceCatError::Service)
 }
 
-async fn cmd_last_autofocus() -> Result<(), Box<dyn std::error::Error>> {
+async fn cmd_last_autofocus(config_path: &str) -> Result<(), Box<dyn std::error::Error>> {
     println!("Loading autofocus data from API...");
-    match load_autofocus_from_api().await {
+    match load_autofocus_from_api(config_path).await {
         Ok(autofocus) => {
             println!("Successfully loaded autofocus data from API");
             display_autofocus_data(&autofocus);
@@ -512,9 +532,9 @@ async fn cmd_last_autofocus() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn cmd_mount_info() -> Result<(), Box<dyn std::error::Error>> {
+async fn cmd_mount_info(config_path: &str) -> Result<(), Box<dyn std::error::Error>> {
     println!("Loading mount information from API...");
-    match load_mount_info_from_api().await {
+    match load_mount_info_from_api(config_path).await {
         Ok(mount_info) => {
             println!("Successfully loaded mount information from API");
             display_mount_info(&mount_info);
@@ -529,9 +549,11 @@ async fn cmd_mount_info() -> Result<(), Box<dyn std::error::Error>> {
 
 // Helper functions
 
-async fn load_autofocus_from_api() -> Result<AutofocusResponse, Box<dyn std::error::Error>> {
+async fn load_autofocus_from_api(
+    config_path: &str,
+) -> Result<AutofocusResponse, Box<dyn std::error::Error>> {
     // Load configuration from config.json or use default
-    let config = Config::load_or_default();
+    let config = Config::load_or_default_from(config_path);
 
     // Validate configuration
     if let Err(e) = config.validate() {
@@ -670,9 +692,11 @@ fn display_autofocus_data(autofocus: &AutofocusResponse) {
     }
 }
 
-async fn load_mount_info_from_api() -> Result<MountInfoResponse, Box<dyn std::error::Error>> {
+async fn load_mount_info_from_api(
+    config_path: &str,
+) -> Result<MountInfoResponse, Box<dyn std::error::Error>> {
     // Load configuration from config.json or use default
-    let config = Config::load_or_default();
+    let config = Config::load_or_default_from(config_path);
 
     // Validate configuration
     if let Err(e) = config.validate() {
@@ -841,9 +865,11 @@ fn display_mount_info(mount_info: &MountInfoResponse) {
     }
 }
 
-async fn load_sequence_from_api() -> Result<SequenceResponse, Box<dyn std::error::Error>> {
+async fn load_sequence_from_api(
+    config_path: &str,
+) -> Result<SequenceResponse, Box<dyn std::error::Error>> {
     // Load configuration from config.json or use default
-    let config = Config::load_or_default();
+    let config = Config::load_or_default_from(config_path);
 
     // Validate configuration
     if let Err(e) = config.validate() {
@@ -866,9 +892,11 @@ async fn load_sequence_from_api() -> Result<SequenceResponse, Box<dyn std::error
     Ok(sequence)
 }
 
-async fn load_event_history_from_api() -> Result<EventHistoryResponse, Box<dyn std::error::Error>> {
+async fn load_event_history_from_api(
+    config_path: &str,
+) -> Result<EventHistoryResponse, Box<dyn std::error::Error>> {
     // Load configuration from config.json or use default
-    let config = Config::load_or_default();
+    let config = Config::load_or_default_from(config_path);
 
     // Validate configuration
     if let Err(e) = config.validate() {
@@ -891,9 +919,11 @@ async fn load_event_history_from_api() -> Result<EventHistoryResponse, Box<dyn s
     Ok(events)
 }
 
-async fn load_image_history_from_api() -> Result<ImageHistoryResponse, Box<dyn std::error::Error>> {
+async fn load_image_history_from_api(
+    config_path: &str,
+) -> Result<ImageHistoryResponse, Box<dyn std::error::Error>> {
     // Load configuration from config.json or use default
-    let config = Config::load_or_default();
+    let config = Config::load_or_default_from(config_path);
 
     // Validate configuration
     if let Err(e) = config.validate() {
@@ -1136,6 +1166,7 @@ fn get_connection_event_info(event_name: &str) -> (&'static str, &'static str) {
 #[cfg(windows)]
 async fn cmd_windows_service(
     action: WindowsServiceAction,
+    config_path: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match action {
         WindowsServiceAction::Install => {

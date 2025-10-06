@@ -222,14 +222,17 @@ mod implementation {
         // Load configuration from Windows service location
         let config_path = get_service_config_path()?;
         let config = if config_path.exists() {
-            Config::load_from_file(&config_path)?
+            Config::load_from_file(&config_path)
+                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?
         } else {
             // Create default config and save it
             let default_config = Config::default();
             if let Some(parent) = config_path.parent() {
                 std::fs::create_dir_all(parent)?;
             }
-            default_config.save_to_file(&config_path)?;
+            default_config
+                .save_to_file(&config_path)
+                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
             println!(
                 "Created default configuration at: {}",
                 config_path.display()
@@ -239,12 +242,12 @@ mod implementation {
 
         // Create service wrapper
         let service_wrapper = ServiceWrapper::new(config)
-            .map_err(|e| format!("Failed to create service wrapper: {}", e))?;
+            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
 
         // Run the chat updater with graceful shutdown support
         service_wrapper
             .run_with_shutdown(shutdown_rx)
-            .map_err(|e| format!("Service error: {}", e).into())
+            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })
     }
 
     fn get_service_config_path()

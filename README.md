@@ -127,6 +127,21 @@ spacecat last-autofocus
 spacecat mount-info
 ```
 
+### Custom Configuration File
+
+You can specify a custom configuration file using the `--config` flag:
+
+```bash
+# Use a custom configuration file
+spacecat --config /path/to/custom-config.json sequence
+
+# Short form
+spacecat -c production.json events
+
+# Works with any command
+spacecat --config ~/observatory/config.json chat-updater --interval 5
+```
+
 ### Service Mode
 
 #### Linux (systemd)
