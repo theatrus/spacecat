@@ -190,6 +190,10 @@ The system provides comprehensive CLI commands for all functionality. All comman
 - `cargo run -- last-autofocus` - Display detailed autofocus analysis and quality metrics
 - `cargo run -- mount-info` - Display comprehensive mount status, position, and capabilities
 
+All commands support the global `--config` flag to specify a custom configuration file:
+- `cargo run -- --config /path/to/custom.json sequence`
+- `cargo run -- -c production.json events`
+
 The system successfully demonstrates live telescope operation monitoring with 90 calibration images across 7 filters and real-time event tracking.
 
 ## GitHub Automation
@@ -224,6 +228,13 @@ Release process:
   - serde = "1.0", reqwest = "0.12", base64 = "0.22", thiserror = "1.0"
 
 ## Recent Updates
+
+### Custom Configuration File Support
+- Added global `--config` flag to specify custom configuration file paths
+- All commands now accept a custom config path via `-c` or `--config`
+- Default configuration file remains `config.json` in the current directory
+- Windows service still uses `C:\ProgramData\SpaceCat\config.json` for service mode
+- Example usage: `spacecat --config production.json events`
 
 ### Multi-Chat Service Support
 - Added abstraction layer for multiple chat services
