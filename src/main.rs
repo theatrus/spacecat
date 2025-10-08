@@ -1166,7 +1166,7 @@ fn get_connection_event_info(event_name: &str) -> (&'static str, &'static str) {
 #[cfg(windows)]
 async fn cmd_windows_service(
     action: WindowsServiceAction,
-    config_path: &str,
+    _config_path: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match action {
         WindowsServiceAction::Install => {
