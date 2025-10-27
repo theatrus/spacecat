@@ -258,7 +258,7 @@ jobs:
           asset_content_type: application/x-msi
 
       - name: Upload MSI as artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: windows-installer
           path: ./installer/output/*.msi
