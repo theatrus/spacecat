@@ -15,17 +15,19 @@ jobs:
     name: Create Release
     runs-on: ubuntu-latest
     outputs:
-      upload_url: ${{ steps.create_release.outputs.upload_url }}
       release_id: ${{ steps.create_release.outputs.id }}
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        
       - name: Create Release
         id: create_release
-        uses: actions/create-release@v1
+        uses: softprops/action-gh-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ github.ref_name }}
-          release_name: SpaceCat ${{ github.ref_name }}
+          name: SpaceCat ${{ github.ref_name }}
           body: |
             ## SpaceCat Release ${{ github.ref_name }}
             
@@ -89,14 +91,12 @@ jobs:
         run: cp target/release/spacecat spacecat-linux-x86_64
           
       - name: Upload release asset
-        uses: actions/upload-release-asset@v1
+        uses: softprops/action-gh-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./spacecat-linux-x86_64
-          asset_name: spacecat-linux-x86_64
-          asset_content_type: application/octet-stream
+          tag_name: ${{ github.ref_name }}
+          files: ./spacecat-linux-x86_64
 
       - name: Get file info
         run: |
@@ -137,14 +137,12 @@ jobs:
         run: cp target/release/spacecat spacecat-linux-aarch64
           
       - name: Upload release asset
-        uses: actions/upload-release-asset@v1
+        uses: softprops/action-gh-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./spacecat-linux-aarch64
-          asset_name: spacecat-linux-aarch64
-          asset_content_type: application/octet-stream
+          tag_name: ${{ github.ref_name }}
+          files: ./spacecat-linux-aarch64
 
       - name: Get file info
         run: |
@@ -214,15 +212,16 @@ jobs:
         env:
           RUST_BACKTRACE: 1
 
+      - name: Prepare Windows binary
+        run: cp target/release/spacecat.exe spacecat-windows-x64.exe
+
       - name: Upload Windows binary to release
-        uses: actions/upload-release-asset@v1
+        uses: softprops/action-gh-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./target/release/spacecat.exe
-          asset_name: spacecat-windows-x64.exe
-          asset_content_type: application/octet-stream
+          tag_name: ${{ github.ref_name }}
+          files: ./spacecat-windows-x64.exe
 
       - name: Install WiX Toolset
         run: |
@@ -240,7 +239,7 @@ jobs:
         run: |
           $version = "${{ github.ref_name }}".TrimStart('v')
           echo "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          echo "::set-output name=version::$version"
+          echo "version=$version" >> $GITHUB_OUTPUT
 
       - name: Build MSI package
         run: |
@@ -248,14 +247,12 @@ jobs:
           .\build-msi.ps1 -Version $env:VERSION -SkipBuild
 
       - name: Upload MSI to release
-        uses: actions/upload-release-asset@v1
+        uses: softprops/action-gh-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./installer/output/SpaceCat-${{ steps.get_version.outputs.version }}-x64.msi
-          asset_name: SpaceCat-${{ steps.get_version.outputs.version }}-x64.msi
-          asset_content_type: application/x-msi
+          tag_name: ${{ github.ref_name }}
+          files: ./installer/output/SpaceCat-${{ steps.get_version.outputs.version }}-x64.msi
 
       - name: Upload MSI as artifact
         uses: actions/upload-artifact@v5
@@ -347,14 +344,12 @@ jobs:
           fi
 
       - name: Upload RPM to release
-        uses: actions/upload-release-asset@v1
+        uses: softprops/action-gh-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./${{ steps.rpm_info.outputs.RPM_NAME }}
-          asset_name: ${{ steps.rpm_info.outputs.RPM_NAME }}
-          asset_content_type: application/x-rpm
+          tag_name: ${{ github.ref_name }}
+          files: ./${{ steps.rpm_info.outputs.RPM_NAME }}
 
       - name: Get SRPM file info
         id: srpm_info
@@ -368,11 +363,9 @@ jobs:
 
       - name: Upload SRPM to release
         if: steps.srpm_info.outputs.SRPM_FILE != ''
-        uses: actions/upload-release-asset@v1
+        uses: softprops/action-gh-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./${{ steps.srpm_info.outputs.SRPM_NAME }}
-          asset_name: ${{ steps.srpm_info.outputs.SRPM_NAME }}
-          asset_content_type: application/x-rpm
+          tag_name: ${{ github.ref_name }}
+          files: ./${{ steps.srpm_info.outputs.SRPM_NAME }}
