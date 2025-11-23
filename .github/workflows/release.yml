@@ -76,7 +76,7 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-cargo-x64-${{ hashFiles('Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-x64-${{ hashFiles('**/Cargo.lock') || hashFiles('Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-x64-
             ${{ runner.os }}-cargo-
@@ -123,7 +123,7 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: arm64-cargo-${{ hashFiles('Cargo.lock') }}
+          key: arm64-cargo-${{ hashFiles('**/Cargo.lock') || hashFiles('Cargo.lock') }}
           restore-keys: |
             arm64-cargo-
 
@@ -168,7 +168,7 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-cargo-test-${{ hashFiles('Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') || hashFiles('Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-test-
             ${{ runner.os }}-cargo-
@@ -202,7 +202,7 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-cargo-msi-${{ hashFiles('Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-msi-${{ hashFiles('**/Cargo.lock') || hashFiles('Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-msi-
             ${{ runner.os }}-cargo-
