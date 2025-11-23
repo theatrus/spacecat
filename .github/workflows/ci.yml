@@ -42,7 +42,7 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-${{ matrix.rust }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-${{ matrix.rust }}-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-${{ matrix.rust }}-cargo-
             ${{ runner.os }}-cargo-
@@ -86,7 +86,7 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-lint-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-lint-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-lint-cargo-
             ${{ runner.os }}-cargo-
@@ -139,7 +139,7 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: windows-service-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: windows-service-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             windows-service-cargo-
             ${{ runner.os }}-cargo-
@@ -185,7 +185,7 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: arm64-native-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: arm64-native-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             arm64-native-cargo-
 
@@ -223,7 +223,7 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-cargo-msi-test-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-msi-test-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-msi-test-
             ${{ runner.os }}-cargo-
