@@ -255,7 +255,7 @@ jobs:
           files: ./installer/output/SpaceCat-${{ steps.get_version.outputs.version }}-x64.msi
 
       - name: Upload MSI as artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: windows-installer
           path: ./installer/output/*.msi
