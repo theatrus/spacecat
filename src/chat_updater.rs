@@ -2,12 +2,13 @@ use crate::api::SpaceCatApiClient;
 use crate::autofocus::AutofocusResponse;
 use crate::chat::{ChatField, ChatMessage, ChatServiceManager};
 use crate::discord::colors;
-use crate::events::{Event, EventDetails, TargetCoordinates, event_types};
+use crate::events::{Event, EventDetails, FilterInfo, TargetCoordinates, event_types};
 use crate::images::ImageMetadata;
 use crate::sequence::{
     SequenceResponse, extract_current_target, extract_meridian_flip_time,
     meridian_flip_time_formatted_with_clock,
 };
+use chrono::{DateTime, FixedOffset, Utc};
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
@@ -37,6 +38,15 @@ struct UpdaterState {
     sequence: Option<SequenceResponse>,
     last_image_time: Option<Instant>,
     skipped_images_count: u32,
+    last_filter: Option<FilterInfo>,
+    /// Latest mount-state event we've observed (PARKED, UNPARKED, HOMED, etc.).
+    last_mount_event: Option<String>,
+    /// Latest guider-state event we've observed (START, STOP, DITHER).
+    last_guider_event: Option<String>,
+    /// True if the last sequence event was STARTING (not FINISHED).
+    sequence_running: bool,
+    /// Active TS-WAITSTART wait-end time, if NINA is currently waiting.
+    wait_until: Option<DateTime<FixedOffset>>,
 }
 
 impl UpdaterState {
@@ -49,6 +59,11 @@ impl UpdaterState {
             sequence: None,
             last_image_time: None,
             skipped_images_count: 0,
+            last_filter: None,
+            last_mount_event: None,
+            last_guider_event: None,
+            sequence_running: false,
+            wait_until: None,
         }
     }
 
@@ -169,6 +184,11 @@ impl ChatUpdater {
             println!("Current target: {} (from {:?})", target.name, target.source);
         }
 
+        let status = self.format_startup_status();
+        if !status.is_empty() {
+            println!("Inferred NINA state:\n{status}");
+        }
+
         println!("Now monitoring for new events and images...\n");
 
         // Send welcome message to chat services
@@ -187,8 +207,18 @@ impl ChatUpdater {
             if event.event == event_types::FILTERWHEEL_CHANGED
                 && let Some(EventDetails::FilterWheelChange { new, previous }) = &event.details
                 && new.name == previous.name
+                && !new.is_unknown()
             {
                 continue;
+            }
+
+            // Remember the last known good filter seen, so when NINA sends
+            // empty-array fields later we still have a 'previous' to show.
+            if event.event == event_types::FILTERWHEEL_CHANGED
+                && let Some(EventDetails::FilterWheelChange { new, .. }) = &event.details
+                && !new.is_unknown()
+            {
+                self.state.last_filter = Some(new.clone());
             }
 
             // Track TS-TARGETSTART events
@@ -220,9 +250,43 @@ impl ChatUpdater {
                 }
             }
 
+            // Track latest mount-state event (events are in chronological order).
+            match event.event.as_str() {
+                event_types::MOUNT_PARKED
+                | event_types::MOUNT_UNPARKED
+                | event_types::MOUNT_HOMED
+                | event_types::MOUNT_BEFORE_FLIP
+                | event_types::MOUNT_AFTER_FLIP
+                | event_types::MOUNT_CENTER => {
+                    self.state.last_mount_event = Some(event.event.clone());
+                }
+                event_types::GUIDER_START
+                | event_types::GUIDER_STOP
+                | event_types::GUIDER_DITHER => {
+                    self.state.last_guider_event = Some(event.event.clone());
+                }
+                event_types::SEQUENCE_STARTING => self.state.sequence_running = true,
+                event_types::SEQUENCE_FINISHED => self.state.sequence_running = false,
+                event_types::TS_WAITSTART => {
+                    if let Some(EventDetails::WaitStart { wait_end_time }) = &event.details
+                        && let Ok(parsed) = DateTime::parse_from_rfc3339(wait_end_time)
+                    {
+                        self.state.wait_until = Some(parsed);
+                    }
+                }
+                _ => {}
+            }
+
             self.state
                 .events_seen
                 .insert(UpdaterState::event_key(event));
+        }
+
+        // If the recorded wait has already elapsed, clear it.
+        if let Some(end) = self.state.wait_until
+            && Utc::now() >= end
+        {
+            self.state.wait_until = None;
         }
 
         // Set the latest TS target if found
@@ -250,9 +314,12 @@ impl ChatUpdater {
     }
 
     fn should_process_event(&self, event: &Event) -> bool {
-        // Skip redundant filterwheel events
+        // Skip redundant filterwheel events, but only when both filters are
+        // known — empty/unknown payloads need to be enriched, not dropped.
         if event.event == event_types::FILTERWHEEL_CHANGED
             && let Some(EventDetails::FilterWheelChange { new, previous }) = &event.details
+            && !new.is_unknown()
+            && !previous.is_unknown()
         {
             return new.name != previous.name;
         }
@@ -261,14 +328,108 @@ impl ChatUpdater {
 
     async fn handle_event(&mut self, event: &Event) {
         match event.event.as_str() {
-            event_types::TS_TARGETSTART => self.handle_ts_targetstart(event).await,
+            event_types::TS_TARGETSTART | event_types::TS_NEWTARGETSTART => {
+                self.handle_ts_targetstart(event).await
+            }
             event_types::AUTOFOCUS_FINISHED => self.handle_autofocus_finished(event).await,
+            event_types::FILTERWHEEL_CHANGED => self.handle_filterwheel_changed(event).await,
             event_types::MOUNT_BEFORE_FLIP
             | event_types::MOUNT_AFTER_FLIP
-            | event_types::MOUNT_PARKED => self.handle_mount_event(event).await,
+            | event_types::MOUNT_PARKED
+            | event_types::MOUNT_UNPARKED
+            | event_types::MOUNT_HOMED
+            | event_types::MOUNT_CENTER => self.handle_mount_event(event).await,
+            event_types::GUIDER_START | event_types::GUIDER_DITHER => {
+                self.handle_guider_event(event).await
+            }
+            event_types::SEQUENCE_STARTING | event_types::SEQUENCE_FINISHED => {
+                self.handle_sequence_event(event).await
+            }
             event_types::IMAGE_SAVE => {} // Handled in image polling
             _ => self.handle_generic_event(event).await,
         }
+    }
+
+    /// Filter wheel change events from NINA sometimes arrive with empty Name/Id
+    /// arrays. When that happens, fetch the live filterwheel state to recover
+    /// the actual current filter, and use the cached previous filter for the
+    /// 'from' side. Always update the cache after handling.
+    async fn handle_filterwheel_changed(&mut self, event: &Event) {
+        let (mut new, mut previous) =
+            if let Some(EventDetails::FilterWheelChange { new, previous }) = &event.details {
+                (new.clone(), previous.clone())
+            } else {
+                return;
+            };
+
+        if new.is_unknown() {
+            match self.client.get_filterwheel_info().await {
+                Ok(info) => {
+                    if let Some(selected) = info.response.selected_filter {
+                        new = selected;
+                    }
+                }
+                Err(e) => eprintln!("Failed to enrich filterwheel info: {e}"),
+            }
+        }
+
+        if previous.is_unknown()
+            && let Some(cached) = &self.state.last_filter
+        {
+            previous = cached.clone();
+        }
+
+        // No useful change to report (same filter, both known).
+        if !new.is_unknown() && !previous.is_unknown() && new.name == previous.name {
+            self.state.last_filter = Some(new);
+            return;
+        }
+
+        if !new.is_unknown() {
+            self.state.last_filter = Some(new.clone());
+        }
+
+        if self.chat_manager.service_count() > 0 {
+            self.send_filterwheel_change_notification(event, &previous, &new)
+                .await;
+        }
+    }
+
+    async fn send_filterwheel_change_notification(
+        &self,
+        event: &Event,
+        previous: &FilterInfo,
+        new: &FilterInfo,
+    ) {
+        let fmt = |f: &FilterInfo| {
+            if f.is_unknown() {
+                "(unknown)".to_string()
+            } else {
+                format!("{} (ID: {})", f.name, f.id)
+            }
+        };
+        let arrow = format!(
+            "{} → {}",
+            if previous.is_unknown() {
+                "(unknown)".to_string()
+            } else {
+                previous.name.clone()
+            },
+            if new.is_unknown() {
+                "(unknown)".to_string()
+            } else {
+                new.name.clone()
+            },
+        );
+
+        let message = ChatMessage::new("🔄 Filter Changed")
+            .color(colors::BLUE)
+            .field("Time", &event.time, false)
+            .field("Filter Change", &arrow, false)
+            .field("Previous", &fmt(previous), true)
+            .field("New", &fmt(new), true);
+
+        self.chat_manager.send_message(&message).await;
     }
 
     async fn handle_ts_targetstart(&mut self, event: &Event) {
@@ -334,6 +495,24 @@ impl ChatUpdater {
         if self.chat_manager.service_count() > 0 {
             self.send_mount_event_notification(event).await;
         }
+    }
+
+    async fn handle_guider_event(&self, event: &Event) {
+        if self.chat_manager.service_count() == 0 {
+            return;
+        }
+        let info = self.client.get_guider_info().await.ok();
+        self.send_guider_event_notification(event, info.as_ref())
+            .await;
+    }
+
+    async fn handle_sequence_event(&self, event: &Event) {
+        if self.chat_manager.service_count() == 0 {
+            return;
+        }
+        // Use the freshest sequence we have. The poll_sequence loop refreshes
+        // this every cycle, so it's typically <interval seconds stale.
+        self.send_sequence_event_notification(event).await;
     }
 
     async fn handle_generic_event(&self, event: &Event) {
@@ -495,6 +674,12 @@ impl ChatUpdater {
         let mut message =
             ChatMessage::new("🚀 SpaceCat Observatory Monitor Started").color(colors::GREEN);
 
+        // Inferred NINA state from event history
+        let summary = self.format_startup_status();
+        if !summary.is_empty() {
+            message = message.field("Status", &summary, false);
+        }
+
         // Add current target information
         if let Some(target) = &self.state.current_target {
             message = message.field("Current Target", &target.name, false);
@@ -524,6 +709,12 @@ impl ChatUpdater {
             message = message.field("Current Target", "None detected", false);
         }
 
+        if let Some(filter) = &self.state.last_filter
+            && !filter.is_unknown()
+        {
+            message = message.field("Last Filter", &filter.name, true);
+        }
+
         // Add baseline information
         message = message
             .field(
@@ -551,6 +742,56 @@ impl ChatUpdater {
         message = message.footer("Ready to monitor telescope events and images");
 
         self.chat_manager.send_message(&message).await;
+    }
+
+    /// Build a one-paragraph summary of NINA's state, inferred from recent events.
+    /// Includes wait timer, sequence running, mount state, guider state.
+    fn format_startup_status(&self) -> String {
+        let mut parts: Vec<String> = Vec::new();
+
+        if let Some(end) = self.state.wait_until {
+            let now = Utc::now();
+            let minutes = end
+                .with_timezone(&Utc)
+                .signed_duration_since(now)
+                .num_minutes();
+            if minutes > 0 {
+                parts.push(format!(
+                    "⏳ Waiting until {} ({} min remaining)",
+                    end.format("%H:%M %Z"),
+                    minutes
+                ));
+            }
+        }
+
+        if self.state.sequence_running {
+            parts.push("▶️ Sequence running".to_string());
+        }
+
+        if let Some(ev) = &self.state.last_mount_event {
+            let label = match ev.as_str() {
+                event_types::MOUNT_PARKED => "🅿️ Mount parked",
+                event_types::MOUNT_UNPARKED => "🔭 Mount unparked",
+                event_types::MOUNT_HOMED => "🏠 Mount homed",
+                event_types::MOUNT_BEFORE_FLIP => "🔄 Mount pre-flip",
+                event_types::MOUNT_AFTER_FLIP => "✅ Mount post-flip",
+                event_types::MOUNT_CENTER => "🎯 Mount centered",
+                _ => "🔭 Mount active",
+            };
+            parts.push(label.to_string());
+        }
+
+        if let Some(ev) = &self.state.last_guider_event {
+            let label = match ev.as_str() {
+                event_types::GUIDER_START => "🎯 Guiding",
+                event_types::GUIDER_DITHER => "🎯 Dithering",
+                event_types::GUIDER_STOP => "🛑 Guider stopped",
+                _ => "🎯 Guider active",
+            };
+            parts.push(label.to_string());
+        }
+
+        parts.join("\n")
     }
 
     async fn send_target_change_notification(
@@ -674,6 +915,9 @@ impl ChatUpdater {
             }
             event_types::MOUNT_AFTER_FLIP => ("✅ Mount Meridian Flip Completed", colors::GREEN),
             event_types::MOUNT_PARKED => ("🅿️ Mount Parked", colors::YELLOW),
+            event_types::MOUNT_UNPARKED => ("🔭 Mount Unparked", colors::YELLOW),
+            event_types::MOUNT_HOMED => ("🏠 Mount Homed", colors::CYAN),
+            event_types::MOUNT_CENTER => ("🎯 Mount Centered", colors::CYAN),
             _ => ("🔭 Mount Event", colors::GRAY),
         };
 
@@ -687,6 +931,94 @@ impl ChatUpdater {
         }
 
         self.add_mount_info(&mut message).await;
+        self.chat_manager.send_message(&message).await;
+    }
+
+    async fn send_guider_event_notification(
+        &self,
+        event: &Event,
+        info: Option<&crate::guider::GuiderInfoResponse>,
+    ) {
+        let (title, color) = match event.event.as_str() {
+            event_types::GUIDER_START => ("🎯 Guiding Started", colors::BLUE),
+            event_types::GUIDER_DITHER => ("🎯 Guider Dither", colors::CYAN),
+            _ => ("🎯 Guider Event", colors::GRAY),
+        };
+
+        let mut message = ChatMessage::new(title)
+            .color(color)
+            .field("Event", &event.event, true)
+            .field("Time", &event.time, true);
+
+        if let Some(target) = &self.state.current_target {
+            message = message.field("Current Target", &target.name, true);
+        }
+
+        if let Some(info) = info
+            && info.response.connected
+        {
+            let g = &info.response;
+            message = message.field("State", &g.state, true);
+            if g.pixel_scale > 0.0 {
+                message = message.field(
+                    "Pixel Scale",
+                    &format!("{:.3} arcsec/px", g.pixel_scale),
+                    true,
+                );
+            }
+            if let Some(rms) = &g.rms_error {
+                message = message.field(
+                    "RMS Error",
+                    &format!(
+                        "Total: {:.2}\"\nRA: {:.2}\"  Dec: {:.2}\"",
+                        rms.total.arcseconds, rms.ra.arcseconds, rms.dec.arcseconds
+                    ),
+                    false,
+                );
+            }
+        }
+
+        self.chat_manager.send_message(&message).await;
+    }
+
+    async fn send_sequence_event_notification(&self, event: &Event) {
+        let (title, color) = match event.event.as_str() {
+            event_types::SEQUENCE_STARTING => ("▶️ Sequence Starting", colors::CYAN),
+            event_types::SEQUENCE_FINISHED => ("🏁 Sequence Finished", colors::GREEN),
+            _ => ("📋 Sequence Event", colors::GRAY),
+        };
+
+        let mut message = ChatMessage::new(title)
+            .color(color)
+            .field("Event", &event.event, true)
+            .field("Time", &event.time, true);
+
+        if let Some(target) = &self.state.current_target {
+            message = message.field("Current Target", &target.name, true);
+            if let Some(coords) = &target.coordinates {
+                message = message.field(
+                    "Coordinates",
+                    &format!("RA: {}\nDec: {}", coords.ra_string, coords.dec_string),
+                    false,
+                );
+            }
+        }
+
+        if let Some(seq) = &self.state.sequence {
+            let containers = seq.get_containers();
+            if !containers.is_empty() {
+                let running = containers
+                    .iter()
+                    .filter(|c| c.status.eq_ignore_ascii_case("RUNNING"))
+                    .count();
+                message = message.field(
+                    "Containers",
+                    &format!("{} total / {} running", containers.len(), running),
+                    true,
+                );
+            }
+        }
+
         self.chat_manager.send_message(&message).await;
     }
 
@@ -718,6 +1050,9 @@ impl ChatUpdater {
                 EventDetails::TargetStart { .. } => {
                     // Already handled in handle_ts_targetstart
                     return;
+                }
+                EventDetails::WaitStart { wait_end_time } => {
+                    message = message.field("Wait Until", wait_end_time, false);
                 }
             }
         }
@@ -859,38 +1194,35 @@ fn get_event_color(event: &str) -> u32 {
         event_types::MOUNT_DISCONNECTED => colors::RED,
         event_types::MOUNT_PARKED => colors::YELLOW,
         event_types::MOUNT_UNPARKED => colors::YELLOW,
-        event_types::MOUNT_SLEW => colors::ORANGE,
+        event_types::MOUNT_HOMED => colors::CYAN,
+        event_types::MOUNT_CENTER => colors::CYAN,
 
         // Focuser events
         event_types::FOCUSER_CONNECTED => colors::GREEN,
         event_types::FOCUSER_DISCONNECTED => colors::RED,
-        event_types::FOCUS_START => colors::PURPLE,
-        event_types::FOCUS_END => colors::PURPLE,
+        event_types::FOCUSER_USER_FOCUSED => colors::PURPLE,
+        event_types::AUTOFOCUS_STARTING => colors::PURPLE,
         event_types::AUTOFOCUS_FINISHED => colors::PURPLE,
+        event_types::ERROR_AF => colors::RED,
 
         // Rotator events
         event_types::ROTATOR_CONNECTED => colors::GREEN,
         event_types::ROTATOR_DISCONNECTED => colors::RED,
         event_types::ROTATOR_MOVED => colors::CYAN,
+        event_types::ROTATOR_MOVED_MECHANICAL => colors::CYAN,
         event_types::ROTATOR_SYNCED => colors::CYAN,
 
         // Guider events
         event_types::GUIDER_CONNECTED => colors::GREEN,
         event_types::GUIDER_DISCONNECTED => colors::RED,
         event_types::GUIDER_START => colors::BLUE,
+        event_types::GUIDER_STOP => colors::YELLOW,
         event_types::GUIDER_DITHER => colors::CYAN,
 
         // Sequence events
-        event_types::SEQUENCE_START => colors::CYAN,
-        event_types::SEQUENCE_STOP => colors::ORANGE,
-        event_types::SEQUENCE_PAUSE => colors::YELLOW,
-        event_types::SEQUENCE_RESUME => colors::CYAN,
+        event_types::SEQUENCE_STARTING => colors::CYAN,
         event_types::SEQUENCE_FINISHED => colors::GREEN,
-        event_types::ADV_SEQ_STOP => colors::ORANGE,
-
-        // Exposure events
-        event_types::EXPOSURE_START => colors::YELLOW,
-        event_types::EXPOSURE_END => colors::GREEN,
+        event_types::SEQUENCE_ENTITY_FAILED => colors::RED,
 
         // System events
         event_types::FLAT_DISCONNECTED
@@ -898,9 +1230,17 @@ fn get_event_color(event: &str) -> u32 {
         | event_types::SWITCH_DISCONNECTED
         | event_types::DOME_DISCONNECTED
         | event_types::SAFETY_DISCONNECTED => colors::RED,
+        event_types::FLAT_CONNECTED
+        | event_types::WEATHER_CONNECTED
+        | event_types::SWITCH_CONNECTED
+        | event_types::SAFETY_CONNECTED => colors::GREEN,
+        event_types::SAFETY_CHANGED => colors::ORANGE,
+        event_types::CAMERA_DOWNLOAD_TIMEOUT => colors::RED,
+        event_types::ERROR_PLATESOLVE => colors::RED,
 
         // Target events
-        event_types::TS_TARGETSTART => colors::CYAN,
+        event_types::TS_TARGETSTART | event_types::TS_NEWTARGETSTART => colors::CYAN,
+        event_types::TS_WAITSTART => colors::YELLOW,
 
         // Fallback patterns
         _ if event.contains("ERROR") => colors::RED,
@@ -913,6 +1253,7 @@ fn get_event_title(event: &str) -> String {
     match event {
         event_types::FILTERWHEEL_CHANGED => "🔄 Filter Changed".to_string(),
         event_types::TS_TARGETSTART => "🎯 Target Started".to_string(),
+        event_types::TS_WAITSTART => "⏳ Sequence Waiting".to_string(),
         _ => format!("📡 {}", event),
     }
 }

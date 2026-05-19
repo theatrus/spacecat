@@ -8,6 +8,8 @@ pub mod config;
 pub mod discord;
 pub mod error;
 pub mod events;
+pub mod filterwheel;
+pub mod guider;
 pub mod images;
 pub mod mount;
 pub mod poller;
