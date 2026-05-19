@@ -1,6 +1,8 @@
 use crate::autofocus::AutofocusResponse;
 use crate::config::ApiConfig;
 use crate::events::EventHistoryResponse;
+use crate::filterwheel::FilterWheelInfoResponse;
+use crate::guider::GuiderInfoResponse;
 use crate::images::{ImageHistoryResponse, ImageResponse, ThumbnailResponse};
 use crate::mount::MountInfoResponse;
 use crate::sequence::SequenceResponse;
@@ -350,6 +352,18 @@ impl SpaceCatApiClient {
         params: &[(&str, &str)],
     ) -> Result<MountInfoResponse, ApiError> {
         self.generic_request_with_retry("/equipment/mount/info", params)
+            .await
+    }
+
+    /// Fetch current filter wheel state from the /equipment/filterwheel/info endpoint
+    pub async fn get_filterwheel_info(&self) -> Result<FilterWheelInfoResponse, ApiError> {
+        self.generic_request_with_retry("/equipment/filterwheel/info", &[])
+            .await
+    }
+
+    /// Fetch current guider state from the /equipment/guider/info endpoint
+    pub async fn get_guider_info(&self) -> Result<GuiderInfoResponse, ApiError> {
+        self.generic_request_with_retry("/equipment/guider/info", &[])
             .await
     }
 }

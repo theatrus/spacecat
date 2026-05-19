@@ -26,7 +26,7 @@ use std::time::Duration;
 #[command(about = "SpaceCat - Astronomical Observation System", long_about = None)]
 struct Cli {
     /// Path to configuration file
-    #[arg(short, long, default_value = "config.json", global = true)]
+    #[arg(long, default_value = "config.json", global = true)]
     config: String,
 
     #[command(subcommand)]
@@ -1117,6 +1117,9 @@ fn display_last_events(events: &EventHistoryResponse, count: usize) {
                     );
                     println!("    Rotation: {}°", rotation);
                 }
+                EventDetails::WaitStart { wait_end_time } => {
+                    println!("  Details: Waiting until {}", wait_end_time);
+                }
             }
         }
 
@@ -1133,18 +1136,25 @@ fn get_event_type_info(event_name: &str) -> (&'static str, &'static str) {
 
     match event_name {
         event_types::IMAGE_SAVE => ("📸", "Image captured and saved"),
+        event_types::IMAGE_PREPARED => ("🖼️", "Image prepared"),
+        event_types::API_CAPTURE_FINISHED => ("📷", "API capture finished"),
         event_types::FILTERWHEEL_CHANGED => ("🔄", "Filter wheel position changed"),
+        event_types::GUIDER_START => ("🎯", "Guiding started"),
+        event_types::GUIDER_STOP => ("🛑", "Guiding stopped"),
         event_types::GUIDER_DITHER => ("🎯", "Dithering for drizzling"),
-        event_types::SEQUENCE_START => ("▶️", "Sequence started"),
-        event_types::SEQUENCE_STOP => ("⏹️", "Sequence stopped"),
-        event_types::SEQUENCE_PAUSE => ("⏸️", "Sequence paused"),
-        event_types::SEQUENCE_RESUME => ("▶️", "Sequence resumed"),
-        event_types::EXPOSURE_START => ("🌟", "Exposure started"),
-        event_types::EXPOSURE_END => ("✨", "Exposure completed"),
-        event_types::MOUNT_SLEW => ("🔭", "Mount slewing to target"),
-        event_types::FOCUS_START => ("🔍", "Auto-focus started"),
-        event_types::FOCUS_END => ("✅", "Auto-focus completed"),
-        event_types::TS_TARGETSTART => ("🎯", "Target started"),
+        event_types::SEQUENCE_STARTING => ("▶️", "Sequence starting"),
+        event_types::SEQUENCE_FINISHED => ("🏁", "Sequence finished"),
+        event_types::SEQUENCE_ENTITY_FAILED => ("❌", "Sequence entity failed"),
+        event_types::MOUNT_HOMED => ("🏠", "Mount homed"),
+        event_types::MOUNT_CENTER => ("🎯", "Mount centered"),
+        event_types::AUTOFOCUS_STARTING => ("🔍", "Auto-focus starting"),
+        event_types::AUTOFOCUS_FINISHED => ("✅", "Auto-focus finished"),
+        event_types::AUTOFOCUS_POINT_ADDED => ("📈", "Auto-focus point added"),
+        event_types::ERROR_AF => ("⚠️", "Auto-focus error"),
+        event_types::ERROR_PLATESOLVE => ("⚠️", "Plate-solve error"),
+        event_types::CAMERA_DOWNLOAD_TIMEOUT => ("⏱️", "Camera download timeout"),
+        event_types::TS_TARGETSTART | event_types::TS_NEWTARGETSTART => ("🎯", "Target started"),
+        event_types::TS_WAITSTART => ("⏳", "Sequence waiting"),
         _ => ("📋", "System event"),
     }
 }

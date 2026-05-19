@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -41,13 +41,54 @@ pub enum EventDetails {
         #[serde(rename = "Coordinates")]
         coordinates: TargetCoordinates,
     },
+    WaitStart {
+        #[serde(rename = "WaitEndTime")]
+        wait_end_time: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct FilterInfo {
+    // NINA occasionally returns Name:[] / Id:[] (empty arrays) when the slot is unknown.
+    // Accept that shape and fall back to empty/-1 sentinels.
+    #[serde(deserialize_with = "de_filter_name")]
     pub name: String,
+    #[serde(deserialize_with = "de_filter_id")]
     pub id: i32,
+}
+
+impl FilterInfo {
+    pub fn is_unknown(&self) -> bool {
+        self.name.is_empty() || self.id < 0
+    }
+}
+
+fn de_filter_name<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    use serde::de::Error;
+    let v = serde_json::Value::deserialize(d)?;
+    match v {
+        serde_json::Value::String(s) => Ok(s),
+        serde_json::Value::Array(a) if a.is_empty() => Ok(String::new()),
+        other => Err(D::Error::custom(format!(
+            "expected string or [] for filter name, got {other}"
+        ))),
+    }
+}
+
+fn de_filter_id<'de, D: Deserializer<'de>>(d: D) -> Result<i32, D::Error> {
+    use serde::de::Error;
+    let v = serde_json::Value::deserialize(d)?;
+    match v {
+        serde_json::Value::Number(n) => n
+            .as_i64()
+            .ok_or_else(|| D::Error::custom("filter id is not an integer"))
+            .map(|x| x as i32),
+        serde_json::Value::Array(a) if a.is_empty() => Ok(-1),
+        other => Err(D::Error::custom(format!(
+            "expected integer or [] for filter id, got {other}"
+        ))),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,10 +105,13 @@ pub struct TargetCoordinates {
     pub ra_degrees: f64,
 }
 
-// Event type constants for easier matching
+// Event type constants for easier matching.
+// Source of truth: ninaAPI source (christian-photo/ninaAPI). Only events actually
+// emitted by NINA appear here.
 pub mod event_types {
     pub const CAMERA_DISCONNECTED: &str = "CAMERA-DISCONNECTED";
     pub const CAMERA_CONNECTED: &str = "CAMERA-CONNECTED";
+    pub const CAMERA_DOWNLOAD_TIMEOUT: &str = "CAMERA-DOWNLOAD-TIMEOUT";
     pub const FILTERWHEEL_DISCONNECTED: &str = "FILTERWHEEL-DISCONNECTED";
     pub const FILTERWHEEL_CONNECTED: &str = "FILTERWHEEL-CONNECTED";
     pub const FILTERWHEEL_CHANGED: &str = "FILTERWHEEL-CHANGED";
@@ -77,36 +121,45 @@ pub mod event_types {
     pub const MOUNT_PARKED: &str = "MOUNT-PARKED";
     pub const MOUNT_BEFORE_FLIP: &str = "MOUNT-BEFORE-FLIP";
     pub const MOUNT_AFTER_FLIP: &str = "MOUNT-AFTER-FLIP";
+    pub const MOUNT_HOMED: &str = "MOUNT-HOMED";
+    pub const MOUNT_CENTER: &str = "MOUNT-CENTER";
     pub const FOCUSER_DISCONNECTED: &str = "FOCUSER-DISCONNECTED";
     pub const FOCUSER_CONNECTED: &str = "FOCUSER-CONNECTED";
+    pub const FOCUSER_USER_FOCUSED: &str = "FOCUSER-USER-FOCUSED";
     pub const ROTATOR_DISCONNECTED: &str = "ROTATOR-DISCONNECTED";
     pub const ROTATOR_CONNECTED: &str = "ROTATOR-CONNECTED";
+    pub const ROTATOR_MOVED: &str = "ROTATOR-MOVED";
+    pub const ROTATOR_MOVED_MECHANICAL: &str = "ROTATOR-MOVED-MECHANICAL";
+    pub const ROTATOR_SYNCED: &str = "ROTATOR-SYNCED";
     pub const GUIDER_CONNECTED: &str = "GUIDER-CONNECTED";
     pub const GUIDER_DISCONNECTED: &str = "GUIDER-DISCONNECTED";
     pub const GUIDER_START: &str = "GUIDER-START";
+    pub const GUIDER_STOP: &str = "GUIDER-STOP";
     pub const GUIDER_DITHER: &str = "GUIDER-DITHER";
-    pub const ROTATOR_MOVED: &str = "ROTATOR-MOVED";
-    pub const ROTATOR_SYNCED: &str = "ROTATOR-SYNCED";
+    pub const FLAT_CONNECTED: &str = "FLAT-CONNECTED";
     pub const FLAT_DISCONNECTED: &str = "FLAT-DISCONNECTED";
+    pub const WEATHER_CONNECTED: &str = "WEATHER-CONNECTED";
     pub const WEATHER_DISCONNECTED: &str = "WEATHER-DISCONNECTED";
+    pub const SWITCH_CONNECTED: &str = "SWITCH-CONNECTED";
     pub const SWITCH_DISCONNECTED: &str = "SWITCH-DISCONNECTED";
     pub const DOME_DISCONNECTED: &str = "DOME-DISCONNECTED";
+    pub const SAFETY_CONNECTED: &str = "SAFETY-CONNECTED";
     pub const SAFETY_DISCONNECTED: &str = "SAFETY-DISCONNECTED";
+    pub const SAFETY_CHANGED: &str = "SAFETY-CHANGED";
     pub const IMAGE_SAVE: &str = "IMAGE-SAVE";
+    pub const IMAGE_PREPARED: &str = "IMAGE-PREPARED";
+    pub const API_CAPTURE_FINISHED: &str = "API-CAPTURE-FINISHED";
+    pub const AUTOFOCUS_STARTING: &str = "AUTOFOCUS-STARTING";
     pub const AUTOFOCUS_FINISHED: &str = "AUTOFOCUS-FINISHED";
-    pub const SEQUENCE_START: &str = "SEQUENCE-START";
-    pub const SEQUENCE_STOP: &str = "SEQUENCE-STOP";
-    pub const SEQUENCE_PAUSE: &str = "SEQUENCE-PAUSE";
-    pub const SEQUENCE_RESUME: &str = "SEQUENCE-RESUME";
+    pub const AUTOFOCUS_POINT_ADDED: &str = "AUTOFOCUS-POINT-ADDED";
+    pub const ERROR_AF: &str = "ERROR-AF";
+    pub const ERROR_PLATESOLVE: &str = "ERROR-PLATESOLVE";
+    pub const SEQUENCE_STARTING: &str = "SEQUENCE-STARTING";
     pub const SEQUENCE_FINISHED: &str = "SEQUENCE-FINISHED";
-    pub const EXPOSURE_START: &str = "EXPOSURE-START";
-    pub const EXPOSURE_END: &str = "EXPOSURE-END";
-    pub const MOUNT_SLEW: &str = "MOUNT-SLEW";
-    pub const FOCUS_START: &str = "FOCUS-START";
-    pub const FOCUS_END: &str = "FOCUS-END";
-    pub const ADV_SEQ_STOP: &str = "ADV-SEQ-STOP";
-    pub const FOCUSER_USER_FOCUSED: &str = "FOCUSER-USER-FOCUSED";
+    pub const SEQUENCE_ENTITY_FAILED: &str = "SEQUENCE-ENTITY-FAILED";
     pub const TS_TARGETSTART: &str = "TS-TARGETSTART";
+    pub const TS_NEWTARGETSTART: &str = "TS-NEWTARGETSTART";
+    pub const TS_WAITSTART: &str = "TS-WAITSTART";
 }
 
 impl EventHistoryResponse {
@@ -352,6 +405,44 @@ mod tests {
             assert_eq!(coordinates.ra_degrees, 312.34166666666664);
         } else {
             panic!("Expected TargetStart details");
+        }
+    }
+
+    #[test]
+    fn test_filterwheel_change_empty_arrays() {
+        // NINA can return Name:[] / Id:[] when the wheel slot is unknown.
+        let event_json = r#"{
+            "Time": "2026-05-18T20:12:14.1465888-07:00",
+            "Previous": {"Name": [], "Id": []},
+            "New": {"Name": [], "Id": []},
+            "Event": "FILTERWHEEL-CHANGED"
+        }"#;
+        let event: Event = serde_json::from_str(event_json).unwrap();
+        match event.details {
+            Some(EventDetails::FilterWheelChange { new, previous }) => {
+                assert!(new.is_unknown());
+                assert!(previous.is_unknown());
+                assert_eq!(new.name, "");
+                assert_eq!(new.id, -1);
+            }
+            other => panic!("expected FilterWheelChange, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_ts_waitstart_event() {
+        let event_json = r#"{
+            "WaitEndTime": "2026-05-18T22:02:21.3561448-07:00",
+            "Time": "2026-05-19T03:20:43.4843722",
+            "Event": "TS-WAITSTART"
+        }"#;
+        let event: Event = serde_json::from_str(event_json).unwrap();
+        assert_eq!(event.event, event_types::TS_WAITSTART);
+        match event.details {
+            Some(EventDetails::WaitStart { wait_end_time }) => {
+                assert_eq!(wait_end_time, "2026-05-18T22:02:21.3561448-07:00");
+            }
+            other => panic!("expected WaitStart, got {other:?}"),
         }
     }
 
