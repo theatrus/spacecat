@@ -2,9 +2,11 @@ use crate::autofocus::AutofocusResponse;
 use crate::config::ApiConfig;
 use crate::events::EventHistoryResponse;
 use crate::filterwheel::FilterWheelInfoResponse;
+use crate::focuser::FocuserInfoResponse;
 use crate::guider::GuiderInfoResponse;
 use crate::images::{ImageHistoryResponse, ImageResponse, ThumbnailResponse};
 use crate::mount::MountInfoResponse;
+use crate::rotator::RotatorInfoResponse;
 use crate::sequence::SequenceResponse;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -364,6 +366,18 @@ impl SpaceCatApiClient {
     /// Fetch current guider state from the /equipment/guider/info endpoint
     pub async fn get_guider_info(&self) -> Result<GuiderInfoResponse, ApiError> {
         self.generic_request_with_retry("/equipment/guider/info", &[])
+            .await
+    }
+
+    /// Fetch current rotator state from the /equipment/rotator/info endpoint
+    pub async fn get_rotator_info(&self) -> Result<RotatorInfoResponse, ApiError> {
+        self.generic_request_with_retry("/equipment/rotator/info", &[])
+            .await
+    }
+
+    /// Fetch current focuser state from the /equipment/focuser/info endpoint
+    pub async fn get_focuser_info(&self) -> Result<FocuserInfoResponse, ApiError> {
+        self.generic_request_with_retry("/equipment/focuser/info", &[])
             .await
     }
 

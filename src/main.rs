@@ -1090,6 +1090,12 @@ fn display_last_events(events: &EventHistoryResponse, count: usize) {
                 EventDetails::AutofocusPointAdded { position, hfr } => {
                     println!("  Details: Autofocus point — position {position}, HFR {hfr:.3}");
                 }
+                EventDetails::RotatorMoved { from, to } => {
+                    println!(
+                        "  Details: Rotator moved {from:.2}° → {to:.2}° (Δ {:+.2}°)",
+                        to - from
+                    );
+                }
             }
         }
 

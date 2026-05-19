@@ -54,6 +54,14 @@ pub enum EventDetails {
         #[serde(rename = "HFR")]
         hfr: f64,
     },
+    /// Rotator moved. Emitted for both ROTATOR-MOVED and
+    /// ROTATOR-MOVED-MECHANICAL — both share `{From, To}` in degrees.
+    RotatorMoved {
+        #[serde(rename = "From")]
+        from: f64,
+        #[serde(rename = "To")]
+        to: f64,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -521,6 +529,25 @@ mod tests {
                 assert!(coordinates.ra_string.is_empty());
             }
             other => panic!("expected TargetStart, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_rotator_moved_event() {
+        let event_json = r#"{
+            "To": 104.04,
+            "Time": "2026-05-18T22:03:30.0844644-07:00",
+            "Event": "ROTATOR-MOVED",
+            "From": 0
+        }"#;
+        let event: Event = serde_json::from_str(event_json).unwrap();
+        assert_eq!(event.event, event_types::ROTATOR_MOVED);
+        match event.details {
+            Some(EventDetails::RotatorMoved { from, to }) => {
+                assert_eq!(from, 0.0);
+                assert!((to - 104.04).abs() < 1e-6);
+            }
+            other => panic!("expected RotatorMoved, got {other:?}"),
         }
     }
 

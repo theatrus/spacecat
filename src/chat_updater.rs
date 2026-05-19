@@ -475,6 +475,8 @@ impl ChatUpdater {
             event_types::SEQUENCE_STARTING | event_types::SEQUENCE_FINISHED => {
                 self.handle_sequence_event(event).await
             }
+            event_types::ROTATOR_SYNCED => self.handle_rotator_synced(event).await,
+            event_types::FOCUSER_USER_FOCUSED => self.handle_focuser_user_focused(event).await,
             event_types::IMAGE_SAVE => {} // Handled in image polling
             _ => self.handle_generic_event(event).await,
         }
@@ -645,6 +647,29 @@ impl ChatUpdater {
         // Use the freshest sequence we have. The poll_sequence loop refreshes
         // this every cycle, so it's typically <interval seconds stale.
         self.send_sequence_event_notification(event).await;
+    }
+
+    /// ROTATOR-SYNCED ships only `{Time, Event}`. Fetch /equipment/rotator/info
+    /// to surface the current angle + mechanical position in the notification.
+    async fn handle_rotator_synced(&self, event: &Event) {
+        if self.chat_manager.service_count() == 0 {
+            return;
+        }
+        let info = self.client.get_rotator_info().await.ok();
+        self.send_rotator_synced_notification(event, info.as_ref())
+            .await;
+    }
+
+    /// FOCUSER-USER-FOCUSED ships only `{Time, Event}` (someone tweaked focus
+    /// manually). Fetch /equipment/focuser/info to surface the new position
+    /// + temperature.
+    async fn handle_focuser_user_focused(&self, event: &Event) {
+        if self.chat_manager.service_count() == 0 {
+            return;
+        }
+        let info = self.client.get_focuser_info().await.ok();
+        self.send_focuser_user_focused_notification(event, info.as_ref())
+            .await;
     }
 
     async fn handle_generic_event(&self, event: &Event) {
@@ -1161,6 +1186,61 @@ impl ChatUpdater {
             .await;
     }
 
+    async fn send_rotator_synced_notification(
+        &self,
+        event: &Event,
+        info: Option<&crate::rotator::RotatorInfoResponse>,
+    ) {
+        let mut message = ChatMessage::new(&self.titled("🧭 Rotator Synced"))
+            .color(colors::CYAN)
+            .field("Event", &event.event, true)
+            .field("Time", &event.time, true);
+        if let Some(info) = info
+            && info.response.connected
+        {
+            let r = &info.response;
+            message = message
+                .field("Position", &format!("{:.2}°", r.position), true)
+                .field(
+                    "Mechanical",
+                    &format!("{:.2}°", r.mechanical_position),
+                    true,
+                );
+            if r.synced {
+                message = message.field("Sync", "✅", true);
+            }
+        }
+        self.chat_manager
+            .send_message(&message, &self.chat_target)
+            .await;
+    }
+
+    async fn send_focuser_user_focused_notification(
+        &self,
+        event: &Event,
+        info: Option<&crate::focuser::FocuserInfoResponse>,
+    ) {
+        let mut message = ChatMessage::new(&self.titled("🔧 Focuser User-Focused"))
+            .color(colors::PURPLE)
+            .field("Event", &event.event, true)
+            .field("Time", &event.time, true);
+        if let Some(info) = info
+            && info.response.connected
+        {
+            let f = &info.response;
+            message = message.field("Position", &f.position.to_string(), true);
+            if !f.temperature.is_nan() {
+                message = message.field("Temperature", &format!("{:.1}°C", f.temperature), true);
+            }
+            if f.temp_comp_available {
+                message = message.field("Temp comp", if f.temp_comp { "on" } else { "off" }, true);
+            }
+        }
+        self.chat_manager
+            .send_message(&message, &self.chat_target)
+            .await;
+    }
+
     async fn send_generic_event_notification(&self, event: &Event) {
         let color = get_event_color(&event.event);
         let title = get_event_title(&event.event);
@@ -1198,6 +1278,12 @@ impl ChatUpdater {
                     message = message
                         .field("Position", &position.to_string(), true)
                         .field("HFR", &format!("{hfr:.3}"), true);
+                }
+                EventDetails::RotatorMoved { from, to } => {
+                    message = message
+                        .field("From", &format!("{from:.2}°"), true)
+                        .field("To", &format!("{to:.2}°"), true)
+                        .field("Δ", &format!("{:+.2}°", to - from), true);
                 }
             }
         }
@@ -1403,6 +1489,8 @@ fn get_event_title(event: &str) -> String {
         event_types::TS_TARGETSTART => "🎯 Target Started".to_string(),
         event_types::TS_WAITSTART => "⏳ Sequence Waiting".to_string(),
         event_types::AUTOFOCUS_POINT_ADDED => "📈 Autofocus Point".to_string(),
+        event_types::ROTATOR_MOVED => "🧭 Rotator Moved".to_string(),
+        event_types::ROTATOR_MOVED_MECHANICAL => "🧭 Rotator Moved (Mech.)".to_string(),
         _ => format!("📡 {}", event),
     }
 }
