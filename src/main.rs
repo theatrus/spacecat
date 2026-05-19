@@ -1079,14 +1079,16 @@ fn display_last_events(events: &EventHistoryResponse, count: usize) {
                 } => {
                     println!("  Details: Target started: {}", target_name);
                     println!("    Project: {}", project_name);
-                    println!(
-                        "    Coordinates: {} {}",
-                        coordinates.ra_string, coordinates.dec_string
-                    );
+                    if let Some(s) = coordinates.display() {
+                        println!("    Coordinates: {}", s.replace('\n', " "));
+                    }
                     println!("    Rotation: {}°", rotation);
                 }
                 EventDetails::WaitStart { wait_end_time } => {
                     println!("  Details: Waiting until {}", wait_end_time);
+                }
+                EventDetails::AutofocusPointAdded { position, hfr } => {
+                    println!("  Details: Autofocus point — position {position}, HFR {hfr:.3}");
                 }
             }
         }

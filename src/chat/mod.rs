@@ -1,8 +1,12 @@
+mod discord_bot;
 mod discord_service;
 mod matrix_service;
+mod status_state;
 
+pub use discord_bot::{DiscordBotService, run_bot};
 pub use discord_service::DiscordChatService;
 pub use matrix_service::MatrixChatService;
+pub use status_state::{StatusMessage, StatusState};
 
 use crate::api::SpaceCatApiClient;
 use crate::error::ChatError;
@@ -61,10 +65,15 @@ impl ChatMessage {
 /// Per-telescope routing overrides. Each field, when `Some`, redirects this
 /// telescope's posts away from the shared default destination configured on
 /// the corresponding `ChatService`.
+///
+/// When `discord_channel_id` is set, the Discord bot service takes precedence
+/// over webhook posting for this telescope — the webhook service defers via
+/// `can_route`, and the bot routes the message to the channel.
 #[derive(Debug, Clone, Default)]
 pub struct ChatTarget {
     pub discord_webhook_url: Option<String>,
     pub matrix_room_id: Option<String>,
+    pub discord_channel_id: Option<u64>,
 }
 
 /// Shared Discord configuration. The webhook here is the fallback destination
@@ -101,23 +110,73 @@ fn default_enabled() -> bool {
 }
 
 /// Shared chat configuration at the top of the config file. Persistent
-/// connections (Matrix login) live here and are reused across telescopes.
+/// connections (Matrix login, Discord bot gateway) live here and are reused
+/// across telescopes.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ChatConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub discord: Option<SharedDiscordConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub matrix: Option<SharedMatrixConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub discord_bot: Option<DiscordBotConfig>,
+}
+
+/// Shared Discord bot configuration. One bot identity / token serves every
+/// telescope; each telescope can map to a different channel via
+/// `TelescopeChatOverrides::discord_channel_id`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiscordBotConfig {
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+    /// Bot token from the Discord Developer Portal.
+    pub token: String,
+    /// Discord application ID. Not required for gateway-based slash commands
+    /// (Serenity infers it from the token), but useful to keep alongside the
+    /// token for HTTP interaction endpoints and tooling.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub application_id: Option<u64>,
+    /// Discord public key, used to verify interaction payloads when running
+    /// command handlers over HTTP webhooks. Unused in the gateway path
+    /// (Phase 1), reserved for future use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_key: Option<String>,
+    /// Optional fallback channel for telescopes that don't override.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_channel_id: Option<u64>,
+    /// Maintain a pinned live-status message per bot-routed telescope's
+    /// channel, edited in place when the telescope's state changes. Default
+    /// off — explicit opt-in so users who only want event notifications
+    /// don't get a second message stream by surprise.
+    #[serde(default)]
+    pub live_status: bool,
+    /// Where to persist the live-status message IDs (only used when
+    /// `live_status` is true).
+    #[serde(default = "default_state_file")]
+    pub state_file: String,
+    /// Discord user IDs allowed to invoke write commands (Phase 3).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub write_acl: Vec<u64>,
+}
+
+fn default_state_file() -> String {
+    "./spacecat-state.json".to_string()
 }
 
 /// Per-telescope chat routing overrides. Either field, when present, replaces
-/// the shared default for that service for this telescope only.
+/// the shared default for that service for this telescope only. Setting
+/// `discord_channel_id` switches that telescope's Discord posts from the
+/// webhook path to the bot path.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TelescopeChatOverrides {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub discord_webhook_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub matrix_room_id: Option<String>,
+    /// When set, this telescope's Discord posts go through the bot to this
+    /// channel; the webhook path is ignored for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discord_channel_id: Option<u64>,
 }
 
 impl TelescopeChatOverrides {
@@ -125,6 +184,7 @@ impl TelescopeChatOverrides {
         ChatTarget {
             discord_webhook_url: self.discord_webhook_url.clone(),
             matrix_room_id: self.matrix_room_id.clone(),
+            discord_channel_id: self.discord_channel_id,
         }
     }
 }
@@ -153,6 +213,25 @@ pub trait ChatService: Send + Sync {
     /// telescope without a webhook override on a Discord service with no
     /// default).
     fn can_route(&self, target: &ChatTarget) -> bool;
+
+    /// Upsert a "live status" message: edit the previously-posted message
+    /// for this telescope in place if one exists, otherwise post a new
+    /// one and remember its ID. Default implementation is a no-op for
+    /// services that don't support editing (webhooks, Matrix).
+    async fn upsert_status(
+        &self,
+        _telescope: &str,
+        _target: &ChatTarget,
+        _message: &ChatMessage,
+    ) -> Result<(), ChatError> {
+        Ok(())
+    }
+
+    /// True if this service knows how to edit a previously-posted status
+    /// message. Used to decide whether to bother building the embed.
+    fn supports_status_upsert(&self) -> bool {
+        false
+    }
 }
 
 /// Chat service manager. One instance is shared across all telescopes; the
@@ -170,6 +249,32 @@ impl ChatServiceManager {
 
     pub fn add_service(&mut self, service: Box<dyn ChatService>) {
         self.services.push(service);
+    }
+
+    /// Refresh the live status message for a telescope across every service
+    /// that supports editing. Currently only the Discord bot acts on this.
+    pub async fn upsert_status(&self, telescope: &str, target: &ChatTarget, message: &ChatMessage) {
+        for service in &self.services {
+            if !service.supports_status_upsert() || !service.can_route(target) {
+                continue;
+            }
+            if let Err(e) = service.upsert_status(telescope, target, message).await {
+                eprintln!(
+                    "Failed to upsert status on {} for {telescope}: {}",
+                    service.service_name(),
+                    e
+                );
+            }
+        }
+    }
+
+    /// True when at least one service in the manager can edit live status
+    /// messages for this target. Lets callers skip building the embed
+    /// entirely when nothing would consume it.
+    pub fn has_status_upsert(&self, target: &ChatTarget) -> bool {
+        self.services
+            .iter()
+            .any(|s| s.supports_status_upsert() && s.can_route(target))
     }
 
     pub async fn send_message(&self, message: &ChatMessage, target: &ChatTarget) {

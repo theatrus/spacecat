@@ -48,6 +48,10 @@ struct UpdaterState {
     sequence_running: bool,
     /// Active TS-WAITSTART wait-end time, if NINA is currently waiting.
     wait_until: Option<DateTime<FixedOffset>>,
+    /// Fingerprint of the last live-status embed posted. Lets us skip the
+    /// `upsert_status` call when nothing meaningful has changed since the
+    /// previous poll cycle.
+    last_status_fingerprint: Option<String>,
 }
 
 impl UpdaterState {
@@ -65,7 +69,39 @@ impl UpdaterState {
             last_guider_event: None,
             sequence_running: false,
             wait_until: None,
+            last_status_fingerprint: None,
         }
+    }
+
+    /// Fingerprint of the state that should drive a live-status edit.
+    /// Deliberately excludes the live mount RA/Dec — those drift every
+    /// cycle during tracking and would force constant edits. We only
+    /// re-render when discrete state transitions happen (target changes,
+    /// filter switches, mount events, guider events, wait timers, etc.).
+    fn status_fingerprint(&self) -> String {
+        let target = self
+            .current_target
+            .as_ref()
+            .map(|t| t.name.as_str())
+            .unwrap_or("");
+        let filter = self
+            .last_filter
+            .as_ref()
+            .map(|f| f.name.as_str())
+            .unwrap_or("");
+        let mount = self.last_mount_event.as_deref().unwrap_or("");
+        let guider = self.last_guider_event.as_deref().unwrap_or("");
+        let waiting = self.wait_until.is_some();
+        // Round the meridian-flip ETA to whole minutes; second-by-second
+        // drift shouldn't trigger an edit.
+        let flip_minutes = self
+            .meridian_flip_time
+            .map(|h| (h * 60.0).round() as i64)
+            .unwrap_or(-1);
+        format!(
+            "t={target}|f={filter}|m={mount}|g={guider}|w={waiting}|sr={}|flip={flip_minutes}",
+            self.sequence_running
+        )
     }
 
     fn event_key(event: &Event) -> String {
@@ -149,8 +185,79 @@ impl ChatUpdater {
             self.poll_sequence().await;
             self.poll_events().await;
             self.poll_images().await;
+            self.refresh_status_message().await;
             sleep(poll_interval).await;
         }
+    }
+
+    /// Build a live-status embed from current state and push it to any
+    /// service that supports editing in place (currently only the Discord
+    /// bot). No-op for telescopes routed only through webhooks/Matrix, or
+    /// when the state fingerprint hasn't changed since the last cycle.
+    async fn refresh_status_message(&mut self) {
+        if !self.chat_manager.has_status_upsert(&self.chat_target) {
+            return;
+        }
+        let fingerprint = self.state.status_fingerprint();
+        if self.state.last_status_fingerprint.as_ref() == Some(&fingerprint) {
+            return;
+        }
+        let message = self.build_status_message().await;
+        self.chat_manager
+            .upsert_status(&self.telescope_name, &self.chat_target, &message)
+            .await;
+        self.state.last_status_fingerprint = Some(fingerprint);
+    }
+
+    /// Compose the live-status `ChatMessage`. Pulls cheap state from
+    /// `self.state` and adds a fresh mount snapshot per cycle (the most
+    /// useful single fetch for at-a-glance status).
+    async fn build_status_message(&self) -> ChatMessage {
+        let mut message = ChatMessage::new(&self.titled("📡 Live status"));
+        message = message.color(colors::CYAN);
+
+        let summary = self.format_startup_status();
+        if !summary.is_empty() {
+            message = message.field("State", &summary, false);
+        }
+
+        if let Some(target) = &self.state.current_target {
+            message = message.field("Target", &target.name, false);
+            if let Some(coords) = &target.coordinates
+                && let Some(s) = coords.display()
+            {
+                message = message.field("Coordinates", &s, false);
+            }
+        }
+
+        if let Some(filter) = &self.state.last_filter
+            && !filter.is_unknown()
+        {
+            message = message.field("Filter", &filter.name, true);
+        }
+
+        if let Some(flip_hours) = self.state.meridian_flip_time {
+            message = message.field(
+                "Meridian flip in",
+                &meridian_flip_time_formatted_with_clock(flip_hours),
+                true,
+            );
+        }
+
+        // Fresh mount snapshot — small payload, very useful at a glance.
+        if let Ok(mount_info) = self.client.get_mount_info().await
+            && mount_info.is_connected()
+        {
+            let (ra, dec) = mount_info.get_coordinates();
+            message = message
+                .field("Mount RA/Dec", &format!("RA: {ra}\nDec: {dec}"), true)
+                .field("Pier", mount_info.get_side_of_pier(), true);
+        }
+
+        message.footer(&format!(
+            "Updated {}",
+            chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC")
+        ))
     }
 
     pub async fn initialize_baseline(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -713,12 +820,10 @@ impl ChatUpdater {
                 message = message.field("Project", project, true);
             }
 
-            if let Some(coords) = &target.coordinates {
-                message = message.field(
-                    "Coordinates",
-                    &format!("RA: {}\nDec: {}", coords.ra_string, coords.dec_string),
-                    false,
-                );
+            if let Some(coords) = &target.coordinates
+                && let Some(s) = coords.display()
+            {
+                message = message.field("Coordinates", &s, false);
             }
 
             if let Some(rotation) = &target.rotation {
@@ -835,12 +940,10 @@ impl ChatUpdater {
             message = message.field("Project", project, true);
         }
 
-        if let Some(coords) = &new_target.coordinates {
-            message = message.field(
-                "Coordinates",
-                &format!("RA: {}\nDec: {}", coords.ra_string, coords.dec_string),
-                false,
-            );
+        if let Some(coords) = &new_target.coordinates
+            && let Some(s) = coords.display()
+        {
+            message = message.field("Coordinates", &s, false);
         }
 
         if let Some(rotation) = &new_target.rotation {
@@ -863,12 +966,10 @@ impl ChatUpdater {
             message = message.field("Project", project, true);
         }
 
-        if let Some(coords) = &target.coordinates {
-            message = message.field(
-                "Coordinates",
-                &format!("RA: {}\nDec: {}", coords.ra_string, coords.dec_string),
-                false,
-            );
+        if let Some(coords) = &target.coordinates
+            && let Some(s) = coords.display()
+        {
+            message = message.field("Coordinates", &s, false);
         }
 
         if let Some(rotation) = &target.rotation {
@@ -903,38 +1004,39 @@ impl ChatUpdater {
             position_change.to_string()
         };
 
-        let message = ChatMessage::new(&self.titled(format!("{success_indicator} Autofocus Completed")))
-            .color(color)
-            .field("Filter", &af_data.filter, true)
-            .field("Method", &af_data.method, true)
-            .field("Duration", &af_data.duration, true)
-            .field(
-                "Temperature",
-                &format!("{:.1}°C", af_data.temperature),
-                true,
-            )
-            .field(
-                "Focus Position",
-                &af_data.calculated_focus_point.position.to_string(),
-                true,
-            )
-            .field("Position Change", &position_change_text, true)
-            .field(
-                "HFR",
-                &format!("{:.3}", af_data.calculated_focus_point.value),
-                true,
-            )
-            .field(
-                "R-squared",
-                &format!("{:.4}", af.get_best_r_squared()),
-                true,
-            )
-            .field(
-                "Measurements",
-                &af_data.measure_points.len().to_string(),
-                true,
-            )
-            .footer(&format!("Focuser: {}", af_data.auto_focuser_name));
+        let message =
+            ChatMessage::new(&self.titled(format!("{success_indicator} Autofocus Completed")))
+                .color(color)
+                .field("Filter", &af_data.filter, true)
+                .field("Method", &af_data.method, true)
+                .field("Duration", &af_data.duration, true)
+                .field(
+                    "Temperature",
+                    &format!("{:.1}°C", af_data.temperature),
+                    true,
+                )
+                .field(
+                    "Focus Position",
+                    &af_data.calculated_focus_point.position.to_string(),
+                    true,
+                )
+                .field("Position Change", &position_change_text, true)
+                .field(
+                    "HFR",
+                    &format!("{:.3}", af_data.calculated_focus_point.value),
+                    true,
+                )
+                .field(
+                    "R-squared",
+                    &format!("{:.4}", af.get_best_r_squared()),
+                    true,
+                )
+                .field(
+                    "Measurements",
+                    &af_data.measure_points.len().to_string(),
+                    true,
+                )
+                .footer(&format!("Focuser: {}", af_data.auto_focuser_name));
 
         self.chat_manager
             .send_message(&message, &self.chat_target)
@@ -1032,12 +1134,10 @@ impl ChatUpdater {
 
         if let Some(target) = &self.state.current_target {
             message = message.field("Current Target", &target.name, true);
-            if let Some(coords) = &target.coordinates {
-                message = message.field(
-                    "Coordinates",
-                    &format!("RA: {}\nDec: {}", coords.ra_string, coords.dec_string),
-                    false,
-                );
+            if let Some(coords) = &target.coordinates
+                && let Some(s) = coords.display()
+            {
+                message = message.field("Coordinates", &s, false);
             }
         }
 
@@ -1065,9 +1165,10 @@ impl ChatUpdater {
         let color = get_event_color(&event.event);
         let title = get_event_title(&event.event);
 
-        let mut message = ChatMessage::new(&self.titled(title))
-            .color(color)
-            .field("Time", &event.time, false);
+        let mut message =
+            ChatMessage::new(&self.titled(title))
+                .color(color)
+                .field("Time", &event.time, false);
 
         // Add event-specific details
         if let Some(details) = &event.details {
@@ -1092,6 +1193,11 @@ impl ChatUpdater {
                 }
                 EventDetails::WaitStart { wait_end_time } => {
                     message = message.field("Wait Until", wait_end_time, false);
+                }
+                EventDetails::AutofocusPointAdded { position, hfr } => {
+                    message = message
+                        .field("Position", &position.to_string(), true)
+                        .field("HFR", &format!("{hfr:.3}"), true);
                 }
             }
         }
@@ -1244,6 +1350,7 @@ fn get_event_color(event: &str) -> u32 {
         event_types::FOCUSER_USER_FOCUSED => colors::PURPLE,
         event_types::AUTOFOCUS_STARTING => colors::PURPLE,
         event_types::AUTOFOCUS_FINISHED => colors::PURPLE,
+        event_types::AUTOFOCUS_POINT_ADDED => colors::PURPLE,
         event_types::ERROR_AF => colors::RED,
 
         // Rotator events
@@ -1295,6 +1402,7 @@ fn get_event_title(event: &str) -> String {
         event_types::FILTERWHEEL_CHANGED => "🔄 Filter Changed".to_string(),
         event_types::TS_TARGETSTART => "🎯 Target Started".to_string(),
         event_types::TS_WAITSTART => "⏳ Sequence Waiting".to_string(),
+        event_types::AUTOFOCUS_POINT_ADDED => "📈 Autofocus Point".to_string(),
         _ => format!("📡 {}", event),
     }
 }

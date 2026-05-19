@@ -301,15 +301,10 @@ impl Config {
     /// telescope, returns it. Otherwise returns an error listing the names.
     pub fn pick_telescope(&self, name: Option<&str>) -> Result<&TelescopeConfig, String> {
         match (name, self.telescopes.as_slice()) {
-            (Some(n), _) => self
-                .telescopes
-                .iter()
-                .find(|t| t.name == n)
-                .ok_or_else(|| {
-                    let known: Vec<&str> =
-                        self.telescopes.iter().map(|t| t.name.as_str()).collect();
-                    format!("Telescope '{n}' not found. Known telescopes: {known:?}")
-                }),
+            (Some(n), _) => self.telescopes.iter().find(|t| t.name == n).ok_or_else(|| {
+                let known: Vec<&str> = self.telescopes.iter().map(|t| t.name.as_str()).collect();
+                format!("Telescope '{n}' not found. Known telescopes: {known:?}")
+            }),
             (None, [only]) => Ok(only),
             (None, []) => Err("No telescopes configured.".to_string()),
             (None, many) => {
@@ -368,6 +363,15 @@ impl Config {
             );
         }
 
+        if let Some(bot) = &self.chat.discord_bot
+            && bot.enabled
+            && bot.token.is_empty()
+        {
+            return Err(
+                "Discord bot token cannot be empty when chat.discord_bot is enabled".to_string(),
+            );
+        }
+
         let mut seen = std::collections::HashSet::new();
         for t in &self.telescopes {
             if !seen.insert(t.name.clone()) {
@@ -396,7 +400,7 @@ impl TelescopeConfig {
 
         if !self.api.base_url.starts_with("http://") && !self.api.base_url.starts_with("https://") {
             return Err(ctx(
-                "API base URL must start with http:// or https://".to_string(),
+                "API base URL must start with http:// or https://".to_string()
             ));
         }
 
@@ -406,7 +410,7 @@ impl TelescopeConfig {
 
         if self.api.timeout_seconds > 300 {
             return Err(ctx(
-                "Timeout seconds should not exceed 300 (5 minutes)".to_string(),
+                "Timeout seconds should not exceed 300 (5 minutes)".to_string()
             ));
         }
 
@@ -437,6 +441,15 @@ impl TelescopeConfig {
         {
             return Err(ctx(
                 "matrix_room_id override set but shared chat.matrix is not enabled".to_string(),
+            ));
+        }
+
+        if let Some(_channel) = &self.chat.discord_channel_id
+            && shared_chat.discord_bot.as_ref().is_none_or(|b| !b.enabled)
+        {
+            return Err(ctx(
+                "discord_channel_id override set but shared chat.discord_bot is not enabled"
+                    .to_string(),
             ));
         }
 
@@ -510,7 +523,10 @@ mod tests {
         let config: Config = serde_json::from_str(json).unwrap();
         assert_eq!(config.telescopes.len(), 1);
         assert_eq!(config.telescopes[0].name, "default");
-        assert_eq!(config.telescopes[0].api.base_url, "http://192.168.0.81:1888");
+        assert_eq!(
+            config.telescopes[0].api.base_url,
+            "http://192.168.0.81:1888"
+        );
         // Legacy `chat.discord.webhook_url` is aliased into the new shared
         // default location.
         let discord = config.chat.discord.as_ref().unwrap();
@@ -519,7 +535,10 @@ mod tests {
             Some("https://discord.com/api/webhooks/123/abc")
         );
         let matrix = config.chat.matrix.as_ref().unwrap();
-        assert_eq!(matrix.default_room_id.as_deref(), Some("!legacy:example.com"));
+        assert_eq!(
+            matrix.default_room_id.as_deref(),
+            Some("!legacy:example.com")
+        );
         // No per-telescope overrides set.
         assert!(config.telescopes[0].chat.discord_webhook_url.is_none());
         assert!(config.telescopes[0].chat.matrix_room_id.is_none());
@@ -593,6 +612,68 @@ mod tests {
         let config = Config::default();
         // Single telescope, no name -> ok
         assert_eq!(config.pick_telescope(None).unwrap().name, "default");
+    }
+
+    #[test]
+    fn test_discord_bot_config_parses() {
+        let json = r#"{
+            "chat": {
+                "discord_bot": {
+                    "enabled": true,
+                    "token": "abc",
+                    "default_channel_id": 12345,
+                    "write_acl": [111, 222]
+                }
+            },
+            "telescopes": [
+                {
+                    "name": "c925",
+                    "api": { "base_url": "http://a", "timeout_seconds": 30, "retry_attempts": 3 },
+                    "chat": { "discord_channel_id": 67890 }
+                }
+            ]
+        }"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        let bot = config.chat.discord_bot.as_ref().unwrap();
+        assert!(bot.enabled);
+        assert_eq!(bot.token, "abc");
+        assert_eq!(bot.default_channel_id, Some(12345));
+        assert_eq!(bot.write_acl, vec![111, 222]);
+        assert_eq!(bot.state_file, "./spacecat-state.json");
+        assert_eq!(config.telescopes[0].chat.discord_channel_id, Some(67890));
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_channel_id_without_bot_enabled_rejected() {
+        let json = r#"{
+            "telescopes": [
+                {
+                    "name": "c925",
+                    "api": { "base_url": "http://a", "timeout_seconds": 30, "retry_attempts": 3 },
+                    "chat": { "discord_channel_id": 67890 }
+                }
+            ]
+        }"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("discord_channel_id"));
+        assert!(err.contains("discord_bot"));
+    }
+
+    #[test]
+    fn test_bot_enabled_without_token_rejected() {
+        let json = r#"{
+            "chat": {
+                "discord_bot": { "enabled": true, "token": "" }
+            },
+            "telescopes": [
+                { "name": "c925", "api": { "base_url": "http://a", "timeout_seconds": 30, "retry_attempts": 3 } }
+            ]
+        }"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("token"));
     }
 
     #[test]

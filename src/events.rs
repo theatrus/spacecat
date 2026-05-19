@@ -45,6 +45,15 @@ pub enum EventDetails {
         #[serde(rename = "WaitEndTime")]
         wait_end_time: String,
     },
+    /// Autofocus measurement point. NINA emits these in flurries (~one per
+    /// step) during an autofocus run, each carrying the focuser position
+    /// and the half-flux radius measured at that position.
+    AutofocusPointAdded {
+        #[serde(rename = "Position")]
+        position: i32,
+        #[serde(rename = "HFR")]
+        hfr: f64,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,15 +103,67 @@ fn de_filter_id<'de, D: Deserializer<'de>>(d: D) -> Result<i32, D::Error> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct TargetCoordinates {
-    #[serde(rename = "RA")]
+    // TS-TARGETSTART events on c925 (and likely elsewhere) sometimes ship
+    // every Coordinates field as an empty array when the target lacks
+    // coords — same NINA quirk that produces empty `FilterInfo`. Each
+    // field accepts `[]` and falls back to a sentinel; the whole struct
+    // remains parseable so the target name + project still survive.
+    #[serde(rename = "RA", deserialize_with = "de_f64_or_empty")]
     pub ra: f64,
+    #[serde(deserialize_with = "de_f64_or_empty")]
     pub dec: f64,
-    #[serde(rename = "RAString")]
+    #[serde(rename = "RAString", deserialize_with = "de_string_or_empty")]
     pub ra_string: String,
+    #[serde(deserialize_with = "de_string_or_empty")]
     pub dec_string: String,
+    #[serde(deserialize_with = "de_string_or_empty")]
     pub epoch: String,
-    #[serde(rename = "RADegrees")]
+    #[serde(rename = "RADegrees", deserialize_with = "de_f64_or_empty")]
     pub ra_degrees: f64,
+}
+
+impl TargetCoordinates {
+    /// True when every coord field came back as the empty-array sentinel
+    /// (NINA's "unknown" shape). Display sites should suppress the
+    /// Coordinates field in this case.
+    pub fn is_unknown(&self) -> bool {
+        self.ra_string.is_empty() && self.dec_string.is_empty() && self.ra.is_nan()
+    }
+
+    /// `"RA: ...\nDec: ..."` if the coords are known, otherwise None.
+    pub fn display(&self) -> Option<String> {
+        if self.is_unknown() {
+            None
+        } else {
+            Some(format!("RA: {}\nDec: {}", self.ra_string, self.dec_string))
+        }
+    }
+}
+
+fn de_string_or_empty<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    use serde::de::Error;
+    let v = serde_json::Value::deserialize(d)?;
+    match v {
+        serde_json::Value::String(s) => Ok(s),
+        serde_json::Value::Array(a) if a.is_empty() => Ok(String::new()),
+        other => Err(D::Error::custom(format!(
+            "expected string or [] for coordinate field, got {other}"
+        ))),
+    }
+}
+
+fn de_f64_or_empty<'de, D: Deserializer<'de>>(d: D) -> Result<f64, D::Error> {
+    use serde::de::Error;
+    let v = serde_json::Value::deserialize(d)?;
+    match v {
+        serde_json::Value::Number(n) => n
+            .as_f64()
+            .ok_or_else(|| D::Error::custom("coordinate not f64")),
+        serde_json::Value::Array(a) if a.is_empty() => Ok(f64::NAN),
+        other => Err(D::Error::custom(format!(
+            "expected number or [] for coordinate field, got {other}"
+        ))),
+    }
 }
 
 // Event type constants for easier matching.
@@ -426,6 +487,59 @@ mod tests {
                 assert_eq!(new.id, -1);
             }
             other => panic!("expected FilterWheelChange, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_ts_targetstart_with_empty_array_coords() {
+        // c925 emits TS-TARGETSTART with empty-array coord fields when the
+        // target lacks coords. The struct should still parse and surface
+        // the target name + project name.
+        let event_json = r#"{
+            "Time": "2026-05-19T05:40:29.6220877",
+            "Coordinates": {
+                "RA": [], "Dec": [], "RAString": [], "DecString": [],
+                "Epoch": [], "RADegrees": []
+            },
+            "TargetEndTime": "2026-05-19T04:00:28.7026313",
+            "ProjectName": "Sunflower Galaxy",
+            "Event": "TS-TARGETSTART",
+            "TargetName": "Sunflower Galaxy",
+            "Rotation": 0
+        }"#;
+        let event: Event = serde_json::from_str(event_json).unwrap();
+        match event.details {
+            Some(EventDetails::TargetStart {
+                target_name,
+                project_name,
+                coordinates,
+                ..
+            }) => {
+                assert_eq!(target_name, "Sunflower Galaxy");
+                assert_eq!(project_name, "Sunflower Galaxy");
+                assert!(coordinates.is_unknown());
+                assert!(coordinates.ra_string.is_empty());
+            }
+            other => panic!("expected TargetStart, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_autofocus_point_added_event() {
+        let event_json = r#"{
+            "Position": 3325,
+            "Time": "2026-05-18T22:43:41.8412779-07:00",
+            "HFR": 4.3494099367270405,
+            "Event": "AUTOFOCUS-POINT-ADDED"
+        }"#;
+        let event: Event = serde_json::from_str(event_json).unwrap();
+        assert_eq!(event.event, event_types::AUTOFOCUS_POINT_ADDED);
+        match event.details {
+            Some(EventDetails::AutofocusPointAdded { position, hfr }) => {
+                assert_eq!(position, 3325);
+                assert!((hfr - 4.3494099367270405).abs() < 1e-9);
+            }
+            other => panic!("expected AutofocusPointAdded, got {other:?}"),
         }
     }
 
