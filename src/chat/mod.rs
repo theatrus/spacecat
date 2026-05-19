@@ -129,6 +129,16 @@ pub struct DiscordBotConfig {
     pub enabled: bool,
     /// Bot token from the Discord Developer Portal.
     pub token: String,
+    /// Discord application ID. Not required for gateway-based slash commands
+    /// (Serenity infers it from the token), but useful to keep alongside the
+    /// token for HTTP interaction endpoints and tooling.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub application_id: Option<u64>,
+    /// Discord public key, used to verify interaction payloads when running
+    /// command handlers over HTTP webhooks. Unused in the gateway path
+    /// (Phase 1), reserved for future use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_key: Option<String>,
     /// Optional fallback channel for telescopes that don't override.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_channel_id: Option<u64>,
