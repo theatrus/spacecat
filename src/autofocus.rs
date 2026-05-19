@@ -96,46 +96,6 @@ pub struct BacklashCompensation {
 }
 
 impl AutofocusResponse {
-    /// Get the calculated focus position
-    pub fn get_calculated_position(&self) -> i32 {
-        self.response.calculated_focus_point.position
-    }
-
-    /// Get the HFR (Half Flux Radius) value at the calculated focus position
-    pub fn get_calculated_hfr(&self) -> f64 {
-        self.response.calculated_focus_point.value
-    }
-
-    /// Get the filter used during autofocus
-    pub fn get_filter(&self) -> &str {
-        &self.response.filter
-    }
-
-    /// Get the temperature during autofocus
-    pub fn get_temperature(&self) -> f64 {
-        self.response.temperature
-    }
-
-    /// Get the autofocus duration
-    pub fn get_duration(&self) -> &str {
-        &self.response.duration
-    }
-
-    /// Get the method used for autofocus
-    pub fn get_method(&self) -> &str {
-        &self.response.method
-    }
-
-    /// Get the fitting method used
-    pub fn get_fitting(&self) -> &str {
-        &self.response.fitting
-    }
-
-    /// Get the number of measurement points taken
-    pub fn get_measurement_count(&self) -> usize {
-        self.response.measure_points.len()
-    }
-
     /// Get the best R-squared value among all fitting methods
     pub fn get_best_r_squared(&self) -> f64 {
         let r_squares = &self.response.r_squares;
@@ -172,11 +132,6 @@ impl AutofocusData {
             *positions.first().unwrap_or(&0),
             *positions.last().unwrap_or(&0),
         )
-    }
-
-    /// Get HFR values corresponding to focus positions
-    pub fn get_hfr_values(&self) -> Vec<f64> {
-        self.measure_points.iter().map(|p| p.value).collect()
     }
 
     /// Get the best HFR (lowest value) from all measurement points
@@ -247,14 +202,6 @@ mod tests {
         let response: AutofocusResponse = serde_json::from_str(&json_content).unwrap();
 
         // Test convenience methods
-        assert_eq!(response.get_calculated_position(), 4068);
-        assert_eq!(response.get_calculated_hfr(), 2.90813054456021);
-        assert_eq!(response.get_filter(), "OIII");
-        assert_eq!(response.get_temperature(), 21.3);
-        assert_eq!(response.get_method(), "STARHFR");
-        assert_eq!(response.get_fitting(), "TRENDHYPERBOLIC");
-        assert_eq!(response.get_measurement_count(), 10);
-
         // Test R-squared analysis
         let best_r_squared = response.get_best_r_squared();
         assert!(best_r_squared > 0.98); // Should be the hyperbolic fit (0.9894)
@@ -280,9 +227,6 @@ mod tests {
         assert!(positions.windows(2).all(|w| w[0] <= w[1])); // Check sorted
 
         // Test HFR analysis
-        let hfr_values = af_data.get_hfr_values();
-        assert_eq!(hfr_values.len(), 10);
-
         let best_hfr = af_data.get_best_measured_hfr().unwrap();
         assert!(best_hfr < 3.1); // Should find the minimum HFR (around 3.009)
     }

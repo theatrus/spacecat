@@ -8,7 +8,7 @@ pub struct DiscordWebhook {
     webhook_url: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct WebhookMessage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
@@ -242,24 +242,6 @@ impl DiscordWebhook {
         Ok(())
     }
 
-    pub async fn execute_simple(&self, content: &str) -> Result<(), DiscordError> {
-        let message = WebhookMessage {
-            content: Some(content.to_string()),
-            username: None,
-            avatar_url: None,
-            tts: None,
-            embeds: None,
-            allowed_mentions: None,
-            components: None,
-            files: None,
-            payload_json: None,
-            attachments: None,
-            flags: None,
-        };
-
-        self.execute(&message).await
-    }
-
     pub async fn execute_with_embed(
         &self,
         content: Option<&str>,
@@ -447,8 +429,5 @@ pub mod colors {
     pub const PURPLE: u32 = 0x800080;
     pub const ORANGE: u32 = 0xFFA500;
     pub const CYAN: u32 = 0x00FFFF;
-    pub const PINK: u32 = 0xFFC0CB;
-    pub const WHITE: u32 = 0xFFFFFF;
-    pub const BLACK: u32 = 0x000000;
     pub const GRAY: u32 = 0x808080;
 }

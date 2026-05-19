@@ -241,25 +241,6 @@ impl Config {
         Ok(config)
     }
 
-    /// Load configuration from default file (config.json)
-    pub fn load_default() -> Result<Self, ConfigError> {
-        Self::load_from_file("config.json")
-    }
-
-    /// Load configuration with fallback to default
-    pub fn load_or_default() -> Self {
-        match Self::load_default() {
-            Ok(config) => {
-                println!("Loaded configuration from config.json");
-                config
-            }
-            Err(e) => {
-                println!("Failed to load config.json ({e}), using defaults");
-                Self::default()
-            }
-        }
-    }
-
     /// Load configuration from specified file with fallback to default
     pub fn load_or_default_from<P: AsRef<Path>>(path: P) -> Self {
         let path_ref = path.as_ref();
@@ -284,17 +265,6 @@ impl Config {
         let json = serde_json::to_string_pretty(self)?;
         fs::write(path, json)?;
         Ok(())
-    }
-
-    /// Save configuration to default file (config.json)
-    pub fn save_default(&self) -> Result<(), ConfigError> {
-        self.save_to_file("config.json")
-    }
-
-    /// Create a sample configuration file
-    pub fn create_sample_config<P: AsRef<Path>>(path: P) -> Result<(), ConfigError> {
-        let sample_config = Self::default();
-        sample_config.save_to_file(path)
     }
 
     /// Look up a telescope by name. If `name` is None and there's exactly one

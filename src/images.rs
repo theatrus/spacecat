@@ -60,17 +60,6 @@ pub mod image_types {
     pub const BIAS: &str = "BIAS";
 }
 
-// Common filter constants
-pub mod filters {
-    pub const LUMINANCE: &str = "L";
-    pub const RED: &str = "R";
-    pub const GREEN: &str = "G";
-    pub const BLUE: &str = "B";
-    pub const HYDROGEN_ALPHA: &str = "HA";
-    pub const OXYGEN_III: &str = "OIII";
-    pub const SULFUR_II: &str = "SII";
-}
-
 impl ImageHistoryResponse {
     /// Get all images of a specific type (LIGHT, DARK, FLAT, BIAS)
     pub fn get_images_by_type(&self, image_type: &str) -> Vec<&ImageMetadata> {
@@ -102,26 +91,6 @@ impl ImageHistoryResponse {
                     || image.image_type == image_types::FLAT
                     || image.image_type == image_types::BIAS
             })
-            .collect()
-    }
-
-    /// Get images in a temperature range
-    pub fn get_images_in_temperature_range(
-        &self,
-        min_temp: f64,
-        max_temp: f64,
-    ) -> Vec<&ImageMetadata> {
-        self.response
-            .iter()
-            .filter(|image| image.temperature >= min_temp && image.temperature <= max_temp)
-            .collect()
-    }
-
-    /// Get images with specific exposure time
-    pub fn get_images_by_exposure_time(&self, exposure_time: f64) -> Vec<&ImageMetadata> {
-        self.response
-            .iter()
-            .filter(|image| (image.exposure_time - exposure_time).abs() < 0.001)
             .collect()
     }
 
@@ -206,27 +175,6 @@ impl ImageMetadata {
             || self.image_type == image_types::FLAT
             || self.image_type == image_types::BIAS
     }
-
-    /// Check if this is a broadband filter (LRGB)
-    pub fn is_broadband_filter(&self) -> bool {
-        matches!(
-            self.filter.as_str(),
-            filters::LUMINANCE | filters::RED | filters::GREEN | filters::BLUE
-        )
-    }
-
-    /// Check if this is a narrowband filter
-    pub fn is_narrowband_filter(&self) -> bool {
-        matches!(
-            self.filter.as_str(),
-            filters::HYDROGEN_ALPHA | filters::OXYGEN_III | filters::SULFUR_II
-        )
-    }
-
-    /// Get exposure time in minutes for easier reading
-    pub fn exposure_time_minutes(&self) -> f64 {
-        self.exposure_time / 60.0
-    }
 }
 
 #[cfg(test)]
@@ -292,9 +240,6 @@ mod tests {
 
         assert!(light_frame.is_light_frame());
         assert!(!light_frame.is_calibration_frame());
-        assert!(!light_frame.is_broadband_filter());
-        assert!(light_frame.is_narrowband_filter());
-        assert_eq!(light_frame.exposure_time_minutes(), 3.0);
 
         let flat_frame = ImageMetadata {
             exposure_time: 1.0,
@@ -318,8 +263,6 @@ mod tests {
 
         assert!(!flat_frame.is_light_frame());
         assert!(flat_frame.is_calibration_frame());
-        assert!(flat_frame.is_broadband_filter());
-        assert!(!flat_frame.is_narrowband_filter());
     }
 
     #[test]
