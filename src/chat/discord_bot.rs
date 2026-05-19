@@ -368,6 +368,7 @@ pub async fn run_bot(
 #[poise::command(
     slash_command,
     subcommands(
+        // Read-only (anyone)
         "status",
         "sequence",
         "target",
@@ -376,7 +377,19 @@ pub async fn run_bot(
         "focus",
         "guider",
         "events",
-        "last_image"
+        "last_image",
+        // Write (ACL-gated; destructive ones require confirmation)
+        "park",
+        "unpark",
+        "home",
+        "change_filter",
+        "guider_start",
+        "guider_stop",
+        "cool",
+        "warm",
+        "abort_capture",
+        "stop_sequence",
+        "start_sequence",
     )
 )]
 async fn spacecat(_ctx: Context<'_>) -> Result<(), BotError> {
@@ -772,4 +785,451 @@ async fn last_image(
     reply = reply.embed(embed);
     ctx.send(reply).await?;
     Ok(())
+}
+
+// ---------- Phase 3: write commands (ACL-gated) ----------
+
+/// Reject the invocation with an ephemeral message if the invoking user is
+/// not in `chat.discord_bot.write_acl`. Returns `Ok(())` when authorized.
+async fn require_write_acl(ctx: Context<'_>) -> Result<(), BotError> {
+    let user_id = ctx.author().id.get();
+    if ctx.data().write_acl.contains(&user_id) {
+        return Ok(());
+    }
+    ctx.send(
+        poise::CreateReply::default()
+            .content(format!(
+                "🔒 You are not authorized to issue write commands. \
+                 Your user ID `{user_id}` is not in `chat.discord_bot.write_acl`."
+            ))
+            .ephemeral(true),
+    )
+    .await?;
+    Err("user not in write_acl".into())
+}
+
+/// Post a Confirm / Cancel button pair and wait for the invoker to click.
+/// Returns `Ok(true)` on Confirm, `Ok(false)` on Cancel or 30s timeout.
+async fn confirm_destructive(ctx: Context<'_>, action: &str) -> Result<bool, BotError> {
+    let prompt =
+        format!("⚠️ Confirm **{action}**?\nThis is a destructive operation — you have 30 seconds.");
+    let row = serenity::CreateActionRow::Buttons(vec![
+        serenity::CreateButton::new("spacecat-confirm")
+            .label("Confirm")
+            .style(serenity::ButtonStyle::Danger),
+        serenity::CreateButton::new("spacecat-cancel")
+            .label("Cancel")
+            .style(serenity::ButtonStyle::Secondary),
+    ]);
+    let handle = ctx
+        .send(
+            poise::CreateReply::default()
+                .content(prompt)
+                .components(vec![row])
+                .ephemeral(true),
+        )
+        .await?;
+    let message = handle.message().await?;
+
+    let interaction = message
+        .await_component_interaction(ctx.serenity_context().shard.clone())
+        .author_id(ctx.author().id)
+        .timeout(std::time::Duration::from_secs(30))
+        .await;
+
+    let (confirmed, response_text) = match interaction.as_ref().map(|i| i.data.custom_id.as_str()) {
+        Some("spacecat-confirm") => (true, "✅ Confirmed, running command…"),
+        Some("spacecat-cancel") => (false, "❎ Cancelled."),
+        _ => (false, "⏱️ Timed out — no action taken."),
+    };
+
+    // Acknowledge the interaction (or just edit the original message if
+    // the user didn't click anything).
+    if let Some(i) = interaction {
+        let _ = i
+            .create_response(
+                &ctx.serenity_context().http,
+                serenity::CreateInteractionResponse::UpdateMessage(
+                    serenity::CreateInteractionResponseMessage::new()
+                        .content(response_text)
+                        .components(vec![]),
+                ),
+            )
+            .await;
+    } else {
+        let _ = handle
+            .edit(
+                ctx,
+                poise::CreateReply::default()
+                    .content(response_text)
+                    .components(vec![]),
+            )
+            .await;
+    }
+    Ok(confirmed)
+}
+
+/// Issue a NINA command endpoint and reply with a status line. Used by all
+/// write commands once authorization (and any confirmation) has passed.
+async fn run_command(
+    ctx: Context<'_>,
+    telescope: &str,
+    client: &SpaceCatApiClient,
+    label: &str,
+    endpoint: &str,
+    params: &[(&str, &str)],
+) -> Result<(), BotError> {
+    let result = client.execute_command(endpoint, params).await;
+    let reply = match result {
+        Ok(resp) if resp.success => poise::CreateReply::default()
+            .content(format!("✅ [{telescope}] {label}: {}", resp.summary())),
+        Ok(resp) => poise::CreateReply::default()
+            .ephemeral(true)
+            .content(format!("❌ [{telescope}] {label}: {}", resp.summary())),
+        Err(e) => poise::CreateReply::default()
+            .ephemeral(true)
+            .content(format!("❌ [{telescope}] {label} failed: {e}")),
+    };
+    ctx.send(reply).await?;
+    Ok(())
+}
+
+// --- Non-destructive (ACL only) ---
+
+/// Unpark the mount.
+#[poise::command(slash_command)]
+async fn unpark(
+    ctx: Context<'_>,
+    #[description = "Telescope name"] telescope: Option<String>,
+) -> Result<(), BotError> {
+    if require_write_acl(ctx).await.is_err() {
+        return Ok(());
+    }
+    let (name, client) = match resolve_or_reply(ctx, telescope).await {
+        Ok(v) => v,
+        Err(_) => return Ok(()),
+    };
+    ctx.defer().await?;
+    run_command(
+        ctx,
+        &name,
+        &client,
+        "Unpark mount",
+        "/equipment/mount/unpark",
+        &[],
+    )
+    .await
+}
+
+/// Send the mount to its home position.
+#[poise::command(slash_command)]
+async fn home(
+    ctx: Context<'_>,
+    #[description = "Telescope name"] telescope: Option<String>,
+) -> Result<(), BotError> {
+    if require_write_acl(ctx).await.is_err() {
+        return Ok(());
+    }
+    let (name, client) = match resolve_or_reply(ctx, telescope).await {
+        Ok(v) => v,
+        Err(_) => return Ok(()),
+    };
+    ctx.defer().await?;
+    run_command(
+        ctx,
+        &name,
+        &client,
+        "Home mount",
+        "/equipment/mount/home",
+        &[],
+    )
+    .await
+}
+
+/// Change the filter wheel position by filter name (resolved to id via
+/// `/equipment/filterwheel/info`).
+#[poise::command(slash_command, rename = "change-filter")]
+async fn change_filter(
+    ctx: Context<'_>,
+    #[description = "Filter name (e.g. L, R, G, B, HA)"] filter: String,
+    #[description = "Telescope name"] telescope: Option<String>,
+) -> Result<(), BotError> {
+    if require_write_acl(ctx).await.is_err() {
+        return Ok(());
+    }
+    let (name, client) = match resolve_or_reply(ctx, telescope).await {
+        Ok(v) => v,
+        Err(_) => return Ok(()),
+    };
+    ctx.defer().await?;
+
+    let info = match client.get_filterwheel_info().await {
+        Ok(i) => i,
+        Err(e) => {
+            ctx.send(
+                poise::CreateReply::default()
+                    .ephemeral(true)
+                    .content(format!("❌ [{name}] couldn't fetch filterwheel info: {e}")),
+            )
+            .await?;
+            return Ok(());
+        }
+    };
+
+    let target = info
+        .response
+        .available_filters
+        .iter()
+        .find(|f| f.name.eq_ignore_ascii_case(&filter));
+    let Some(target) = target else {
+        let known: Vec<&str> = info
+            .response
+            .available_filters
+            .iter()
+            .map(|f| f.name.as_str())
+            .collect();
+        ctx.send(
+            poise::CreateReply::default()
+                .ephemeral(true)
+                .content(format!(
+                    "❌ [{name}] no filter '{filter}'. Known: {known:?}"
+                )),
+        )
+        .await?;
+        return Ok(());
+    };
+
+    let id = target.id.to_string();
+    run_command(
+        ctx,
+        &name,
+        &client,
+        &format!("Change filter → {} (ID {})", target.name, target.id),
+        "/equipment/filterwheel/change-filter",
+        &[("filterId", id.as_str())],
+    )
+    .await
+}
+
+/// Start guiding (without calibration).
+#[poise::command(slash_command, rename = "guider-start")]
+async fn guider_start(
+    ctx: Context<'_>,
+    #[description = "Run calibration first"] calibrate: Option<bool>,
+    #[description = "Telescope name"] telescope: Option<String>,
+) -> Result<(), BotError> {
+    if require_write_acl(ctx).await.is_err() {
+        return Ok(());
+    }
+    let (name, client) = match resolve_or_reply(ctx, telescope).await {
+        Ok(v) => v,
+        Err(_) => return Ok(()),
+    };
+    ctx.defer().await?;
+    let cal = if calibrate.unwrap_or(false) {
+        "true"
+    } else {
+        "false"
+    };
+    run_command(
+        ctx,
+        &name,
+        &client,
+        "Start guiding",
+        "/equipment/guider/start",
+        &[("calibrate", cal)],
+    )
+    .await
+}
+
+/// Stop guiding.
+#[poise::command(slash_command, rename = "guider-stop")]
+async fn guider_stop(
+    ctx: Context<'_>,
+    #[description = "Telescope name"] telescope: Option<String>,
+) -> Result<(), BotError> {
+    if require_write_acl(ctx).await.is_err() {
+        return Ok(());
+    }
+    let (name, client) = match resolve_or_reply(ctx, telescope).await {
+        Ok(v) => v,
+        Err(_) => return Ok(()),
+    };
+    ctx.defer().await?;
+    run_command(
+        ctx,
+        &name,
+        &client,
+        "Stop guiding",
+        "/equipment/guider/stop",
+        &[],
+    )
+    .await
+}
+
+/// Cool the camera to a target temperature over `minutes` minutes.
+#[poise::command(slash_command)]
+async fn cool(
+    ctx: Context<'_>,
+    #[description = "Target temperature in °C"] temperature: f64,
+    #[description = "Minutes to ramp down (default 10)"] minutes: Option<f64>,
+    #[description = "Telescope name"] telescope: Option<String>,
+) -> Result<(), BotError> {
+    if require_write_acl(ctx).await.is_err() {
+        return Ok(());
+    }
+    let (name, client) = match resolve_or_reply(ctx, telescope).await {
+        Ok(v) => v,
+        Err(_) => return Ok(()),
+    };
+    ctx.defer().await?;
+    let t = temperature.to_string();
+    let m = minutes.unwrap_or(10.0).to_string();
+    run_command(
+        ctx,
+        &name,
+        &client,
+        &format!(
+            "Cool to {temperature:.1}°C over {} min",
+            minutes.unwrap_or(10.0)
+        ),
+        "/equipment/camera/cool",
+        &[("temperature", t.as_str()), ("minutes", m.as_str())],
+    )
+    .await
+}
+
+/// Warm the camera over `minutes` minutes.
+#[poise::command(slash_command)]
+async fn warm(
+    ctx: Context<'_>,
+    #[description = "Minutes to warm (default 10)"] minutes: Option<f64>,
+    #[description = "Telescope name"] telescope: Option<String>,
+) -> Result<(), BotError> {
+    if require_write_acl(ctx).await.is_err() {
+        return Ok(());
+    }
+    let (name, client) = match resolve_or_reply(ctx, telescope).await {
+        Ok(v) => v,
+        Err(_) => return Ok(()),
+    };
+    ctx.defer().await?;
+    let m = minutes.unwrap_or(10.0).to_string();
+    run_command(
+        ctx,
+        &name,
+        &client,
+        &format!("Warm camera over {} min", minutes.unwrap_or(10.0)),
+        "/equipment/camera/warm",
+        &[("minutes", m.as_str())],
+    )
+    .await
+}
+
+// --- Destructive (ACL + button confirm) ---
+
+/// Park the mount (requires confirmation).
+#[poise::command(slash_command)]
+async fn park(
+    ctx: Context<'_>,
+    #[description = "Telescope name"] telescope: Option<String>,
+) -> Result<(), BotError> {
+    if require_write_acl(ctx).await.is_err() {
+        return Ok(());
+    }
+    let (name, client) = match resolve_or_reply(ctx, telescope).await {
+        Ok(v) => v,
+        Err(_) => return Ok(()),
+    };
+    if !confirm_destructive(ctx, &format!("park {name}")).await? {
+        return Ok(());
+    }
+    run_command(
+        ctx,
+        &name,
+        &client,
+        "Park mount",
+        "/equipment/mount/park",
+        &[],
+    )
+    .await
+}
+
+/// Abort the current camera exposure (requires confirmation).
+#[poise::command(slash_command, rename = "abort-capture")]
+async fn abort_capture(
+    ctx: Context<'_>,
+    #[description = "Telescope name"] telescope: Option<String>,
+) -> Result<(), BotError> {
+    if require_write_acl(ctx).await.is_err() {
+        return Ok(());
+    }
+    let (name, client) = match resolve_or_reply(ctx, telescope).await {
+        Ok(v) => v,
+        Err(_) => return Ok(()),
+    };
+    if !confirm_destructive(ctx, &format!("abort capture on {name}")).await? {
+        return Ok(());
+    }
+    run_command(
+        ctx,
+        &name,
+        &client,
+        "Abort capture",
+        "/equipment/camera/abort-exposure",
+        &[],
+    )
+    .await
+}
+
+/// Stop the running sequence (requires confirmation).
+#[poise::command(slash_command, rename = "stop-sequence")]
+async fn stop_sequence(
+    ctx: Context<'_>,
+    #[description = "Telescope name"] telescope: Option<String>,
+) -> Result<(), BotError> {
+    if require_write_acl(ctx).await.is_err() {
+        return Ok(());
+    }
+    let (name, client) = match resolve_or_reply(ctx, telescope).await {
+        Ok(v) => v,
+        Err(_) => return Ok(()),
+    };
+    if !confirm_destructive(ctx, &format!("stop sequence on {name}")).await? {
+        return Ok(());
+    }
+    run_command(ctx, &name, &client, "Stop sequence", "/sequence/stop", &[]).await
+}
+
+/// Start the loaded sequence (requires confirmation).
+#[poise::command(slash_command, rename = "start-sequence")]
+async fn start_sequence(
+    ctx: Context<'_>,
+    #[description = "Skip pre-run validation"] skip_validation: Option<bool>,
+    #[description = "Telescope name"] telescope: Option<String>,
+) -> Result<(), BotError> {
+    if require_write_acl(ctx).await.is_err() {
+        return Ok(());
+    }
+    let (name, client) = match resolve_or_reply(ctx, telescope).await {
+        Ok(v) => v,
+        Err(_) => return Ok(()),
+    };
+    if !confirm_destructive(ctx, &format!("start sequence on {name}")).await? {
+        return Ok(());
+    }
+    let skip = if skip_validation.unwrap_or(false) {
+        "true"
+    } else {
+        "false"
+    };
+    run_command(
+        ctx,
+        &name,
+        &client,
+        "Start sequence",
+        "/sequence/start",
+        &[("skipValidation", skip)],
+    )
+    .await
 }
