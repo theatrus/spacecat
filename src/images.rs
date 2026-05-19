@@ -223,12 +223,6 @@ impl ImageMetadata {
         )
     }
 
-    /// Parse timestamp as std::time::SystemTime
-    pub fn parse_timestamp(&self) -> Result<std::time::SystemTime, Box<dyn std::error::Error>> {
-        // For now, just return current time - full parsing would need a date parsing library
-        Ok(std::time::SystemTime::now())
-    }
-
     /// Get exposure time in minutes for easier reading
     pub fn exposure_time_minutes(&self) -> f64 {
         self.exposure_time / 60.0

@@ -303,12 +303,6 @@ impl Event {
         }
         None
     }
-
-    /// Parse timestamp as std::time::SystemTime
-    pub fn parse_timestamp(&self) -> Result<std::time::SystemTime, Box<dyn std::error::Error>> {
-        // For now, just return current time - full parsing would need a date parsing library
-        Ok(std::time::SystemTime::now())
-    }
 }
 
 #[cfg(test)]

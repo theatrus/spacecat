@@ -19,8 +19,6 @@ pub struct SpaceCatApiClient {
     retry_attempts: u32,
 }
 
-pub type SpaceCatClient = SpaceCatApiClient;
-
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct VersionResponse {
@@ -77,20 +75,6 @@ impl SpaceCatApiClient {
         })
     }
 
-    /// Create a new API client with default configuration
-    pub fn with_defaults() -> Result<Self, ApiError> {
-        Self::new(ApiConfig::default())
-    }
-
-    /// Create a new API client with a custom base URL
-    pub fn with_url(base_url: &str) -> Result<Self, ApiError> {
-        let config = ApiConfig {
-            base_url: base_url.to_string(),
-            ..ApiConfig::default()
-        };
-        Self::new(config)
-    }
-
     /// Fetch event history from the /event-history endpoint
     pub async fn get_event_history(&self) -> Result<EventHistoryResponse, ApiError> {
         self.get_event_history_with_params(&[]).await
@@ -101,16 +85,8 @@ impl SpaceCatApiClient {
         &self,
         params: &[(&str, &str)],
     ) -> Result<EventHistoryResponse, ApiError> {
-        self.request_with_retry("/event-history", params).await
-    }
-
-    /// Generic request method with retry logic
-    async fn request_with_retry(
-        &self,
-        endpoint: &str,
-        params: &[(&str, &str)],
-    ) -> Result<EventHistoryResponse, ApiError> {
-        self.generic_request_with_retry(endpoint, params).await
+        self.generic_request_with_retry("/event-history", params)
+            .await
     }
 
     /// Generic retry handler for any JSON response type
@@ -179,19 +155,6 @@ impl SpaceCatApiClient {
 
     /// Get API version (health check)
     pub async fn get_version(&self) -> Result<VersionResponse, ApiError> {
-        self.version_request_with_retry().await
-    }
-
-    /// Health check endpoint - returns true if API is available
-    pub async fn health_check(&self) -> Result<bool, ApiError> {
-        match self.get_version().await {
-            Ok(version_response) => Ok(version_response.success),
-            Err(_) => Ok(false),
-        }
-    }
-
-    /// Version request with retry logic
-    async fn version_request_with_retry(&self) -> Result<VersionResponse, ApiError> {
         self.generic_request_with_retry("/version", &[]).await
     }
 
