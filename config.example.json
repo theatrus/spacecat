@@ -1,26 +1,44 @@
 {
-  "api": {
-    "base_url": "http://192.168.0.82:1888",
-    "timeout_seconds": 30,
-    "retry_attempts": 3
-  },
   "logging": {
     "level": "info",
     "enable_file_logging": false,
     "log_file": "spacecat.log"
   },
-  "image_cooldown_seconds": 60,
   "chat": {
     "discord": {
-      "webhook_url": "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN",
-      "enabled": true
+      "enabled": true,
+      "default_webhook_url": "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN"
     },
     "matrix": {
+      "enabled": true,
       "homeserver_url": "https://matrix.org",
       "username": "@spacecat_bot:matrix.org",
       "password": "your_bot_password",
-      "room_id": "!SpaceCatObservatory:matrix.org",
-      "enabled": true
+      "default_room_id": "!SpaceCatObservatory:matrix.org"
     }
-  }
+  },
+  "telescopes": [
+    {
+      "name": "primary",
+      "api": {
+        "base_url": "http://192.168.0.82:1888",
+        "timeout_seconds": 30,
+        "retry_attempts": 3
+      },
+      "image_cooldown_seconds": 60
+    },
+    {
+      "name": "second-scope",
+      "api": {
+        "base_url": "http://192.168.0.81:1888",
+        "timeout_seconds": 30,
+        "retry_attempts": 3
+      },
+      "chat": {
+        "discord_webhook_url": "https://discord.com/api/webhooks/SECOND_WEBHOOK_ID/SECOND_WEBHOOK_TOKEN",
+        "matrix_room_id": "!SecondScope:matrix.org"
+      },
+      "image_cooldown_seconds": 60
+    }
+  ]
 }

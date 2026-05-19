@@ -1,6 +1,6 @@
 use crate::api::SpaceCatApiClient;
 use crate::autofocus::AutofocusResponse;
-use crate::chat::{ChatField, ChatMessage, ChatServiceManager};
+use crate::chat::{ChatField, ChatMessage, ChatServiceManager, ChatTarget};
 use crate::discord::colors;
 use crate::events::{Event, EventDetails, FilterInfo, TargetCoordinates, event_types};
 use crate::images::ImageMetadata;
@@ -10,6 +10,7 @@ use crate::sequence::{
 };
 use chrono::{DateTime, FixedOffset, Utc};
 use std::collections::HashSet;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
 
@@ -84,27 +85,45 @@ impl UpdaterState {
     }
 }
 
-/// Multi-service chat updater
+/// Per-telescope chat updater. Holds a reference to the process-wide chat
+/// service manager and a `ChatTarget` describing where this telescope's posts
+/// should be routed (Discord webhook override, Matrix room override).
 pub struct ChatUpdater {
     client: SpaceCatApiClient,
     state: UpdaterState,
-    chat_manager: ChatServiceManager,
+    chat_manager: Arc<ChatServiceManager>,
+    chat_target: ChatTarget,
     image_cooldown: Duration,
+    /// Telescope name — used to prefix chat message titles and console logs
+    /// so users running multiple telescopes can tell rigs apart.
+    telescope_name: String,
 }
 
 impl ChatUpdater {
-    pub fn new(client: SpaceCatApiClient) -> Self {
+    pub fn new(
+        client: SpaceCatApiClient,
+        telescope_name: String,
+        chat_target: ChatTarget,
+        chat_manager: Arc<ChatServiceManager>,
+    ) -> Self {
         Self {
             client,
             state: UpdaterState::new(),
-            chat_manager: ChatServiceManager::new(),
+            chat_manager,
+            chat_target,
             image_cooldown: Duration::from_secs(60),
+            telescope_name,
         }
     }
 
-    pub fn with_chat_manager(mut self, chat_manager: ChatServiceManager) -> Self {
-        self.chat_manager = chat_manager;
-        self
+    /// Telescope identifier this updater is wired to.
+    pub fn telescope_name(&self) -> &str {
+        &self.telescope_name
+    }
+
+    /// Format a chat-message title with the telescope name prefix.
+    fn titled(&self, title: impl Into<String>) -> String {
+        format!("[{}] {}", self.telescope_name, title.into())
     }
 
     pub fn with_image_cooldown(mut self, cooldown_seconds: u64) -> Self {
@@ -113,16 +132,16 @@ impl ChatUpdater {
     }
 
     pub async fn start_polling(&mut self, poll_interval: Duration) {
-        println!("Starting chat updater loop (events and images)...");
+        let n = self.telescope_name.clone();
+        println!("[{n}] Starting chat updater loop (events and images)...");
         println!(
-            "Chat services configured: {}",
+            "[{n}] Chat services configured: {}",
             self.chat_manager.service_count()
         );
-        println!("Polling interval: {poll_interval:?}");
-        println!("Press Ctrl+C to stop\n");
+        println!("[{n}] Polling interval: {poll_interval:?}");
 
         if let Err(e) = self.initialize_baseline().await {
-            eprintln!("Failed to initialize baseline: {e}");
+            eprintln!("[{n}] Failed to initialize baseline: {e}");
             return;
         }
 
@@ -135,7 +154,8 @@ impl ChatUpdater {
     }
 
     pub async fn initialize_baseline(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        println!("Fetching initial baseline...");
+        let n = self.telescope_name.clone();
+        println!("[{n}] Fetching initial baseline...");
 
         // Load events and find latest TS-TARGETSTART
         let events = self.client.get_event_history().await?;
@@ -162,7 +182,7 @@ impl ChatUpdater {
                 self.state.sequence = Some(sequence);
             }
             Err(e) => {
-                println!("Could not load sequence during initialization: {e}");
+                println!("[{n}] Could not load sequence during initialization: {e}");
             }
         }
 
@@ -175,21 +195,24 @@ impl ChatUpdater {
         }
 
         println!(
-            "Baseline: {} events, {} images",
+            "[{n}] Baseline: {} events, {} images",
             self.state.events_seen.len(),
             self.state.images_seen.len()
         );
 
         if let Some(target) = &self.state.current_target {
-            println!("Current target: {} (from {:?})", target.name, target.source);
+            println!(
+                "[{n}] Current target: {} (from {:?})",
+                target.name, target.source
+            );
         }
 
         let status = self.format_startup_status();
         if !status.is_empty() {
-            println!("Inferred NINA state:\n{status}");
+            println!("[{n}] Inferred NINA state:\n{status}");
         }
 
-        println!("Now monitoring for new events and images...\n");
+        println!("[{n}] Now monitoring for new events and images.");
 
         // Send welcome message to chat services
         if self.chat_manager.service_count() > 0 {
@@ -422,14 +445,16 @@ impl ChatUpdater {
             },
         );
 
-        let message = ChatMessage::new("🔄 Filter Changed")
+        let message = ChatMessage::new(&self.titled("🔄 Filter Changed"))
             .color(colors::BLUE)
             .field("Time", &event.time, false)
             .field("Filter Change", &arrow, false)
             .field("Previous", &fmt(previous), true)
             .field("New", &fmt(new), true);
 
-        self.chat_manager.send_message(&message).await;
+        self.chat_manager
+            .send_message(&message, &self.chat_target)
+            .await;
     }
 
     async fn handle_ts_targetstart(&mut self, event: &Event) {
@@ -671,8 +696,8 @@ impl ChatUpdater {
 
     // Chat notification methods
     async fn send_welcome_message(&self) {
-        let mut message =
-            ChatMessage::new("🚀 SpaceCat Observatory Monitor Started").color(colors::GREEN);
+        let mut message = ChatMessage::new(&self.titled("🚀 SpaceCat Observatory Monitor Started"))
+            .color(colors::GREEN);
 
         // Inferred NINA state from event history
         let summary = self.format_startup_status();
@@ -741,7 +766,9 @@ impl ChatUpdater {
 
         message = message.footer("Ready to monitor telescope events and images");
 
-        self.chat_manager.send_message(&message).await;
+        self.chat_manager
+            .send_message(&message, &self.chat_target)
+            .await;
     }
 
     /// Build a one-paragraph summary of NINA's state, inferred from recent events.
@@ -799,7 +826,7 @@ impl ChatUpdater {
         old_target: &TargetInfo,
         new_target: &TargetInfo,
     ) {
-        let mut message = ChatMessage::new("🎯 Target Change")
+        let mut message = ChatMessage::new(&self.titled("🎯 Target Change"))
             .color(colors::CYAN)
             .field("Previous Target", &old_target.name, true)
             .field("New Target", &new_target.name, true);
@@ -822,11 +849,13 @@ impl ChatUpdater {
 
         self.add_meridian_flip_info(&mut message);
         self.add_mount_info(&mut message).await;
-        self.chat_manager.send_message(&message).await;
+        self.chat_manager
+            .send_message(&message, &self.chat_target)
+            .await;
     }
 
     async fn send_target_start_notification(&self, target: &TargetInfo) {
-        let mut message = ChatMessage::new("🎯 Target Started")
+        let mut message = ChatMessage::new(&self.titled("🎯 Target Started"))
             .color(colors::GREEN)
             .field("Target", &target.name, false);
 
@@ -848,7 +877,9 @@ impl ChatUpdater {
 
         self.add_meridian_flip_info(&mut message);
         self.add_mount_info(&mut message).await;
-        self.chat_manager.send_message(&message).await;
+        self.chat_manager
+            .send_message(&message, &self.chat_target)
+            .await;
     }
 
     async fn send_autofocus_notification(&self, af: &AutofocusResponse) {
@@ -872,7 +903,7 @@ impl ChatUpdater {
             position_change.to_string()
         };
 
-        let message = ChatMessage::new(&format!("{success_indicator} Autofocus Completed"))
+        let message = ChatMessage::new(&self.titled(format!("{success_indicator} Autofocus Completed")))
             .color(color)
             .field("Filter", &af_data.filter, true)
             .field("Method", &af_data.method, true)
@@ -905,7 +936,9 @@ impl ChatUpdater {
             )
             .footer(&format!("Focuser: {}", af_data.auto_focuser_name));
 
-        self.chat_manager.send_message(&message).await;
+        self.chat_manager
+            .send_message(&message, &self.chat_target)
+            .await;
     }
 
     async fn send_mount_event_notification(&self, event: &Event) {
@@ -921,7 +954,7 @@ impl ChatUpdater {
             _ => ("🔭 Mount Event", colors::GRAY),
         };
 
-        let mut message = ChatMessage::new(title)
+        let mut message = ChatMessage::new(&self.titled(title))
             .color(color)
             .field("Event", &event.event, true)
             .field("Time", &event.time, true);
@@ -931,7 +964,9 @@ impl ChatUpdater {
         }
 
         self.add_mount_info(&mut message).await;
-        self.chat_manager.send_message(&message).await;
+        self.chat_manager
+            .send_message(&message, &self.chat_target)
+            .await;
     }
 
     async fn send_guider_event_notification(
@@ -945,7 +980,7 @@ impl ChatUpdater {
             _ => ("🎯 Guider Event", colors::GRAY),
         };
 
-        let mut message = ChatMessage::new(title)
+        let mut message = ChatMessage::new(&self.titled(title))
             .color(color)
             .field("Event", &event.event, true)
             .field("Time", &event.time, true);
@@ -978,7 +1013,9 @@ impl ChatUpdater {
             }
         }
 
-        self.chat_manager.send_message(&message).await;
+        self.chat_manager
+            .send_message(&message, &self.chat_target)
+            .await;
     }
 
     async fn send_sequence_event_notification(&self, event: &Event) {
@@ -988,7 +1025,7 @@ impl ChatUpdater {
             _ => ("📋 Sequence Event", colors::GRAY),
         };
 
-        let mut message = ChatMessage::new(title)
+        let mut message = ChatMessage::new(&self.titled(title))
             .color(color)
             .field("Event", &event.event, true)
             .field("Time", &event.time, true);
@@ -1019,14 +1056,16 @@ impl ChatUpdater {
             }
         }
 
-        self.chat_manager.send_message(&message).await;
+        self.chat_manager
+            .send_message(&message, &self.chat_target)
+            .await;
     }
 
     async fn send_generic_event_notification(&self, event: &Event) {
         let color = get_event_color(&event.event);
         let title = get_event_title(&event.event);
 
-        let mut message = ChatMessage::new(&title)
+        let mut message = ChatMessage::new(&self.titled(title))
             .color(color)
             .field("Time", &event.time, false);
 
@@ -1057,7 +1096,9 @@ impl ChatUpdater {
             }
         }
 
-        self.chat_manager.send_message(&message).await;
+        self.chat_manager
+            .send_message(&message, &self.chat_target)
+            .await;
     }
 
     async fn send_image_notification(
@@ -1083,7 +1124,7 @@ impl ChatUpdater {
             format!("📸 New {} Frame Captured", image.image_type)
         };
 
-        let mut message = ChatMessage::new(&title).color(color);
+        let mut message = ChatMessage::new(&self.titled(title)).color(color);
 
         if let Some(target) = &self.state.current_target {
             message = message.field("Target", &target.name, true);
@@ -1122,7 +1163,7 @@ impl ChatUpdater {
 
         // Send message with thumbnail
         self.chat_manager
-            .send_message_with_image(&message, &self.client, index as u32)
+            .send_message_with_image(&message, &self.chat_target, &self.client, index as u32)
             .await;
     }
 }
