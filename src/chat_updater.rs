@@ -48,6 +48,10 @@ struct UpdaterState {
     sequence_running: bool,
     /// Active TS-WAITSTART wait-end time, if NINA is currently waiting.
     wait_until: Option<DateTime<FixedOffset>>,
+    /// Fingerprint of the last live-status embed posted. Lets us skip the
+    /// `upsert_status` call when nothing meaningful has changed since the
+    /// previous poll cycle.
+    last_status_fingerprint: Option<String>,
 }
 
 impl UpdaterState {
@@ -65,7 +69,39 @@ impl UpdaterState {
             last_guider_event: None,
             sequence_running: false,
             wait_until: None,
+            last_status_fingerprint: None,
         }
+    }
+
+    /// Fingerprint of the state that should drive a live-status edit.
+    /// Deliberately excludes the live mount RA/Dec — those drift every
+    /// cycle during tracking and would force constant edits. We only
+    /// re-render when discrete state transitions happen (target changes,
+    /// filter switches, mount events, guider events, wait timers, etc.).
+    fn status_fingerprint(&self) -> String {
+        let target = self
+            .current_target
+            .as_ref()
+            .map(|t| t.name.as_str())
+            .unwrap_or("");
+        let filter = self
+            .last_filter
+            .as_ref()
+            .map(|f| f.name.as_str())
+            .unwrap_or("");
+        let mount = self.last_mount_event.as_deref().unwrap_or("");
+        let guider = self.last_guider_event.as_deref().unwrap_or("");
+        let waiting = self.wait_until.is_some();
+        // Round the meridian-flip ETA to whole minutes; second-by-second
+        // drift shouldn't trigger an edit.
+        let flip_minutes = self
+            .meridian_flip_time
+            .map(|h| (h * 60.0).round() as i64)
+            .unwrap_or(-1);
+        format!(
+            "t={target}|f={filter}|m={mount}|g={guider}|w={waiting}|sr={}|flip={flip_minutes}",
+            self.sequence_running
+        )
     }
 
     fn event_key(event: &Event) -> String {
@@ -156,15 +192,21 @@ impl ChatUpdater {
 
     /// Build a live-status embed from current state and push it to any
     /// service that supports editing in place (currently only the Discord
-    /// bot). No-op for telescopes routed only through webhooks/Matrix.
-    async fn refresh_status_message(&self) {
+    /// bot). No-op for telescopes routed only through webhooks/Matrix, or
+    /// when the state fingerprint hasn't changed since the last cycle.
+    async fn refresh_status_message(&mut self) {
         if !self.chat_manager.has_status_upsert(&self.chat_target) {
+            return;
+        }
+        let fingerprint = self.state.status_fingerprint();
+        if self.state.last_status_fingerprint.as_ref() == Some(&fingerprint) {
             return;
         }
         let message = self.build_status_message().await;
         self.chat_manager
             .upsert_status(&self.telescope_name, &self.chat_target, &message)
             .await;
+        self.state.last_status_fingerprint = Some(fingerprint);
     }
 
     /// Compose the live-status `ChatMessage`. Pulls cheap state from
@@ -1162,6 +1204,11 @@ impl ChatUpdater {
                 EventDetails::WaitStart { wait_end_time } => {
                     message = message.field("Wait Until", wait_end_time, false);
                 }
+                EventDetails::AutofocusPointAdded { position, hfr } => {
+                    message = message
+                        .field("Position", &position.to_string(), true)
+                        .field("HFR", &format!("{hfr:.3}"), true);
+                }
             }
         }
 
@@ -1313,6 +1360,7 @@ fn get_event_color(event: &str) -> u32 {
         event_types::FOCUSER_USER_FOCUSED => colors::PURPLE,
         event_types::AUTOFOCUS_STARTING => colors::PURPLE,
         event_types::AUTOFOCUS_FINISHED => colors::PURPLE,
+        event_types::AUTOFOCUS_POINT_ADDED => colors::PURPLE,
         event_types::ERROR_AF => colors::RED,
 
         // Rotator events
@@ -1364,6 +1412,7 @@ fn get_event_title(event: &str) -> String {
         event_types::FILTERWHEEL_CHANGED => "🔄 Filter Changed".to_string(),
         event_types::TS_TARGETSTART => "🎯 Target Started".to_string(),
         event_types::TS_WAITSTART => "⏳ Sequence Waiting".to_string(),
+        event_types::AUTOFOCUS_POINT_ADDED => "📈 Autofocus Point".to_string(),
         _ => format!("📡 {}", event),
     }
 }

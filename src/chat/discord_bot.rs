@@ -94,6 +94,8 @@ pub struct DiscordBotService {
     /// writes happen once per poll cycle per telescope.
     status_state: Arc<Mutex<StatusState>>,
     state_file: PathBuf,
+    /// Whether live-status upserts are enabled at all (config-driven).
+    live_status: bool,
 }
 
 impl DiscordBotService {
@@ -102,12 +104,14 @@ impl DiscordBotService {
         default_channel_id: Option<u64>,
         status_state: Arc<Mutex<StatusState>>,
         state_file: PathBuf,
+        live_status: bool,
     ) -> Self {
         Self {
             http,
             default_channel_id,
             status_state,
             state_file,
+            live_status,
         }
     }
 
@@ -196,7 +200,7 @@ impl ChatService for DiscordBotService {
     }
 
     fn supports_status_upsert(&self) -> bool {
-        true
+        self.live_status
     }
 
     /// Edit-or-post the live status message for this telescope.
@@ -347,7 +351,13 @@ pub async fn run_bot(
     });
 
     Ok((
-        DiscordBotService::new(http, default_channel_id, status_state, state_file),
+        DiscordBotService::new(
+            http,
+            default_channel_id,
+            status_state,
+            state_file,
+            bot_config.live_status,
+        ),
         join,
     ))
 }

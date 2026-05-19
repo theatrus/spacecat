@@ -45,6 +45,15 @@ pub enum EventDetails {
         #[serde(rename = "WaitEndTime")]
         wait_end_time: String,
     },
+    /// Autofocus measurement point. NINA emits these in flurries (~one per
+    /// step) during an autofocus run, each carrying the focuser position
+    /// and the half-flux radius measured at that position.
+    AutofocusPointAdded {
+        #[serde(rename = "Position")]
+        position: i32,
+        #[serde(rename = "HFR")]
+        hfr: f64,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -426,6 +435,25 @@ mod tests {
                 assert_eq!(new.id, -1);
             }
             other => panic!("expected FilterWheelChange, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_autofocus_point_added_event() {
+        let event_json = r#"{
+            "Position": 3325,
+            "Time": "2026-05-18T22:43:41.8412779-07:00",
+            "HFR": 4.3494099367270405,
+            "Event": "AUTOFOCUS-POINT-ADDED"
+        }"#;
+        let event: Event = serde_json::from_str(event_json).unwrap();
+        assert_eq!(event.event, event_types::AUTOFOCUS_POINT_ADDED);
+        match event.details {
+            Some(EventDetails::AutofocusPointAdded { position, hfr }) => {
+                assert_eq!(position, 3325);
+                assert!((hfr - 4.3494099367270405).abs() < 1e-9);
+            }
+            other => panic!("expected AutofocusPointAdded, got {other:?}"),
         }
     }
 

@@ -144,7 +144,14 @@ pub struct DiscordBotConfig {
     /// Optional fallback channel for telescopes that don't override.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_channel_id: Option<u64>,
-    /// Where to persist the live-status message IDs (Phase 2).
+    /// Maintain a pinned live-status message per bot-routed telescope's
+    /// channel, edited in place when the telescope's state changes. Default
+    /// off — explicit opt-in so users who only want event notifications
+    /// don't get a second message stream by surprise.
+    #[serde(default)]
+    pub live_status: bool,
+    /// Where to persist the live-status message IDs (only used when
+    /// `live_status` is true).
     #[serde(default = "default_state_file")]
     pub state_file: String,
     /// Discord user IDs allowed to invoke write commands (Phase 3).

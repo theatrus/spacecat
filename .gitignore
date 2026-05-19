@@ -1,6 +1,7 @@
 /target
 config.json
 config.*.json
+spacecat-state.json
 *.log
 /installer/output
 .vscode/

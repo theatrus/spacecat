@@ -1088,6 +1088,9 @@ fn display_last_events(events: &EventHistoryResponse, count: usize) {
                 EventDetails::WaitStart { wait_end_time } => {
                     println!("  Details: Waiting until {}", wait_end_time);
                 }
+                EventDetails::AutofocusPointAdded { position, hfr } => {
+                    println!("  Details: Autofocus point — position {position}, HFR {hfr:.3}");
+                }
             }
         }
 
