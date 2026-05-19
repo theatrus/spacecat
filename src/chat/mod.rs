@@ -1,10 +1,12 @@
 mod discord_bot;
 mod discord_service;
 mod matrix_service;
+mod status_state;
 
 pub use discord_bot::{DiscordBotService, run_bot};
 pub use discord_service::DiscordChatService;
 pub use matrix_service::MatrixChatService;
+pub use status_state::{StatusMessage, StatusState};
 
 use crate::api::SpaceCatApiClient;
 use crate::error::ChatError;
@@ -204,6 +206,25 @@ pub trait ChatService: Send + Sync {
     /// telescope without a webhook override on a Discord service with no
     /// default).
     fn can_route(&self, target: &ChatTarget) -> bool;
+
+    /// Upsert a "live status" message: edit the previously-posted message
+    /// for this telescope in place if one exists, otherwise post a new
+    /// one and remember its ID. Default implementation is a no-op for
+    /// services that don't support editing (webhooks, Matrix).
+    async fn upsert_status(
+        &self,
+        _telescope: &str,
+        _target: &ChatTarget,
+        _message: &ChatMessage,
+    ) -> Result<(), ChatError> {
+        Ok(())
+    }
+
+    /// True if this service knows how to edit a previously-posted status
+    /// message. Used to decide whether to bother building the embed.
+    fn supports_status_upsert(&self) -> bool {
+        false
+    }
 }
 
 /// Chat service manager. One instance is shared across all telescopes; the
@@ -221,6 +242,32 @@ impl ChatServiceManager {
 
     pub fn add_service(&mut self, service: Box<dyn ChatService>) {
         self.services.push(service);
+    }
+
+    /// Refresh the live status message for a telescope across every service
+    /// that supports editing. Currently only the Discord bot acts on this.
+    pub async fn upsert_status(&self, telescope: &str, target: &ChatTarget, message: &ChatMessage) {
+        for service in &self.services {
+            if !service.supports_status_upsert() || !service.can_route(target) {
+                continue;
+            }
+            if let Err(e) = service.upsert_status(telescope, target, message).await {
+                eprintln!(
+                    "Failed to upsert status on {} for {telescope}: {}",
+                    service.service_name(),
+                    e
+                );
+            }
+        }
+    }
+
+    /// True when at least one service in the manager can edit live status
+    /// messages for this target. Lets callers skip building the embed
+    /// entirely when nothing would consume it.
+    pub fn has_status_upsert(&self, target: &ChatTarget) -> bool {
+        self.services
+            .iter()
+            .any(|s| s.supports_status_upsert() && s.can_route(target))
     }
 
     pub async fn send_message(&self, message: &ChatMessage, target: &ChatTarget) {

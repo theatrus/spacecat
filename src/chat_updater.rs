@@ -149,8 +149,75 @@ impl ChatUpdater {
             self.poll_sequence().await;
             self.poll_events().await;
             self.poll_images().await;
+            self.refresh_status_message().await;
             sleep(poll_interval).await;
         }
+    }
+
+    /// Build a live-status embed from current state and push it to any
+    /// service that supports editing in place (currently only the Discord
+    /// bot). No-op for telescopes routed only through webhooks/Matrix.
+    async fn refresh_status_message(&self) {
+        if !self.chat_manager.has_status_upsert(&self.chat_target) {
+            return;
+        }
+        let message = self.build_status_message().await;
+        self.chat_manager
+            .upsert_status(&self.telescope_name, &self.chat_target, &message)
+            .await;
+    }
+
+    /// Compose the live-status `ChatMessage`. Pulls cheap state from
+    /// `self.state` and adds a fresh mount snapshot per cycle (the most
+    /// useful single fetch for at-a-glance status).
+    async fn build_status_message(&self) -> ChatMessage {
+        let mut message = ChatMessage::new(&self.titled("📡 Live status"));
+        message = message.color(colors::CYAN);
+
+        let summary = self.format_startup_status();
+        if !summary.is_empty() {
+            message = message.field("State", &summary, false);
+        }
+
+        if let Some(target) = &self.state.current_target {
+            message = message.field("Target", &target.name, false);
+            if let Some(coords) = &target.coordinates {
+                message = message.field(
+                    "Coordinates",
+                    &format!("RA: {}\nDec: {}", coords.ra_string, coords.dec_string),
+                    false,
+                );
+            }
+        }
+
+        if let Some(filter) = &self.state.last_filter
+            && !filter.is_unknown()
+        {
+            message = message.field("Filter", &filter.name, true);
+        }
+
+        if let Some(flip_hours) = self.state.meridian_flip_time {
+            message = message.field(
+                "Meridian flip in",
+                &meridian_flip_time_formatted_with_clock(flip_hours),
+                true,
+            );
+        }
+
+        // Fresh mount snapshot — small payload, very useful at a glance.
+        if let Ok(mount_info) = self.client.get_mount_info().await
+            && mount_info.is_connected()
+        {
+            let (ra, dec) = mount_info.get_coordinates();
+            message = message
+                .field("Mount RA/Dec", &format!("RA: {ra}\nDec: {dec}"), true)
+                .field("Pier", mount_info.get_side_of_pier(), true);
+        }
+
+        message.footer(&format!(
+            "Updated {}",
+            chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC")
+        ))
     }
 
     pub async fn initialize_baseline(&mut self) -> Result<(), Box<dyn std::error::Error>> {

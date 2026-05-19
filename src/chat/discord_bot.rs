@@ -11,13 +11,16 @@
 //!   /status, /sequence, /target, /mount, /filter, /focus, /guider,
 //!   /events, /last-image.
 
+use super::status_state::{StatusMessage, StatusState};
 use super::{ChatMessage, ChatService, ChatTarget, DiscordBotConfig};
 use crate::api::SpaceCatApiClient;
 use crate::error::ChatError;
 use async_trait::async_trait;
 use poise::serenity_prelude::{self as serenity, CreateAttachment, CreateMessage};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::Mutex;
 
 /// Per-bot state carried by the Poise framework. Each slash command has
 /// `ctx.data()` access to this.
@@ -81,17 +84,30 @@ pub type Context<'a> = poise::Context<'a, BotData, BotError>;
 // ---------- Outbound posting (ChatService impl) ----------
 
 /// Chat service that posts via the Discord bot. Holds the bot's `Arc<Http>`
-/// after the gateway task is spawned, plus an optional default channel.
+/// after the gateway task is spawned, plus an optional default channel and
+/// the persistent live-status state.
 pub struct DiscordBotService {
     http: Arc<serenity::Http>,
     default_channel_id: Option<u64>,
+    /// Per-telescope (channel_id, message_id) for the pinned live-status
+    /// message. Shared across telescope tasks via Mutex; reads are cheap,
+    /// writes happen once per poll cycle per telescope.
+    status_state: Arc<Mutex<StatusState>>,
+    state_file: PathBuf,
 }
 
 impl DiscordBotService {
-    pub fn new(http: Arc<serenity::Http>, default_channel_id: Option<u64>) -> Self {
+    pub fn new(
+        http: Arc<serenity::Http>,
+        default_channel_id: Option<u64>,
+        status_state: Arc<Mutex<StatusState>>,
+        state_file: PathBuf,
+    ) -> Self {
         Self {
             http,
             default_channel_id,
+            status_state,
+            state_file,
         }
     }
 
@@ -178,6 +194,89 @@ impl ChatService for DiscordBotService {
     fn can_route(&self, target: &ChatTarget) -> bool {
         target.discord_channel_id.is_some() || self.default_channel_id.is_some()
     }
+
+    fn supports_status_upsert(&self) -> bool {
+        true
+    }
+
+    /// Edit-or-post the live status message for this telescope.
+    ///
+    /// On first call (or when state has no record), posts a fresh message
+    /// and remembers `(channel_id, message_id)`. On subsequent calls, edits
+    /// the existing message in place. If the previous message was deleted
+    /// (404 from Discord), reposts and updates state.
+    async fn upsert_status(
+        &self,
+        telescope: &str,
+        target: &ChatTarget,
+        message: &ChatMessage,
+    ) -> Result<(), ChatError> {
+        let channel = self
+            .resolve_channel(target)
+            .ok_or_else(|| ChatError::Discord {
+                message: "No Discord channel available for status upsert".to_string(),
+            })?;
+        let embed = Self::build_embed(message);
+
+        let existing = {
+            let state = self.status_state.lock().await;
+            state.get(telescope)
+        };
+
+        // Try to edit if we have a known message in the same channel.
+        if let Some(known) = existing
+            && known.channel_id == channel.get()
+        {
+            let edit = serenity::EditMessage::new()
+                .content("")
+                .embed(embed.clone());
+            match channel
+                .edit_message(&self.http, serenity::MessageId::new(known.message_id), edit)
+                .await
+            {
+                Ok(_) => return Ok(()),
+                Err(serenity::Error::Http(serenity::HttpError::UnsuccessfulRequest(err)))
+                    if err.status_code == reqwest::StatusCode::NOT_FOUND =>
+                {
+                    // Message was deleted; fall through and repost.
+                    eprintln!(
+                        "[{telescope}] status message {} not found — reposting",
+                        known.message_id
+                    );
+                }
+                Err(e) => {
+                    return Err(ChatError::Discord {
+                        message: format!("edit_message failed: {e}"),
+                    });
+                }
+            }
+        }
+
+        // Post new message and record its ID.
+        let payload = CreateMessage::new().embed(embed);
+        let posted = channel
+            .send_message(&self.http, payload)
+            .await
+            .map_err(|e| ChatError::Discord {
+                message: format!("status post failed: {e}"),
+            })?;
+
+        let mut state = self.status_state.lock().await;
+        state.set(
+            telescope,
+            StatusMessage {
+                channel_id: channel.get(),
+                message_id: posted.id.get(),
+            },
+        );
+        if let Err(e) = state.save(&self.state_file) {
+            eprintln!(
+                "Warning: failed to persist status state to {}: {e}",
+                self.state_file.display()
+            );
+        }
+        Ok(())
+    }
 }
 
 // ---------- Bot startup ----------
@@ -195,6 +294,15 @@ pub async fn run_bot(
     let write_acl: std::collections::HashSet<u64> = bot_config.write_acl.iter().copied().collect();
     let token = bot_config.token.clone();
     let default_channel_id = bot_config.default_channel_id;
+    let state_file = PathBuf::from(&bot_config.state_file);
+    let status_state = StatusState::load(&state_file).unwrap_or_else(|e| {
+        eprintln!(
+            "Warning: could not load status state from {}: {e} — starting fresh",
+            state_file.display()
+        );
+        StatusState::default()
+    });
+    let status_state = Arc::new(Mutex::new(status_state));
 
     let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions {
@@ -238,23 +346,36 @@ pub async fn run_bot(
         }
     });
 
-    Ok((DiscordBotService::new(http, default_channel_id), join))
+    Ok((
+        DiscordBotService::new(http, default_channel_id, status_state, state_file),
+        join,
+    ))
 }
 
 // ---------- Slash commands (Phase 1, read-only) ----------
 
+/// SpaceCat telescope monitoring commands.
+#[poise::command(
+    slash_command,
+    subcommands(
+        "status",
+        "sequence",
+        "target",
+        "mount",
+        "filter",
+        "focus",
+        "guider",
+        "events",
+        "last_image"
+    )
+)]
+async fn spacecat(_ctx: Context<'_>) -> Result<(), BotError> {
+    // Parent never runs directly when subcommands are defined.
+    Ok(())
+}
+
 fn phase1_commands() -> Vec<poise::Command<BotData, BotError>> {
-    vec![
-        status(),
-        sequence(),
-        target(),
-        mount(),
-        filter(),
-        focus(),
-        guider(),
-        events(),
-        last_image(),
-    ]
+    vec![spacecat()]
 }
 
 /// Shorthand for "resolve telescope, send an ephemeral error to the user if
