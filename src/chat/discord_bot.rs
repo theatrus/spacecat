@@ -547,12 +547,10 @@ async fn target(
         embed = embed
             .field("Name", tname, true)
             .field("Project", project, true)
-            .field("Rotation", format!("{rot}°"), true)
-            .field(
-                "Coordinates",
-                format!("RA: {}\nDec: {}", coords.ra_string, coords.dec_string),
-                false,
-            );
+            .field("Rotation", format!("{rot}°"), true);
+        if let Some(s) = coords.display() {
+            embed = embed.field("Coordinates", s, false);
+        }
     } else {
         embed = embed.field("Sequence target", active_target, false);
     }

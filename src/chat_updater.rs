@@ -223,12 +223,10 @@ impl ChatUpdater {
 
         if let Some(target) = &self.state.current_target {
             message = message.field("Target", &target.name, false);
-            if let Some(coords) = &target.coordinates {
-                message = message.field(
-                    "Coordinates",
-                    &format!("RA: {}\nDec: {}", coords.ra_string, coords.dec_string),
-                    false,
-                );
+            if let Some(coords) = &target.coordinates
+                && let Some(s) = coords.display()
+            {
+                message = message.field("Coordinates", &s, false);
             }
         }
 
@@ -822,12 +820,10 @@ impl ChatUpdater {
                 message = message.field("Project", project, true);
             }
 
-            if let Some(coords) = &target.coordinates {
-                message = message.field(
-                    "Coordinates",
-                    &format!("RA: {}\nDec: {}", coords.ra_string, coords.dec_string),
-                    false,
-                );
+            if let Some(coords) = &target.coordinates
+                && let Some(s) = coords.display()
+            {
+                message = message.field("Coordinates", &s, false);
             }
 
             if let Some(rotation) = &target.rotation {
@@ -944,12 +940,10 @@ impl ChatUpdater {
             message = message.field("Project", project, true);
         }
 
-        if let Some(coords) = &new_target.coordinates {
-            message = message.field(
-                "Coordinates",
-                &format!("RA: {}\nDec: {}", coords.ra_string, coords.dec_string),
-                false,
-            );
+        if let Some(coords) = &new_target.coordinates
+            && let Some(s) = coords.display()
+        {
+            message = message.field("Coordinates", &s, false);
         }
 
         if let Some(rotation) = &new_target.rotation {
@@ -972,12 +966,10 @@ impl ChatUpdater {
             message = message.field("Project", project, true);
         }
 
-        if let Some(coords) = &target.coordinates {
-            message = message.field(
-                "Coordinates",
-                &format!("RA: {}\nDec: {}", coords.ra_string, coords.dec_string),
-                false,
-            );
+        if let Some(coords) = &target.coordinates
+            && let Some(s) = coords.display()
+        {
+            message = message.field("Coordinates", &s, false);
         }
 
         if let Some(rotation) = &target.rotation {
@@ -1142,12 +1134,10 @@ impl ChatUpdater {
 
         if let Some(target) = &self.state.current_target {
             message = message.field("Current Target", &target.name, true);
-            if let Some(coords) = &target.coordinates {
-                message = message.field(
-                    "Coordinates",
-                    &format!("RA: {}\nDec: {}", coords.ra_string, coords.dec_string),
-                    false,
-                );
+            if let Some(coords) = &target.coordinates
+                && let Some(s) = coords.display()
+            {
+                message = message.field("Coordinates", &s, false);
             }
         }
 

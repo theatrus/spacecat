@@ -366,4 +366,68 @@ impl SpaceCatApiClient {
         self.generic_request_with_retry("/equipment/guider/info", &[])
             .await
     }
+
+    /// Issue a NINA "command" endpoint (mount park, filter change, etc.).
+    ///
+    /// NINA exposes its write surface as plain GET requests with query
+    /// parameters under `/v2/api/...`. Unlike `generic_request_with_retry`,
+    /// this method does *not* retry on transient failures — most write
+    /// operations aren't safely idempotent (e.g. capture, slew). Returns
+    /// the parsed wrapper with `Success`/`Error`/`Response` fields.
+    pub async fn execute_command(
+        &self,
+        endpoint: &str,
+        params: &[(&str, &str)],
+    ) -> Result<CommandResponse, ApiError> {
+        let url = format!("{}/v2/api{}", self.base_url, endpoint);
+        let mut request = self.client.get(&url);
+        if !params.is_empty() {
+            request = request.query(params);
+        }
+        let response = request.send().await?;
+        if response.status().is_success() {
+            let parsed: CommandResponse = response.json().await?;
+            Ok(parsed)
+        } else {
+            let status = response.status().as_u16();
+            let message = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            Err(ApiError::Http { status, message })
+        }
+    }
+}
+
+/// Response shape from NINA's command endpoints. `response` is whatever the
+/// endpoint chose to return — usually a short status string — and is
+/// surfaced verbatim to chat replies.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct CommandResponse {
+    pub response: serde_json::Value,
+    pub error: String,
+    pub status_code: i32,
+    pub success: bool,
+    #[serde(rename = "Type")]
+    pub response_type: String,
+}
+
+impl CommandResponse {
+    /// Best-effort human-readable summary of the response body.
+    pub fn summary(&self) -> String {
+        if !self.success {
+            return if self.error.is_empty() {
+                "failed".to_string()
+            } else {
+                format!("failed: {}", self.error)
+            };
+        }
+        match &self.response {
+            serde_json::Value::String(s) if !s.is_empty() => s.clone(),
+            serde_json::Value::Bool(b) => b.to_string(),
+            serde_json::Value::Null => "ok".to_string(),
+            other => other.to_string(),
+        }
+    }
 }
