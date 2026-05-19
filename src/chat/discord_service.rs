@@ -91,6 +91,11 @@ impl ChatService for DiscordChatService {
     }
 
     fn can_route(&self, target: &ChatTarget) -> bool {
+        // Defer to the Discord bot when a channel ID is configured for this
+        // telescope — bot path takes precedence over the webhook.
+        if target.discord_channel_id.is_some() {
+            return false;
+        }
         self.resolve_url(target).is_some()
     }
 }

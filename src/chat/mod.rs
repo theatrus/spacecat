@@ -1,6 +1,8 @@
+mod discord_bot;
 mod discord_service;
 mod matrix_service;
 
+pub use discord_bot::{DiscordBotService, run_bot};
 pub use discord_service::DiscordChatService;
 pub use matrix_service::MatrixChatService;
 
@@ -61,10 +63,15 @@ impl ChatMessage {
 /// Per-telescope routing overrides. Each field, when `Some`, redirects this
 /// telescope's posts away from the shared default destination configured on
 /// the corresponding `ChatService`.
+///
+/// When `discord_channel_id` is set, the Discord bot service takes precedence
+/// over webhook posting for this telescope — the webhook service defers via
+/// `can_route`, and the bot routes the message to the channel.
 #[derive(Debug, Clone, Default)]
 pub struct ChatTarget {
     pub discord_webhook_url: Option<String>,
     pub matrix_room_id: Option<String>,
+    pub discord_channel_id: Option<u64>,
 }
 
 /// Shared Discord configuration. The webhook here is the fallback destination
@@ -101,23 +108,56 @@ fn default_enabled() -> bool {
 }
 
 /// Shared chat configuration at the top of the config file. Persistent
-/// connections (Matrix login) live here and are reused across telescopes.
+/// connections (Matrix login, Discord bot gateway) live here and are reused
+/// across telescopes.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ChatConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub discord: Option<SharedDiscordConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub matrix: Option<SharedMatrixConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub discord_bot: Option<DiscordBotConfig>,
+}
+
+/// Shared Discord bot configuration. One bot identity / token serves every
+/// telescope; each telescope can map to a different channel via
+/// `TelescopeChatOverrides::discord_channel_id`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiscordBotConfig {
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+    /// Bot token from the Discord Developer Portal.
+    pub token: String,
+    /// Optional fallback channel for telescopes that don't override.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_channel_id: Option<u64>,
+    /// Where to persist the live-status message IDs (Phase 2).
+    #[serde(default = "default_state_file")]
+    pub state_file: String,
+    /// Discord user IDs allowed to invoke write commands (Phase 3).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub write_acl: Vec<u64>,
+}
+
+fn default_state_file() -> String {
+    "./spacecat-state.json".to_string()
 }
 
 /// Per-telescope chat routing overrides. Either field, when present, replaces
-/// the shared default for that service for this telescope only.
+/// the shared default for that service for this telescope only. Setting
+/// `discord_channel_id` switches that telescope's Discord posts from the
+/// webhook path to the bot path.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TelescopeChatOverrides {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub discord_webhook_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub matrix_room_id: Option<String>,
+    /// When set, this telescope's Discord posts go through the bot to this
+    /// channel; the webhook path is ignored for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discord_channel_id: Option<u64>,
 }
 
 impl TelescopeChatOverrides {
@@ -125,6 +165,7 @@ impl TelescopeChatOverrides {
         ChatTarget {
             discord_webhook_url: self.discord_webhook_url.clone(),
             matrix_room_id: self.matrix_room_id.clone(),
+            discord_channel_id: self.discord_channel_id,
         }
     }
 }

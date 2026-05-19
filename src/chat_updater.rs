@@ -903,38 +903,39 @@ impl ChatUpdater {
             position_change.to_string()
         };
 
-        let message = ChatMessage::new(&self.titled(format!("{success_indicator} Autofocus Completed")))
-            .color(color)
-            .field("Filter", &af_data.filter, true)
-            .field("Method", &af_data.method, true)
-            .field("Duration", &af_data.duration, true)
-            .field(
-                "Temperature",
-                &format!("{:.1}°C", af_data.temperature),
-                true,
-            )
-            .field(
-                "Focus Position",
-                &af_data.calculated_focus_point.position.to_string(),
-                true,
-            )
-            .field("Position Change", &position_change_text, true)
-            .field(
-                "HFR",
-                &format!("{:.3}", af_data.calculated_focus_point.value),
-                true,
-            )
-            .field(
-                "R-squared",
-                &format!("{:.4}", af.get_best_r_squared()),
-                true,
-            )
-            .field(
-                "Measurements",
-                &af_data.measure_points.len().to_string(),
-                true,
-            )
-            .footer(&format!("Focuser: {}", af_data.auto_focuser_name));
+        let message =
+            ChatMessage::new(&self.titled(format!("{success_indicator} Autofocus Completed")))
+                .color(color)
+                .field("Filter", &af_data.filter, true)
+                .field("Method", &af_data.method, true)
+                .field("Duration", &af_data.duration, true)
+                .field(
+                    "Temperature",
+                    &format!("{:.1}°C", af_data.temperature),
+                    true,
+                )
+                .field(
+                    "Focus Position",
+                    &af_data.calculated_focus_point.position.to_string(),
+                    true,
+                )
+                .field("Position Change", &position_change_text, true)
+                .field(
+                    "HFR",
+                    &format!("{:.3}", af_data.calculated_focus_point.value),
+                    true,
+                )
+                .field(
+                    "R-squared",
+                    &format!("{:.4}", af.get_best_r_squared()),
+                    true,
+                )
+                .field(
+                    "Measurements",
+                    &af_data.measure_points.len().to_string(),
+                    true,
+                )
+                .footer(&format!("Focuser: {}", af_data.auto_focuser_name));
 
         self.chat_manager
             .send_message(&message, &self.chat_target)
@@ -1065,9 +1066,10 @@ impl ChatUpdater {
         let color = get_event_color(&event.event);
         let title = get_event_title(&event.event);
 
-        let mut message = ChatMessage::new(&self.titled(title))
-            .color(color)
-            .field("Time", &event.time, false);
+        let mut message =
+            ChatMessage::new(&self.titled(title))
+                .color(color)
+                .field("Time", &event.time, false);
 
         // Add event-specific details
         if let Some(details) = &event.details {

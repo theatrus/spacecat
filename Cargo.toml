@@ -22,6 +22,10 @@ url = "2.5"
 async-trait = "0.1"
 mime = "0.3"
 thiserror = "2.0"
+# Discord bot stack. `client`/`gateway`/`rustls_backend` covers our needs;
+# voice and native-tls features intentionally omitted.
+serenity = { version = "0.12", default-features = false, features = ["client", "gateway", "rustls_backend", "model", "cache", "http", "builder", "utils"] }
+poise = "0.6"
 # SQLite bundled to avoid libsqlite3 dependency issues on Windows CI/releases
 libsqlite3-sys = { version = "0", features = ["bundled"] }
 
