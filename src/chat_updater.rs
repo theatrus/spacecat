@@ -3,12 +3,12 @@ use crate::autofocus::AutofocusResponse;
 use crate::chat::{ChatField, ChatMessage, ChatServiceManager};
 use crate::discord::colors;
 use crate::events::{Event, EventDetails, FilterInfo, TargetCoordinates, event_types};
-use chrono::{DateTime, FixedOffset, Utc};
 use crate::images::ImageMetadata;
 use crate::sequence::{
     SequenceResponse, extract_current_target, extract_meridian_flip_time,
     meridian_flip_time_formatted_with_clock,
 };
+use chrono::{DateTime, FixedOffset, Utc};
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
@@ -751,7 +751,10 @@ impl ChatUpdater {
 
         if let Some(end) = self.state.wait_until {
             let now = Utc::now();
-            let minutes = end.with_timezone(&Utc).signed_duration_since(now).num_minutes();
+            let minutes = end
+                .with_timezone(&Utc)
+                .signed_duration_since(now)
+                .num_minutes();
             if minutes > 0 {
                 parts.push(format!(
                     "⏳ Waiting until {} ({} min remaining)",
@@ -957,8 +960,11 @@ impl ChatUpdater {
             let g = &info.response;
             message = message.field("State", &g.state, true);
             if g.pixel_scale > 0.0 {
-                message =
-                    message.field("Pixel Scale", &format!("{:.3} arcsec/px", g.pixel_scale), true);
+                message = message.field(
+                    "Pixel Scale",
+                    &format!("{:.3} arcsec/px", g.pixel_scale),
+                    true,
+                );
             }
             if let Some(rms) = &g.rms_error {
                 message = message.field(
