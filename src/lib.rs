@@ -9,10 +9,12 @@ pub mod discord;
 pub mod error;
 pub mod events;
 pub mod filterwheel;
+pub mod focuser;
 pub mod guider;
 pub mod images;
 pub mod mount;
 pub mod poller;
+pub mod rotator;
 pub mod sequence;
 pub mod service_wrapper;
 #[cfg(windows)]
