@@ -29,6 +29,12 @@ struct Cli {
     #[arg(long, default_value = "config.json", global = true)]
     config: String,
 
+    /// Telescope name to target for single-scope commands. Optional when only
+    /// one telescope is configured; required when multiple are. Does not apply
+    /// to `chat-updater`, which fans out across all configured telescopes.
+    #[arg(long, global = true)]
+    telescope: Option<String>,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -117,34 +123,35 @@ async fn main() {
     let cli = Cli::parse();
 
     let config_path = &cli.config;
+    let telescope = cli.telescope.as_deref();
 
     match cli.command {
         Commands::Sequence => {
-            if let Err(e) = cmd_sequence(config_path).await {
+            if let Err(e) = cmd_sequence(config_path, telescope).await {
                 eprintln!("Sequence command failed: {e}");
                 std::process::exit(1);
             }
         }
         Commands::Events => {
-            if let Err(e) = cmd_events(config_path).await {
+            if let Err(e) = cmd_events(config_path, telescope).await {
                 eprintln!("Events command failed: {e}");
                 std::process::exit(1);
             }
         }
         Commands::LastEvents { count } => {
-            if let Err(e) = cmd_last_events(count, config_path).await {
+            if let Err(e) = cmd_last_events(count, config_path, telescope).await {
                 eprintln!("LastEvents command failed: {e}");
                 std::process::exit(1);
             }
         }
         Commands::Images => {
-            if let Err(e) = cmd_images(config_path).await {
+            if let Err(e) = cmd_images(config_path, telescope).await {
                 eprintln!("Images command failed: {e}");
                 std::process::exit(1);
             }
         }
         Commands::GetImage { index, params } => {
-            if let Err(e) = cmd_get_image(index, &params, config_path).await {
+            if let Err(e) = cmd_get_image(index, &params, config_path, telescope).await {
                 eprintln!("GetImage command failed: {e}");
                 std::process::exit(1);
             }
@@ -154,33 +161,41 @@ async fn main() {
             output,
             image_type,
         } => {
-            if let Err(e) =
-                cmd_get_thumbnail(index, &output, image_type.as_deref(), config_path).await
+            if let Err(e) = cmd_get_thumbnail(
+                index,
+                &output,
+                image_type.as_deref(),
+                config_path,
+                telescope,
+            )
+            .await
             {
                 eprintln!("GetThumbnail command failed: {e}");
                 std::process::exit(1);
             }
         }
         Commands::Poll { interval, count } => {
-            if let Err(e) = cmd_poll(interval, count, config_path).await {
+            if let Err(e) = cmd_poll(interval, count, config_path, telescope).await {
                 eprintln!("Poll command failed: {e}");
                 std::process::exit(1);
             }
         }
         Commands::ChatUpdater { interval } => {
+            // chat-updater fans out across every configured telescope; the
+            // --telescope flag does not apply here.
             if let Err(e) = cmd_chat_updater(interval, config_path).await {
                 eprintln!("ChatUpdater command failed: {e}");
                 std::process::exit(1);
             }
         }
         Commands::LastAutofocus => {
-            if let Err(e) = cmd_last_autofocus(config_path).await {
+            if let Err(e) = cmd_last_autofocus(config_path, telescope).await {
                 eprintln!("LastAutofocus command failed: {e}");
                 std::process::exit(1);
             }
         }
         Commands::MountInfo => {
-            if let Err(e) = cmd_mount_info(config_path).await {
+            if let Err(e) = cmd_mount_info(config_path, telescope).await {
                 eprintln!("MountInfo command failed: {e}");
                 std::process::exit(1);
             }
@@ -195,10 +210,25 @@ async fn main() {
     }
 }
 
-async fn cmd_sequence(config_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+/// Load the config, pick the requested telescope, and build an API client.
+/// Used by every single-scope CLI command.
+fn pick_client(
+    config_path: &str,
+    telescope: Option<&str>,
+) -> Result<SpaceCatApiClient, Box<dyn std::error::Error>> {
+    let config = Config::load_or_default_from(config_path);
+    config.validate()?;
+    let t = config.pick_telescope(telescope)?;
+    SpaceCatApiClient::new(t.api.clone()).map_err(|e| e.into())
+}
+
+async fn cmd_sequence(
+    config_path: &str,
+    telescope: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
     println!("Loading sequence from API...");
 
-    match load_sequence_from_api(config_path).await {
+    match load_sequence_from_api(config_path, telescope).await {
         Ok(seq) => {
             println!(
                 "Successfully loaded sequence with {} items",
@@ -248,9 +278,12 @@ async fn cmd_sequence(config_path: &str) -> Result<(), Box<dyn std::error::Error
     Ok(())
 }
 
-async fn cmd_events(config_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+async fn cmd_events(
+    config_path: &str,
+    telescope: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
     println!("Loading events from API...");
-    match load_event_history_from_api(config_path).await {
+    match load_event_history_from_api(config_path, telescope).await {
         Ok(events) => {
             println!(
                 "Successfully loaded {} events from API",
@@ -269,9 +302,10 @@ async fn cmd_events(config_path: &str) -> Result<(), Box<dyn std::error::Error>>
 async fn cmd_last_events(
     count: usize,
     config_path: &str,
+    telescope: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("Loading events from API...");
-    let events = match load_event_history_from_api(config_path).await {
+    let events = match load_event_history_from_api(config_path, telescope).await {
         Ok(events) => {
             println!(
                 "Successfully loaded {} events from API",
@@ -288,9 +322,12 @@ async fn cmd_last_events(
     Ok(())
 }
 
-async fn cmd_images(config_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+async fn cmd_images(
+    config_path: &str,
+    telescope: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
     println!("Loading images from API...");
-    match load_image_history_from_api(config_path).await {
+    match load_image_history_from_api(config_path, telescope).await {
         Ok(images) => {
             println!(
                 "Successfully loaded {} images from API",
@@ -311,6 +348,7 @@ async fn cmd_get_image(
     index: u32,
     params: &[String],
     config_path: &str,
+    telescope: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("Getting image at index {index} from API...");
 
@@ -324,8 +362,7 @@ async fn cmd_get_image(
         }
     }
 
-    let config = Config::load_or_default_from(config_path);
-    let client = SpaceCatApiClient::new(config.api)?;
+    let client = pick_client(config_path, telescope)?;
 
     match client.get_image_with_params(index, &param_pairs).await {
         Ok(image_response) => {
@@ -405,11 +442,11 @@ async fn cmd_get_thumbnail(
     output_path: &str,
     image_type: Option<&str>,
     config_path: &str,
+    telescope: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("Getting thumbnail for image at index {index} from API...");
 
-    let config = Config::load_or_default_from(config_path);
-    let client = SpaceCatApiClient::new(config.api)?;
+    let client = pick_client(config_path, telescope)?;
 
     // Build parameters
     let mut params = vec![];
@@ -458,12 +495,12 @@ async fn cmd_poll(
     interval: u64,
     count: u32,
     config_path: &str,
+    telescope: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("Starting event polling...");
     println!("Poll interval: {interval}s, Poll cycles: {count}");
 
-    let config = Config::load_or_default_from(config_path);
-    let client = SpaceCatApiClient::new(config.api)?;
+    let client = pick_client(config_path, telescope)?;
     let mut poller = EventPoller::new(client, Duration::from_secs(interval));
 
     for i in 1..=count {
@@ -517,9 +554,12 @@ async fn cmd_chat_updater(interval: u64, config_path: &str) -> Result<(), SpaceC
         .map_err(SpaceCatError::Service)
 }
 
-async fn cmd_last_autofocus(config_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+async fn cmd_last_autofocus(
+    config_path: &str,
+    telescope: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
     println!("Loading autofocus data from API...");
-    match load_autofocus_from_api(config_path).await {
+    match load_autofocus_from_api(config_path, telescope).await {
         Ok(autofocus) => {
             println!("Successfully loaded autofocus data from API");
             display_autofocus_data(&autofocus);
@@ -532,9 +572,12 @@ async fn cmd_last_autofocus(config_path: &str) -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
-async fn cmd_mount_info(config_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+async fn cmd_mount_info(
+    config_path: &str,
+    telescope: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
     println!("Loading mount information from API...");
-    match load_mount_info_from_api(config_path).await {
+    match load_mount_info_from_api(config_path, telescope).await {
         Ok(mount_info) => {
             println!("Successfully loaded mount information from API");
             display_mount_info(&mount_info);
@@ -551,27 +594,12 @@ async fn cmd_mount_info(config_path: &str) -> Result<(), Box<dyn std::error::Err
 
 async fn load_autofocus_from_api(
     config_path: &str,
+    telescope: Option<&str>,
 ) -> Result<AutofocusResponse, Box<dyn std::error::Error>> {
-    // Load configuration from config.json or use default
-    let config = Config::load_or_default_from(config_path);
-
-    // Validate configuration
-    if let Err(e) = config.validate() {
-        return Err(e.into());
+    let client = pick_client(config_path, telescope)?;
+    if let Err(e) = client.get_version().await {
+        return Err(format!("Could not get API version: {e}").into());
     }
-
-    // Create API client
-    let client = SpaceCatApiClient::new(config.api)?;
-
-    // Check API version and health
-    match client.get_version().await {
-        Ok(_) => {} // Version check successful
-        Err(e) => {
-            return Err(format!("Could not get API version: {e}").into());
-        }
-    }
-
-    // Fetch autofocus data
     let autofocus = client.get_last_autofocus().await?;
     Ok(autofocus)
 }
@@ -694,27 +722,12 @@ fn display_autofocus_data(autofocus: &AutofocusResponse) {
 
 async fn load_mount_info_from_api(
     config_path: &str,
+    telescope: Option<&str>,
 ) -> Result<MountInfoResponse, Box<dyn std::error::Error>> {
-    // Load configuration from config.json or use default
-    let config = Config::load_or_default_from(config_path);
-
-    // Validate configuration
-    if let Err(e) = config.validate() {
-        return Err(e.into());
+    let client = pick_client(config_path, telescope)?;
+    if let Err(e) = client.get_version().await {
+        return Err(format!("Could not get API version: {e}").into());
     }
-
-    // Create API client
-    let client = SpaceCatApiClient::new(config.api)?;
-
-    // Check API version and health
-    match client.get_version().await {
-        Ok(_) => {} // Version check successful
-        Err(e) => {
-            return Err(format!("Could not get API version: {e}").into());
-        }
-    }
-
-    // Fetch mount info
     let mount_info = client.get_mount_info().await?;
     Ok(mount_info)
 }
@@ -867,81 +880,36 @@ fn display_mount_info(mount_info: &MountInfoResponse) {
 
 async fn load_sequence_from_api(
     config_path: &str,
+    telescope: Option<&str>,
 ) -> Result<SequenceResponse, Box<dyn std::error::Error>> {
-    // Load configuration from config.json or use default
-    let config = Config::load_or_default_from(config_path);
-
-    // Validate configuration
-    if let Err(e) = config.validate() {
-        return Err(e.into());
+    let client = pick_client(config_path, telescope)?;
+    if let Err(e) = client.get_version().await {
+        return Err(format!("Could not get API version: {e}").into());
     }
-
-    // Create API client
-    let client = SpaceCatApiClient::new(config.api)?;
-
-    // Check API version and health
-    match client.get_version().await {
-        Ok(_) => {} // Version check successful
-        Err(e) => {
-            return Err(format!("Could not get API version: {e}").into());
-        }
-    }
-
-    // Fetch sequence data
     let sequence = client.get_sequence().await?;
     Ok(sequence)
 }
 
 async fn load_event_history_from_api(
     config_path: &str,
+    telescope: Option<&str>,
 ) -> Result<EventHistoryResponse, Box<dyn std::error::Error>> {
-    // Load configuration from config.json or use default
-    let config = Config::load_or_default_from(config_path);
-
-    // Validate configuration
-    if let Err(e) = config.validate() {
-        return Err(e.into());
+    let client = pick_client(config_path, telescope)?;
+    if let Err(e) = client.get_version().await {
+        return Err(format!("Could not get API version: {e}").into());
     }
-
-    // Create API client
-    let client = SpaceCatApiClient::new(config.api)?;
-
-    // Check API version and health
-    match client.get_version().await {
-        Ok(_) => {} // Version check successful
-        Err(e) => {
-            return Err(format!("Could not get API version: {e}").into());
-        }
-    }
-
-    // Fetch event history
     let events = client.get_event_history().await?;
     Ok(events)
 }
 
 async fn load_image_history_from_api(
     config_path: &str,
+    telescope: Option<&str>,
 ) -> Result<ImageHistoryResponse, Box<dyn std::error::Error>> {
-    // Load configuration from config.json or use default
-    let config = Config::load_or_default_from(config_path);
-
-    // Validate configuration
-    if let Err(e) = config.validate() {
-        return Err(e.into());
+    let client = pick_client(config_path, telescope)?;
+    if let Err(e) = client.get_version().await {
+        return Err(format!("Could not get API version: {e}").into());
     }
-
-    // Create API client
-    let client = SpaceCatApiClient::new(config.api)?;
-
-    // Check API version and health
-    match client.get_version().await {
-        Ok(_) => {} // Version check successful
-        Err(e) => {
-            return Err(format!("Could not get API version: {e}").into());
-        }
-    }
-
-    // Fetch all image history
     let images = client.get_all_image_history().await?;
     Ok(images)
 }

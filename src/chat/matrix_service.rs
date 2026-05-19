@@ -1,4 +1,4 @@
-use super::{ChatMessage, ChatService};
+use super::{ChatMessage, ChatService, ChatTarget};
 use crate::error::ChatError;
 use async_trait::async_trait;
 use matrix_sdk::{
@@ -8,9 +8,12 @@ use matrix_sdk::{
 };
 use url::Url;
 
+/// Matrix chat service. Holds one logged-in `Client` shared across every
+/// telescope; per-telescope `ChatTarget::matrix_room_id` selects which room
+/// each post lands in, falling back to `default_room_id`.
 pub struct MatrixChatService {
     client: Client,
-    room_id: OwnedRoomId,
+    default_room_id: Option<OwnedRoomId>,
 }
 
 impl MatrixChatService {
@@ -18,7 +21,7 @@ impl MatrixChatService {
         homeserver_url: &str,
         username: &str,
         password: &str,
-        room_id: &str,
+        default_room_id: Option<&str>,
     ) -> Result<Self, ChatError> {
         let homeserver_url = Url::parse(homeserver_url).map_err(|e| ChatError::Initialization {
             service_name: "Matrix".to_string(),
@@ -31,51 +34,41 @@ impl MatrixChatService {
                 reason: format!("Failed to create Matrix client: {}", e),
             })?;
 
-        // Login to Matrix
         client
             .matrix_auth()
             .login_username(username, password)
             .initial_device_display_name("SpaceCat")
             .await?;
-
         println!("Successfully logged into Matrix as {}", username);
 
-        // Initial sync to get room states
         println!("Syncing with Matrix server...");
         client.sync_once(SyncSettings::default()).await?;
 
-        // Check for invited rooms and join them
         let invited_rooms = client.invited_rooms();
         if !invited_rooms.is_empty() {
             println!("Found {} room invitation(s):", invited_rooms.len());
             for room in &invited_rooms {
                 let room_name = room.name().unwrap_or_else(|| room.room_id().to_string());
                 println!("  - Joining room: {} ({})", room_name, room.room_id());
-
                 match room.join().await {
                     Ok(_) => println!("    ✅ Successfully joined"),
                     Err(e) => println!("    ❌ Failed to join: {}", e),
                 }
             }
-
-            // Sync again to update room states after joining
             client.sync_once(SyncSettings::default()).await?;
         } else {
             println!("No pending room invitations");
         }
 
-        // List all joined rooms
         let joined_rooms = client.joined_rooms();
         println!("Currently joined to {} room(s):", joined_rooms.len());
         for room in &joined_rooms {
             let room_name = room.name().unwrap_or("Unnamed room".to_string());
             let member_count = room.active_members_count();
-            let encryption_state = room.encryption_state();
-            let encryption_status = match encryption_state {
+            let encryption_status = match room.encryption_state() {
                 EncryptionState::Encrypted => "🔒",
                 _ => "🔓",
             };
-
             println!(
                 "  - {} {} ({}) - {} members",
                 encryption_status,
@@ -85,7 +78,7 @@ impl MatrixChatService {
             );
         }
 
-        // Start background sync
+        // Start background sync once.
         tokio::spawn({
             let client = client.clone();
             async move {
@@ -95,81 +88,98 @@ impl MatrixChatService {
             }
         });
 
-        let room_id: OwnedRoomId = room_id.try_into().map_err(|e| ChatError::Initialization {
-            service_name: "Matrix".to_string(),
-            reason: format!("Invalid room ID: {}", e),
-        })?;
-
-        // Verify the target room is accessible
-        if let Some(target_room) = client.get_room(&room_id) {
-            let room_name = target_room.name().unwrap_or_else(|| room_id.to_string());
-            println!("✅ Target room found: {} ({})", room_name, room_id);
+        let default_room_id = if let Some(id) = default_room_id {
+            let owned: OwnedRoomId = id.try_into().map_err(|e| ChatError::Initialization {
+                service_name: "Matrix".to_string(),
+                reason: format!("Invalid default room ID: {}", e),
+            })?;
+            if client.get_room(&owned).is_some() {
+                println!("✅ Default Matrix room found: {}", owned);
+            } else {
+                println!(
+                    "⚠️  Default Matrix room {} not found in joined rooms",
+                    owned
+                );
+            }
+            Some(owned)
         } else {
-            println!(
-                "⚠️  Warning: Target room {} not found in joined rooms",
-                room_id
-            );
-            println!("   Make sure the bot is invited to this room or check the room ID");
-        }
+            None
+        };
 
-        Ok(Self { client, room_id })
+        Ok(Self {
+            client,
+            default_room_id,
+        })
     }
 
-    fn format_message(&self, message: &ChatMessage) -> String {
-        let mut formatted = format!("**{}**\n\n", message.title);
+    fn resolve_room_id(&self, target: &ChatTarget) -> Option<OwnedRoomId> {
+        if let Some(s) = &target.matrix_room_id {
+            // Per-telescope override
+            s.as_str().try_into().ok()
+        } else {
+            self.default_room_id.clone()
+        }
+    }
 
+    async fn get_room(&self, target: &ChatTarget) -> Result<Room, ChatError> {
+        let id = self
+            .resolve_room_id(target)
+            .ok_or_else(|| ChatError::MessageSend {
+                service_name: "Matrix".to_string(),
+                reason: "No Matrix room ID available (no default and no telescope override)"
+                    .to_string(),
+            })?;
+        self.client
+            .get_room(&id)
+            .ok_or_else(|| ChatError::MessageSend {
+                service_name: "Matrix".to_string(),
+                reason: format!("Room {} not found", id),
+            })
+    }
+
+    fn format_message(message: &ChatMessage) -> String {
+        let mut formatted = format!("**{}**\n\n", message.title);
         if !message.fields.is_empty() {
             for field in &message.fields {
                 formatted.push_str(&format!("**{}**: {}\n", field.name, field.value));
             }
             formatted.push('\n');
         }
-
         if let Some(footer) = &message.footer {
             formatted.push_str(&format!("_{}_", footer));
         }
-
         formatted
-    }
-
-    async fn get_room(&self) -> Result<Room, ChatError> {
-        self.client
-            .get_room(&self.room_id)
-            .ok_or_else(|| ChatError::MessageSend {
-                service_name: "Matrix".to_string(),
-                reason: format!("Room {} not found", self.room_id),
-            })
     }
 }
 
 #[async_trait]
 impl ChatService for MatrixChatService {
-    async fn send_message(&self, message: &ChatMessage) -> Result<(), ChatError> {
-        let room = self.get_room().await?;
-        let formatted_message = self.format_message(message);
-
-        let content = RoomMessageEventContent::notice_markdown(formatted_message);
+    async fn send_message(
+        &self,
+        message: &ChatMessage,
+        target: &ChatTarget,
+    ) -> Result<(), ChatError> {
+        let room = self.get_room(target).await?;
+        let content = RoomMessageEventContent::notice_markdown(Self::format_message(message));
         room.send(content)
             .await
             .map_err(|e| ChatError::MessageSend {
                 service_name: "Matrix".to_string(),
                 reason: e.to_string(),
             })?;
-
         Ok(())
     }
 
     async fn send_message_with_image(
         &self,
         message: &ChatMessage,
+        target: &ChatTarget,
         image_data: &[u8],
         filename: &str,
     ) -> Result<(), ChatError> {
-        let room = self.get_room().await?;
+        let room = self.get_room(target).await?;
 
-        // Send the text message first
-        let formatted_message = self.format_message(message);
-        let content = RoomMessageEventContent::notice_markdown(formatted_message);
+        let content = RoomMessageEventContent::notice_markdown(Self::format_message(message));
         room.send(content)
             .await
             .map_err(|e| ChatError::MessageSend {
@@ -177,15 +187,13 @@ impl ChatService for MatrixChatService {
                 reason: e.to_string(),
             })?;
 
-        // Then send the image
         let mime_type = if filename.ends_with(".jpg") || filename.ends_with(".jpeg") {
             "image/jpeg"
         } else if filename.ends_with(".png") {
             "image/png"
         } else {
-            "image/jpeg" // Default fallback
+            "image/jpeg"
         };
-
         let mime = mime_type
             .parse::<mime::Mime>()
             .map_err(|e| ChatError::MessageSend {
@@ -198,11 +206,14 @@ impl ChatService for MatrixChatService {
                 service_name: "Matrix".to_string(),
                 reason: e.to_string(),
             })?;
-
         Ok(())
     }
 
     fn service_name(&self) -> &'static str {
         "Matrix"
+    }
+
+    fn can_route(&self, target: &ChatTarget) -> bool {
+        target.matrix_room_id.is_some() || self.default_room_id.is_some()
     }
 }

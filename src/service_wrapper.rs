@@ -1,10 +1,11 @@
 //! Service wrapper abstraction for running SpaceCat as CLI or background service
 
 use crate::api::SpaceCatApiClient;
-use crate::chat::{ChatServiceManager, DiscordChatService, MatrixChatService};
+use crate::chat::{ChatConfig, ChatServiceManager, DiscordChatService, MatrixChatService};
 use crate::chat_updater::ChatUpdater;
-use crate::config::Config;
+use crate::config::{Config, TelescopeConfig};
 use crate::error::{ChatError, ServiceError, ServiceResult, SpaceCatError};
+use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -17,91 +18,116 @@ impl ServiceWrapper {
         Ok(Self { config })
     }
 
-    /// Run the chat updater as a regular CLI application
+    /// Run chat updaters for all configured telescopes concurrently. The
+    /// shared `ChatServiceManager` (one Matrix login, one Discord client) is
+    /// built once and shared by reference across every telescope task.
     pub async fn run_cli(&self, interval: u64) -> ServiceResult<()> {
-        let mut chat_updater =
-            self.create_chat_updater()
+        if self.config.telescopes.is_empty() {
+            return Err(ServiceError::Initialization {
+                reason: "No telescopes configured.".to_string(),
+            });
+        }
+
+        let chat_manager = Arc::new(
+            build_shared_chat_manager(&self.config.chat)
                 .await
                 .map_err(|e| ServiceError::Initialization {
                     reason: e.to_string(),
-                })?;
-        chat_updater
-            .start_polling(Duration::from_secs(interval))
-            .await;
+                })?,
+        );
+
+        let poll_interval = Duration::from_secs(interval);
+        let mut handles = Vec::new();
+        for telescope in &self.config.telescopes {
+            let telescope = telescope.clone();
+            let chat_manager = chat_manager.clone();
+            let handle = tokio::spawn(async move {
+                match build_chat_updater(telescope.clone(), chat_manager).await {
+                    Ok(mut updater) => {
+                        updater.start_polling(poll_interval).await;
+                    }
+                    Err(e) => eprintln!(
+                        "[{}] Failed to create chat updater: {e}",
+                        telescope.name
+                    ),
+                }
+            });
+            handles.push(handle);
+        }
+
+        for h in handles {
+            let _ = h.await;
+        }
         Ok(())
-    }
-
-    /// Create a configured ChatUpdater instance
-    pub async fn create_chat_updater(&self) -> Result<ChatUpdater, SpaceCatError> {
-        // Create API client
-        let client = SpaceCatApiClient::new(self.config.api.clone()).map_err(SpaceCatError::Api)?;
-
-        // Create chat service manager
-        let mut chat_manager = ChatServiceManager::new();
-
-        // Add Discord service (prioritize new config over legacy)
-        if let Some(discord_config) = &self.config.chat.discord
-            && discord_config.enabled
-        {
-            println!("Initializing Discord chat service...");
-            let discord_service =
-                DiscordChatService::new(&discord_config.webhook_url).map_err(|e| {
-                    SpaceCatError::Chat(ChatError::Initialization {
-                        service_name: "Discord".to_string(),
-                        reason: e.to_string(),
-                    })
-                })?;
-            chat_manager.add_service(Box::new(discord_service));
-        } else if let Some(discord_config) = &self.config.discord
-            && discord_config.enabled
-        {
-            println!("Using legacy Discord configuration...");
-            let discord_service =
-                DiscordChatService::new(&discord_config.webhook_url).map_err(|e| {
-                    SpaceCatError::Chat(ChatError::Initialization {
-                        service_name: "Discord (legacy)".to_string(),
-                        reason: e.to_string(),
-                    })
-                })?;
-            chat_manager.add_service(Box::new(discord_service));
-        }
-
-        if let Some(matrix_config) = &self.config.chat.matrix
-            && matrix_config.enabled
-        {
-            println!("Initializing Matrix chat service...");
-            let matrix_service = MatrixChatService::new(
-                &matrix_config.homeserver_url,
-                &matrix_config.username,
-                &matrix_config.password,
-                &matrix_config.room_id,
-            )
-            .await
-            .map_err(|e| {
-                SpaceCatError::Chat(ChatError::Initialization {
-                    service_name: "Matrix".to_string(),
-                    reason: e.to_string(),
-                })
-            })?;
-            chat_manager.add_service(Box::new(matrix_service));
-        }
-
-        if chat_manager.service_count() == 0 {
-            println!("Warning: No chat services configured. Running in monitoring-only mode.");
-        }
-
-        // Create chat updater
-        let chat_updater = ChatUpdater::new(client)
-            .with_chat_manager(chat_manager)
-            .with_image_cooldown(self.config.image_cooldown_seconds);
-
-        Ok(chat_updater)
     }
 
     /// Get the configuration for inspection
     pub fn config(&self) -> &Config {
         &self.config
     }
+}
+
+/// Build the process-wide chat manager from the shared chat block. Matrix
+/// logs in once here, regardless of how many telescopes are configured.
+pub async fn build_shared_chat_manager(
+    chat: &ChatConfig,
+) -> Result<ChatServiceManager, SpaceCatError> {
+    let mut manager = ChatServiceManager::new();
+
+    if let Some(discord) = &chat.discord
+        && discord.enabled
+    {
+        println!(
+            "Initializing shared Discord chat service (default webhook: {})...",
+            if discord.default_webhook_url.is_some() {
+                "configured"
+            } else {
+                "none — telescopes must override"
+            }
+        );
+        manager.add_service(Box::new(DiscordChatService::new(
+            discord.default_webhook_url.clone(),
+        )));
+    }
+
+    if let Some(matrix) = &chat.matrix
+        && matrix.enabled
+    {
+        println!("Initializing shared Matrix chat service (one login process-wide)...");
+        let service = MatrixChatService::new(
+            &matrix.homeserver_url,
+            &matrix.username,
+            &matrix.password,
+            matrix.default_room_id.as_deref(),
+        )
+        .await
+        .map_err(|e| {
+            SpaceCatError::Chat(ChatError::Initialization {
+                service_name: "Matrix".to_string(),
+                reason: e.to_string(),
+            })
+        })?;
+        manager.add_service(Box::new(service));
+    }
+
+    if manager.service_count() == 0 {
+        println!("Warning: No chat services configured. Running in monitoring-only mode.");
+    }
+
+    Ok(manager)
+}
+
+/// Construct a `ChatUpdater` for one telescope, wired to the shared manager.
+pub async fn build_chat_updater(
+    telescope: TelescopeConfig,
+    chat_manager: Arc<ChatServiceManager>,
+) -> Result<ChatUpdater, SpaceCatError> {
+    let client = SpaceCatApiClient::new(telescope.api.clone()).map_err(SpaceCatError::Api)?;
+    let target = telescope.chat.to_chat_target();
+    Ok(
+        ChatUpdater::new(client, telescope.name.clone(), target, chat_manager)
+            .with_image_cooldown(telescope.image_cooldown_seconds),
+    )
 }
 
 // Windows service specific implementation
@@ -111,65 +137,78 @@ mod windows_service_impl {
     use tokio::time::sleep;
 
     impl ServiceWrapper {
-        /// Run the chat updater as a Windows service with shutdown support
+        /// Run chat updaters for all telescopes as a Windows service with
+        /// graceful shutdown. One shared chat manager is constructed inside
+        /// the runtime; each telescope poll loop runs as its own task.
         pub fn run_with_shutdown(&self, shutdown_rx: mpsc::Receiver<()>) -> ServiceResult<()> {
-            // Create a Tokio runtime for the service
             let rt = tokio::runtime::Runtime::new().map_err(|e| ServiceError::Initialization {
                 reason: format!("Failed to create Tokio runtime: {}", e),
             })?;
 
-            rt.block_on(async {
-                // Create chat updater using the factory method
-                let chat_updater =
-                    self.create_chat_updater()
+            let telescopes = self.config.telescopes.clone();
+            let chat_config = self.config.chat.clone();
+            let poll_interval = Duration::from_secs(5);
+
+            rt.block_on(async move {
+                let chat_manager = Arc::new(
+                    build_shared_chat_manager(&chat_config)
                         .await
                         .map_err(|e| ServiceError::Initialization {
-                            reason: format!("Failed to create chat updater: {}", e),
-                        })?;
+                            reason: format!("Failed to build chat manager: {}", e),
+                        })?,
+                );
 
-                // Run the service loop with graceful shutdown
-                self.run_service_loop(chat_updater, Duration::from_secs(5), shutdown_rx)
-                    .await
-            })
-        }
-
-        /// Main service loop that can be gracefully shutdown
-        async fn run_service_loop(
-            &self,
-            mut chat_updater: ChatUpdater,
-            poll_interval: Duration,
-            shutdown_rx: mpsc::Receiver<()>,
-        ) -> ServiceResult<()> {
-            // Initialize baseline
-            if let Err(e) = chat_updater.initialize_baseline().await {
-                return Err(ServiceError::Runtime {
-                    reason: format!("Failed to initialize baseline: {}", e),
-                });
-            }
-
-            println!(
-                "Windows service started - polling every {:?}",
-                poll_interval
-            );
-
-            loop {
-                // Check for shutdown signal (non-blocking)
-                if shutdown_rx.try_recv().is_ok() {
-                    println!("Shutdown signal received, stopping service...");
-                    break;
+                let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                {
+                    let shutdown = shutdown.clone();
+                    std::thread::spawn(move || {
+                        if shutdown_rx.recv().is_ok() {
+                            shutdown.store(true, std::sync::atomic::Ordering::SeqCst);
+                        }
+                    });
                 }
 
-                // Poll for events, sequence, and images
-                chat_updater.poll_sequence().await;
-                chat_updater.poll_events().await;
-                chat_updater.poll_images().await;
+                let mut handles = Vec::new();
+                for telescope in telescopes {
+                    let shutdown = shutdown.clone();
+                    let chat_manager = chat_manager.clone();
+                    let handle = tokio::spawn(async move {
+                        let mut updater =
+                            match build_chat_updater(telescope.clone(), chat_manager).await {
+                                Ok(u) => u,
+                                Err(e) => {
+                                    eprintln!(
+                                        "[{}] Failed to initialize: {e}",
+                                        telescope.name
+                                    );
+                                    return;
+                                }
+                            };
+                        if let Err(e) = updater.initialize_baseline().await {
+                            eprintln!("[{}] Baseline failed: {e}", telescope.name);
+                            return;
+                        }
+                        println!(
+                            "[{}] Windows service polling every {:?}",
+                            telescope.name, poll_interval
+                        );
+                        while !shutdown.load(std::sync::atomic::Ordering::SeqCst) {
+                            updater.poll_sequence().await;
+                            updater.poll_events().await;
+                            updater.poll_images().await;
+                            sleep(poll_interval).await;
+                        }
+                        println!("[{}] Shutdown signal received.", telescope.name);
+                    });
+                    handles.push(handle);
+                }
 
-                // Sleep for the specified interval
-                sleep(poll_interval).await;
-            }
-
-            println!("Windows service stopped");
-            Ok(())
+                for h in handles {
+                    let _ = h.await;
+                }
+                println!("Windows service stopped");
+                Ok(())
+            })
         }
     }
 }
