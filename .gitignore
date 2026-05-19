@@ -1,6 +1,6 @@
 /target
 config.json
+config.*.json
 *.log
-config.json
 /installer/output
 .vscode/
