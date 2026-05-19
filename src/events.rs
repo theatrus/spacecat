@@ -1,4 +1,5 @@
-use serde::{Deserialize, Deserializer, Serialize};
+use crate::serde_helpers::{de_f64_tolerant, de_i32_tolerant, de_string_tolerant};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -68,43 +69,16 @@ pub enum EventDetails {
 #[serde(rename_all = "PascalCase")]
 pub struct FilterInfo {
     // NINA occasionally returns Name:[] / Id:[] (empty arrays) when the slot is unknown.
-    // Accept that shape and fall back to empty/-1 sentinels.
-    #[serde(deserialize_with = "de_filter_name")]
+    // Tolerant deserializers fall back to empty/-1 sentinels (see serde_helpers).
+    #[serde(deserialize_with = "de_string_tolerant")]
     pub name: String,
-    #[serde(deserialize_with = "de_filter_id")]
+    #[serde(deserialize_with = "de_i32_tolerant")]
     pub id: i32,
 }
 
 impl FilterInfo {
     pub fn is_unknown(&self) -> bool {
         self.name.is_empty() || self.id < 0
-    }
-}
-
-fn de_filter_name<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
-    use serde::de::Error;
-    let v = serde_json::Value::deserialize(d)?;
-    match v {
-        serde_json::Value::String(s) => Ok(s),
-        serde_json::Value::Array(a) if a.is_empty() => Ok(String::new()),
-        other => Err(D::Error::custom(format!(
-            "expected string or [] for filter name, got {other}"
-        ))),
-    }
-}
-
-fn de_filter_id<'de, D: Deserializer<'de>>(d: D) -> Result<i32, D::Error> {
-    use serde::de::Error;
-    let v = serde_json::Value::deserialize(d)?;
-    match v {
-        serde_json::Value::Number(n) => n
-            .as_i64()
-            .ok_or_else(|| D::Error::custom("filter id is not an integer"))
-            .map(|x| x as i32),
-        serde_json::Value::Array(a) if a.is_empty() => Ok(-1),
-        other => Err(D::Error::custom(format!(
-            "expected integer or [] for filter id, got {other}"
-        ))),
     }
 }
 
@@ -116,17 +90,17 @@ pub struct TargetCoordinates {
     // coords — same NINA quirk that produces empty `FilterInfo`. Each
     // field accepts `[]` and falls back to a sentinel; the whole struct
     // remains parseable so the target name + project still survive.
-    #[serde(rename = "RA", deserialize_with = "de_f64_or_empty")]
+    #[serde(rename = "RA", deserialize_with = "de_f64_tolerant")]
     pub ra: f64,
-    #[serde(deserialize_with = "de_f64_or_empty")]
+    #[serde(deserialize_with = "de_f64_tolerant")]
     pub dec: f64,
-    #[serde(rename = "RAString", deserialize_with = "de_string_or_empty")]
+    #[serde(rename = "RAString", deserialize_with = "de_string_tolerant")]
     pub ra_string: String,
-    #[serde(deserialize_with = "de_string_or_empty")]
+    #[serde(deserialize_with = "de_string_tolerant")]
     pub dec_string: String,
-    #[serde(deserialize_with = "de_string_or_empty")]
+    #[serde(deserialize_with = "de_string_tolerant")]
     pub epoch: String,
-    #[serde(rename = "RADegrees", deserialize_with = "de_f64_or_empty")]
+    #[serde(rename = "RADegrees", deserialize_with = "de_f64_tolerant")]
     pub ra_degrees: f64,
 }
 
@@ -145,32 +119,6 @@ impl TargetCoordinates {
         } else {
             Some(format!("RA: {}\nDec: {}", self.ra_string, self.dec_string))
         }
-    }
-}
-
-fn de_string_or_empty<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
-    use serde::de::Error;
-    let v = serde_json::Value::deserialize(d)?;
-    match v {
-        serde_json::Value::String(s) => Ok(s),
-        serde_json::Value::Array(a) if a.is_empty() => Ok(String::new()),
-        other => Err(D::Error::custom(format!(
-            "expected string or [] for coordinate field, got {other}"
-        ))),
-    }
-}
-
-fn de_f64_or_empty<'de, D: Deserializer<'de>>(d: D) -> Result<f64, D::Error> {
-    use serde::de::Error;
-    let v = serde_json::Value::deserialize(d)?;
-    match v {
-        serde_json::Value::Number(n) => n
-            .as_f64()
-            .ok_or_else(|| D::Error::custom("coordinate not f64")),
-        serde_json::Value::Array(a) if a.is_empty() => Ok(f64::NAN),
-        other => Err(D::Error::custom(format!(
-            "expected number or [] for coordinate field, got {other}"
-        ))),
     }
 }
 

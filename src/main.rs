@@ -10,8 +10,7 @@ use spacecat::{
     mount::MountInfoResponse,
     poller::EventPoller,
     sequence::{
-        SequenceResponse, extract_current_target, extract_meridian_flip_time,
-        meridian_flip_time_formatted_with_clock,
+        extract_current_target, extract_meridian_flip_time, meridian_flip_time_formatted_with_clock,
     },
     service_wrapper::ServiceWrapper,
 };
@@ -222,13 +221,30 @@ fn pick_client(
     SpaceCatApiClient::new(t.api.clone()).map_err(|e| e.into())
 }
 
+/// Build a client and verify the API is reachable. Used by every read-only
+/// command that wants to fail fast with a clear error if the rig is offline.
+async fn checked_client(
+    config_path: &str,
+    telescope: Option<&str>,
+) -> Result<SpaceCatApiClient, Box<dyn std::error::Error>> {
+    let client = pick_client(config_path, telescope)?;
+    if let Err(e) = client.get_version().await {
+        return Err(format!("Could not get API version: {e}").into());
+    }
+    Ok(client)
+}
+
 async fn cmd_sequence(
     config_path: &str,
     telescope: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("Loading sequence from API...");
 
-    match load_sequence_from_api(config_path, telescope).await {
+    match checked_client(config_path, telescope)
+        .await?
+        .get_sequence()
+        .await
+    {
         Ok(seq) => {
             println!(
                 "Successfully loaded sequence with {} items",
@@ -283,19 +299,16 @@ async fn cmd_events(
     telescope: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("Loading events from API...");
-    match load_event_history_from_api(config_path, telescope).await {
-        Ok(events) => {
-            println!(
-                "Successfully loaded {} events from API",
-                events.response.len()
-            );
-            display_event_statistics(&events);
-        }
-        Err(e) => {
-            return Err(format!("Failed to load events from API: {e}").into());
-        }
-    }
-
+    let client = checked_client(config_path, telescope).await?;
+    let events = client
+        .get_event_history()
+        .await
+        .map_err(|e| format!("Failed to load events from API: {e}"))?;
+    println!(
+        "Successfully loaded {} events from API",
+        events.response.len()
+    );
+    display_event_statistics(&events);
     Ok(())
 }
 
@@ -305,19 +318,15 @@ async fn cmd_last_events(
     telescope: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("Loading events from API...");
-    let events = match load_event_history_from_api(config_path, telescope).await {
-        Ok(events) => {
-            println!(
-                "Successfully loaded {} events from API",
-                events.response.len()
-            );
-            events
-        }
-        Err(e) => {
-            return Err(format!("Failed to load events from API: {e}").into());
-        }
-    };
-
+    let client = checked_client(config_path, telescope).await?;
+    let events = client
+        .get_event_history()
+        .await
+        .map_err(|e| format!("Failed to load events from API: {e}"))?;
+    println!(
+        "Successfully loaded {} events from API",
+        events.response.len()
+    );
     display_last_events(&events, count);
     Ok(())
 }
@@ -327,20 +336,17 @@ async fn cmd_images(
     telescope: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("Loading images from API...");
-    match load_image_history_from_api(config_path, telescope).await {
-        Ok(images) => {
-            println!(
-                "Successfully loaded {} images from API",
-                images.response.len()
-            );
-            display_image_statistics(&images);
-            display_last_images(&images, 3);
-        }
-        Err(e) => {
-            return Err(format!("Failed to load images from API: {e}").into());
-        }
-    }
-
+    let client = checked_client(config_path, telescope).await?;
+    let images = client
+        .get_all_image_history()
+        .await
+        .map_err(|e| format!("Failed to load images from API: {e}"))?;
+    println!(
+        "Successfully loaded {} images from API",
+        images.response.len()
+    );
+    display_image_statistics(&images);
+    display_last_images(&images, 3);
     Ok(())
 }
 
@@ -559,16 +565,13 @@ async fn cmd_last_autofocus(
     telescope: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("Loading autofocus data from API...");
-    match load_autofocus_from_api(config_path, telescope).await {
-        Ok(autofocus) => {
-            println!("Successfully loaded autofocus data from API");
-            display_autofocus_data(&autofocus);
-        }
-        Err(e) => {
-            return Err(format!("Failed to load autofocus data from API: {e}").into());
-        }
-    }
-
+    let client = checked_client(config_path, telescope).await?;
+    let autofocus = client
+        .get_last_autofocus()
+        .await
+        .map_err(|e| format!("Failed to load autofocus data from API: {e}"))?;
+    println!("Successfully loaded autofocus data from API");
+    display_autofocus_data(&autofocus);
     Ok(())
 }
 
@@ -577,32 +580,17 @@ async fn cmd_mount_info(
     telescope: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("Loading mount information from API...");
-    match load_mount_info_from_api(config_path, telescope).await {
-        Ok(mount_info) => {
-            println!("Successfully loaded mount information from API");
-            display_mount_info(&mount_info);
-        }
-        Err(e) => {
-            return Err(format!("Failed to load mount information from API: {e}").into());
-        }
-    }
-
+    let client = checked_client(config_path, telescope).await?;
+    let mount_info = client
+        .get_mount_info()
+        .await
+        .map_err(|e| format!("Failed to load mount information from API: {e}"))?;
+    println!("Successfully loaded mount information from API");
+    display_mount_info(&mount_info);
     Ok(())
 }
 
 // Helper functions
-
-async fn load_autofocus_from_api(
-    config_path: &str,
-    telescope: Option<&str>,
-) -> Result<AutofocusResponse, Box<dyn std::error::Error>> {
-    let client = pick_client(config_path, telescope)?;
-    if let Err(e) = client.get_version().await {
-        return Err(format!("Could not get API version: {e}").into());
-    }
-    let autofocus = client.get_last_autofocus().await?;
-    Ok(autofocus)
-}
 
 fn display_autofocus_data(autofocus: &AutofocusResponse) {
     println!(
@@ -718,18 +706,6 @@ fn display_autofocus_data(autofocus: &AutofocusResponse) {
     } else {
         println!("Focus position unchanged from previous run");
     }
-}
-
-async fn load_mount_info_from_api(
-    config_path: &str,
-    telescope: Option<&str>,
-) -> Result<MountInfoResponse, Box<dyn std::error::Error>> {
-    let client = pick_client(config_path, telescope)?;
-    if let Err(e) = client.get_version().await {
-        return Err(format!("Could not get API version: {e}").into());
-    }
-    let mount_info = client.get_mount_info().await?;
-    Ok(mount_info)
 }
 
 fn display_mount_info(mount_info: &MountInfoResponse) {
@@ -876,42 +852,6 @@ fn display_mount_info(mount_info: &MountInfoResponse) {
             println!("  • {action}");
         }
     }
-}
-
-async fn load_sequence_from_api(
-    config_path: &str,
-    telescope: Option<&str>,
-) -> Result<SequenceResponse, Box<dyn std::error::Error>> {
-    let client = pick_client(config_path, telescope)?;
-    if let Err(e) = client.get_version().await {
-        return Err(format!("Could not get API version: {e}").into());
-    }
-    let sequence = client.get_sequence().await?;
-    Ok(sequence)
-}
-
-async fn load_event_history_from_api(
-    config_path: &str,
-    telescope: Option<&str>,
-) -> Result<EventHistoryResponse, Box<dyn std::error::Error>> {
-    let client = pick_client(config_path, telescope)?;
-    if let Err(e) = client.get_version().await {
-        return Err(format!("Could not get API version: {e}").into());
-    }
-    let events = client.get_event_history().await?;
-    Ok(events)
-}
-
-async fn load_image_history_from_api(
-    config_path: &str,
-    telescope: Option<&str>,
-) -> Result<ImageHistoryResponse, Box<dyn std::error::Error>> {
-    let client = pick_client(config_path, telescope)?;
-    if let Err(e) = client.get_version().await {
-        return Err(format!("Could not get API version: {e}").into());
-    }
-    let images = client.get_all_image_history().await?;
-    Ok(images)
 }
 
 fn display_event_statistics(events: &EventHistoryResponse) {

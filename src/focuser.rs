@@ -1,4 +1,5 @@
-use serde::{Deserialize, Deserializer, Serialize};
+use crate::serde_helpers::de_f64_tolerant;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -20,8 +21,9 @@ pub struct FocuserInfo {
     #[serde(default)]
     pub step_size: f64,
     /// NINA returns this as a JSON *string* `"NaN"` when the focuser has
-    /// no temperature sensor (or is disconnected). Accept "NaN"/number/null.
-    #[serde(default, deserialize_with = "de_f64_or_nan_string")]
+    /// no temperature sensor (or is disconnected). Tolerant deserializer
+    /// accepts number / "NaN" / null / `[]` (see serde_helpers).
+    #[serde(default, deserialize_with = "de_f64_tolerant")]
     pub temperature: f64,
     #[serde(default)]
     pub is_moving: bool,
@@ -31,26 +33,6 @@ pub struct FocuserInfo {
     pub temp_comp: bool,
     #[serde(default)]
     pub temp_comp_available: bool,
-}
-
-fn de_f64_or_nan_string<'de, D: Deserializer<'de>>(d: D) -> Result<f64, D::Error> {
-    use serde::de::Error;
-    let v = serde_json::Value::deserialize(d)?;
-    match v {
-        serde_json::Value::Number(n) => n
-            .as_f64()
-            .ok_or_else(|| D::Error::custom("temperature not f64")),
-        serde_json::Value::String(s) => match s.as_str() {
-            "NaN" => Ok(f64::NAN),
-            "Infinity" => Ok(f64::INFINITY),
-            "-Infinity" => Ok(f64::NEG_INFINITY),
-            _ => s.parse::<f64>().map_err(D::Error::custom),
-        },
-        serde_json::Value::Null => Ok(f64::NAN),
-        other => Err(D::Error::custom(format!(
-            "expected number, NaN string, or null for temperature, got {other}"
-        ))),
-    }
 }
 
 #[cfg(test)]
