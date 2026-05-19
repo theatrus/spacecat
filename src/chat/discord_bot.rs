@@ -387,6 +387,7 @@ pub async fn run_bot(
         "guider_stop",
         "cool",
         "warm",
+        "autofocus",
         "abort_capture",
         "stop_sequence",
         "start_sequence",
@@ -1127,6 +1128,41 @@ async fn warm(
 }
 
 // --- Destructive (ACL + button confirm) ---
+
+/// Trigger a NINA autofocus run, or cancel one with `cancel:true`.
+#[poise::command(slash_command)]
+async fn autofocus(
+    ctx: Context<'_>,
+    #[description = "Cancel a running API-triggered autofocus"] cancel: Option<bool>,
+    #[description = "Telescope name"] telescope: Option<String>,
+) -> Result<(), BotError> {
+    if require_write_acl(ctx).await.is_err() {
+        return Ok(());
+    }
+    let (name, client) = match resolve_or_reply(ctx, telescope).await {
+        Ok(v) => v,
+        Err(_) => return Ok(()),
+    };
+    let cancel = cancel.unwrap_or(false);
+    if !cancel && !confirm_destructive(ctx, &format!("autofocus run on {name}")).await? {
+        return Ok(());
+    }
+    let label = if cancel {
+        "Cancel autofocus"
+    } else {
+        "Start autofocus"
+    };
+    let cancel_str = if cancel { "true" } else { "false" };
+    run_command(
+        ctx,
+        &name,
+        &client,
+        label,
+        "/equipment/focuser/auto-focus",
+        &[("cancel", cancel_str)],
+    )
+    .await
+}
 
 /// Park the mount (requires confirmation).
 #[poise::command(slash_command)]
