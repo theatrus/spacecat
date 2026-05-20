@@ -208,14 +208,6 @@ impl EventHistoryResponse {
             .collect()
     }
 
-    /// Get events in a time range (assuming ISO 8601 timestamps)
-    pub fn get_events_in_range(&self, start: &str, end: &str) -> Vec<&Event> {
-        self.response
-            .iter()
-            .filter(|event| event.time.as_str() >= start && event.time.as_str() <= end)
-            .collect()
-    }
-
     /// Count events by type
     pub fn count_events_by_type(&self) -> std::collections::HashMap<String, usize> {
         let mut counts = std::collections::HashMap::new();
@@ -230,26 +222,6 @@ impl Event {
     /// Check if this is a connection event
     pub fn is_connection_event(&self) -> bool {
         self.event.ends_with("-CONNECTED") || self.event.ends_with("-DISCONNECTED")
-    }
-
-    /// Check if this is a disconnection event
-    pub fn is_disconnection(&self) -> bool {
-        self.event.ends_with("-DISCONNECTED")
-    }
-
-    /// Check if this is a connection event
-    pub fn is_connection(&self) -> bool {
-        self.event.ends_with("-CONNECTED")
-    }
-
-    /// Get the equipment name from the event (e.g., "CAMERA" from "CAMERA-CONNECTED")
-    pub fn get_equipment_name(&self) -> Option<&str> {
-        if self.is_connection_event()
-            && let Some(pos) = self.event.rfind('-')
-        {
-            return Some(&self.event[..pos]);
-        }
-        None
     }
 }
 
@@ -299,22 +271,14 @@ mod tests {
             event: event_types::CAMERA_CONNECTED.to_string(),
             details: None,
         };
-
         assert!(camera_connected.is_connection_event());
-        assert!(camera_connected.is_connection());
-        assert!(!camera_connected.is_disconnection());
-        assert_eq!(camera_connected.get_equipment_name(), Some("CAMERA"));
 
         let mount_disconnected = Event {
             time: "2025-08-06T19:20:35.2068582-07:00".to_string(),
             event: event_types::MOUNT_DISCONNECTED.to_string(),
             details: None,
         };
-
         assert!(mount_disconnected.is_connection_event());
-        assert!(!mount_disconnected.is_connection());
-        assert!(mount_disconnected.is_disconnection());
-        assert_eq!(mount_disconnected.get_equipment_name(), Some("MOUNT"));
     }
 
     #[test]
@@ -558,14 +522,6 @@ mod tests {
 
             let autofocus_events = events.get_events_by_type(event_types::AUTOFOCUS_FINISHED);
             println!("Found {} autofocus events", autofocus_events.len());
-
-            // Test time range filtering (get first and last event times)
-            if events.response.len() > 1 {
-                let first_time = &events.response[0].time;
-                let last_time = &events.response[events.response.len() - 1].time;
-                let range_events = events.get_events_in_range(first_time, last_time);
-                assert_eq!(range_events.len(), events.response.len());
-            }
         } else {
             println!("example_event-history.json not found, skipping file test");
         }

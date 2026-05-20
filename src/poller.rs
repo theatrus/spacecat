@@ -30,11 +30,6 @@ impl EventPoller {
         }
     }
 
-    /// Create a new event poller with default 5-second poll interval
-    pub fn new_with_default_interval(client: SpaceCatApiClient) -> Self {
-        Self::new(client, Duration::from_secs(5))
-    }
-
     /// Poll for new events and return only events not seen before
     pub async fn poll_new_events(&mut self) -> Result<PollResult, Box<dyn std::error::Error>> {
         let start_time = Instant::now();
@@ -63,51 +58,9 @@ impl EventPoller {
         })
     }
 
-    /// Poll continuously and call a callback function for each batch of new events
-    pub async fn poll_continuously<F, Fut>(
-        &mut self,
-        mut callback: F,
-    ) -> Result<(), Box<dyn std::error::Error>>
-    where
-        F: FnMut(PollResult) -> Fut,
-        Fut: std::future::Future<Output = Result<(), Box<dyn std::error::Error>>>,
-    {
-        loop {
-            match self.poll_new_events().await {
-                Ok(result) => {
-                    if !result.new_events.is_empty()
-                        && let Err(e) = callback(result).await
-                    {
-                        eprintln!("Callback error: {e}");
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Polling error: {e}");
-                    // Sleep longer on error to avoid spamming
-                    sleep(Duration::from_secs(30)).await;
-                }
-            }
-        }
-    }
-
     /// Get the number of unique events seen so far
     pub fn seen_event_count(&self) -> usize {
         self.seen_events.len()
-    }
-
-    /// Clear the seen events cache (useful for testing or reset scenarios)
-    pub fn reset_seen_events(&mut self) {
-        self.seen_events.clear();
-    }
-
-    /// Set a new poll interval
-    pub fn set_poll_interval(&mut self, interval: Duration) {
-        self.poll_interval = interval;
-    }
-
-    /// Get the current poll interval
-    pub fn poll_interval(&self) -> Duration {
-        self.poll_interval
     }
 
     /// Find new events by comparing against previously seen events
@@ -177,7 +130,7 @@ mod tests {
     async fn test_event_key_creation() {
         let config = ApiConfig::default();
         let client = SpaceCatApiClient::new(config).unwrap();
-        let poller = EventPoller::new_with_default_interval(client);
+        let poller = EventPoller::new(client, Duration::from_secs(5));
 
         let event = Event {
             time: "2023-01-01T12:00:00".to_string(),

@@ -10,7 +10,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Example 1: Simple text message
     println!("Sending simple message...");
-    webhook.execute_simple("Hello from SpaceCat! 🔭").await?;
+    webhook
+        .execute(&WebhookMessage {
+            content: Some("Hello from SpaceCat! 🔭".to_string()),
+            ..Default::default()
+        })
+        .await?;
 
     // Example 2: Message with custom username and avatar
     println!("Sending custom message...");
