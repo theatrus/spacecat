@@ -1,43 +1,5 @@
-use serde::{Deserialize, Deserializer, Serialize};
-
-/// Custom deserializer for f64 that handles "NaN" strings
-fn deserialize_f64_or_nan<'de, D>(deserializer: D) -> Result<f64, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    use serde::de::{self, Visitor};
-    use std::fmt;
-
-    struct F64OrNanVisitor;
-
-    impl<'de> Visitor<'de> for F64OrNanVisitor {
-        type Value = f64;
-
-        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-            formatter.write_str("a number or \"NaN\"")
-        }
-
-        fn visit_f64<E>(self, value: f64) -> Result<f64, E>
-        where
-            E: de::Error,
-        {
-            Ok(value)
-        }
-
-        fn visit_str<E>(self, value: &str) -> Result<f64, E>
-        where
-            E: de::Error,
-        {
-            if value == "NaN" {
-                Ok(f64::NAN)
-            } else {
-                value.parse().map_err(de::Error::custom)
-            }
-        }
-    }
-
-    deserializer.deserialize_any(F64OrNanVisitor)
-}
+use crate::serde_helpers::de_f64_tolerant;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "PascalCase")]
@@ -77,7 +39,7 @@ pub struct AutofocusData {
 #[serde(rename_all = "PascalCase")]
 pub struct FocusPoint {
     pub position: i32,
-    #[serde(deserialize_with = "deserialize_f64_or_nan")]
+    #[serde(deserialize_with = "de_f64_tolerant")]
     pub value: f64,
     pub error: f64,
 }
@@ -86,7 +48,7 @@ pub struct FocusPoint {
 #[serde(rename_all = "PascalCase")]
 pub struct IntersectionPoint {
     pub position: f64,
-    #[serde(deserialize_with = "deserialize_f64_or_nan")]
+    #[serde(deserialize_with = "de_f64_tolerant")]
     pub value: f64,
     pub error: f64,
 }
@@ -113,13 +75,13 @@ pub struct Fittings {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "PascalCase")]
 pub struct RSquares {
-    #[serde(deserialize_with = "deserialize_f64_or_nan")]
+    #[serde(deserialize_with = "de_f64_tolerant")]
     pub quadratic: f64,
-    #[serde(deserialize_with = "deserialize_f64_or_nan")]
+    #[serde(deserialize_with = "de_f64_tolerant")]
     pub hyperbolic: f64,
-    #[serde(deserialize_with = "deserialize_f64_or_nan")]
+    #[serde(deserialize_with = "de_f64_tolerant")]
     pub left_trend: f64,
-    #[serde(deserialize_with = "deserialize_f64_or_nan")]
+    #[serde(deserialize_with = "de_f64_tolerant")]
     pub right_trend: f64,
 }
 
