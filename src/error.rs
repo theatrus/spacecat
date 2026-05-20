@@ -73,10 +73,6 @@ pub enum ChatError {
         service_name: String,
         reason: String,
     },
-
-    /// No chat services configured
-    #[error("No chat services are configured")]
-    NoServicesConfigured,
 }
 
 /// Service wrapper and Windows service errors
@@ -103,12 +99,6 @@ pub enum ServiceError {
     #[error("Tokio runtime error: {0}")]
     TokioRuntime(#[from] tokio::io::Error),
 }
-
-/// Result type alias for SpaceCat operations
-pub type Result<T> = std::result::Result<T, SpaceCatError>;
-
-/// Result type alias for Chat operations
-pub type ChatResult<T> = std::result::Result<T, ChatError>;
 
 /// Result type alias for Service operations
 pub type ServiceResult<T> = std::result::Result<T, ServiceError>;

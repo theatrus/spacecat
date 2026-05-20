@@ -762,7 +762,7 @@ impl ChatUpdater {
             self.state.last_image_time = Some(Instant::now());
             if self.state.skipped_images_count > 0 {
                 println!(
-                    "  Sent image to Discord (including {} skipped images)",
+                    "  Sent image notification (including {} skipped images)",
                     self.state.skipped_images_count
                 );
             }

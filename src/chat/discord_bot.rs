@@ -30,8 +30,7 @@ pub struct BotData {
     /// Discord channel ID -> telescope name. Slash commands invoked in a
     /// mapped channel default to that telescope.
     pub channel_to_telescope: HashMap<u64, String>,
-    /// Discord user IDs allowed to invoke write commands (Phase 3).
-    #[allow(dead_code)]
+    /// Discord user IDs allowed to invoke write commands.
     pub write_acl: std::collections::HashSet<u64>,
 }
 
