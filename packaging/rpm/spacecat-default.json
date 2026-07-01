@@ -1,0 +1,31 @@
+{
+  "logging": {
+    "level": "info",
+    "enable_file_logging": false,
+    "log_file": "spacecat.log"
+  },
+  "chat": {
+    "discord": {
+      "enabled": false,
+      "default_webhook_url": "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN"
+    },
+    "matrix": {
+      "enabled": false,
+      "homeserver_url": "https://matrix.org",
+      "username": "@spacecat_bot:matrix.org",
+      "password": "your_bot_password",
+      "default_room_id": "!SpaceCatObservatory:matrix.org"
+    }
+  },
+  "telescopes": [
+    {
+      "name": "primary",
+      "api": {
+        "base_url": "http://192.168.0.82:1888",
+        "timeout_seconds": 30,
+        "retry_attempts": 3
+      },
+      "image_cooldown_seconds": 60
+    }
+  ]
+}

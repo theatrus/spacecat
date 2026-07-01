@@ -1,0 +1,55 @@
+[Unit]
+Description=SpaceCat astronomical observation chat updater
+Documentation=https://github.com/theatrus/spacecat
+After=network-online.target
+Wants=network-online.target
+# Don't start the daemon until an operator has provided a config.
+ConditionFileNotEmpty=/etc/spacecat/config.json
+
+[Service]
+Type=exec
+User=spacecat
+Group=spacecat
+EnvironmentFile=/etc/spacecat/spacecat.conf
+# chat-updater polls every configured telescope and fans notifications out to
+# the configured chat services. Poll interval + any extra flags come from the
+# EnvironmentFile above.
+ExecStart=/usr/bin/spacecat --config /etc/spacecat/config.json \
+    chat-updater --interval ${SPACECAT_INTERVAL} $SPACECAT_EXTRA_ARGS
+Restart=on-failure
+RestartSec=5
+
+# Sandboxing. The daemon only needs to read its config and reach the network
+# (NINA API + Discord/Matrix); it keeps no on-disk state.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadOnlyPaths=/etc/spacecat
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# Logging.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=spacecat
+
+[Install]
+WantedBy=multi-user.target
