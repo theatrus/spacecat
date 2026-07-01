@@ -1,0 +1,5 @@
+# SpaceCat runs its chat-updater daemon under a dedicated, unprivileged system
+# user. Installed as %{_sysusersdir}/spacecat.conf; systemd-sysusers creates the
+# account on package install via the systemd file trigger.
+#Type Name      ID   GECOS                        Home
+u     spacecat  -    "SpaceCat Astronomy System"  /var/lib/spacecat
