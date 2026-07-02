@@ -167,7 +167,11 @@ pub async fn build_chat_updater(
     let target = telescope.chat.to_chat_target();
     Ok(
         ChatUpdater::new(client, telescope.name.clone(), target, chat_manager)
-            .with_image_cooldown(telescope.image_cooldown_seconds),
+            .with_image_cooldown(telescope.image_cooldown_seconds)
+            .with_reconnect_backoff(
+                telescope.reconnect.initial_seconds,
+                telescope.reconnect.max_seconds,
+            ),
     )
 }
 
@@ -222,19 +226,49 @@ mod windows_service_impl {
                                     return;
                                 }
                             };
-                        if let Err(e) = updater.initialize_baseline().await {
-                            eprintln!("[{}] Baseline failed: {e}", telescope.name);
-                            return;
+                        // Don't give up permanently if the rig is offline at
+                        // startup — retry the baseline with exponential backoff
+                        // until it comes back, honoring the shutdown signal.
+                        let mut delay = updater.reconnect_initial();
+                        loop {
+                            if shutdown.load(std::sync::atomic::Ordering::SeqCst) {
+                                return;
+                            }
+                            // Map the (non-Send) error to a String so no
+                            // `Box<dyn Error>` is held across the await below.
+                            match updater.initialize_baseline().await.map_err(|e| e.to_string()) {
+                                Ok(()) => break,
+                                Err(msg) => {
+                                    eprintln!(
+                                        "[{}] Baseline failed: {msg}; retrying in {delay:?}",
+                                        telescope.name
+                                    );
+                                    sleep(delay).await;
+                                    delay = updater.next_reconnect_delay(delay);
+                                }
+                            }
                         }
                         println!(
                             "[{}] Windows service polling every {:?}",
                             telescope.name, poll_interval
                         );
+                        // Same reachability-gated backoff as the CLI path: the
+                        // pollers report whether the API answered, so a mid-run
+                        // drop backs off instead of hammering every endpoint.
+                        let mut reconnect_delay = updater.reconnect_initial();
                         while !shutdown.load(std::sync::atomic::Ordering::SeqCst) {
-                            updater.poll_sequence().await;
-                            updater.poll_events().await;
-                            updater.poll_images().await;
-                            sleep(poll_interval).await;
+                            let seq_ok = updater.poll_sequence().await;
+                            let events_ok = updater.poll_events().await;
+                            let images_ok = updater.poll_images().await;
+                            let reachable = seq_ok || events_ok || images_ok;
+                            updater.record_reachability(reachable).await;
+                            if reachable {
+                                reconnect_delay = updater.reconnect_initial();
+                                sleep(poll_interval).await;
+                            } else {
+                                sleep(reconnect_delay).await;
+                                reconnect_delay = updater.next_reconnect_delay(reconnect_delay);
+                            }
                         }
                         println!("[{}] Shutdown signal received.", telescope.name);
                     });
