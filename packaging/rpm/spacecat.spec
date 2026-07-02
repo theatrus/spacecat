@@ -6,7 +6,7 @@
 %global debug_package %{nil}
 
 Name:           spacecat
-Version:        0.2.0
+Version:        0.2.1
 Release:        1%{?dist}
 Summary:        SpaceCat - Astronomical Observation System
 
@@ -106,6 +106,9 @@ install -Dpm0640 packaging/rpm/spacecat-default.json \
 %attr(0640,root,spacecat) %config(noreplace) %{_sysconfdir}/%{name}/config.json
 
 %changelog
+* Thu Jul 02 2026 Yann Ramin <github@theatr.us> - 0.2.1-1
+- Fix `cargo fmt` violations that broke CI linting on main
+
 * Thu Jul 02 2026 Yann Ramin <github@theatr.us> - 0.2.0-1
 - Add exponential-backoff reconnect logic for offline telescopes, with
   configurable per-telescope thresholds and debounced chat alerts on

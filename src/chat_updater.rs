@@ -243,9 +243,7 @@ impl ChatUpdater {
             match self.initialize_baseline().await.map_err(|e| e.to_string()) {
                 Ok(()) => break,
                 Err(msg) => {
-                    eprintln!(
-                        "[{n}] Failed to initialize baseline: {msg}; retrying in {delay:?}"
-                    );
+                    eprintln!("[{n}] Failed to initialize baseline: {msg}; retrying in {delay:?}");
                     sleep(delay).await;
                     delay = self.next_reconnect_delay(delay);
                 }
@@ -300,8 +298,7 @@ impl ChatUpdater {
             }
         } else {
             self.state.consecutive_failures += 1;
-            if self.state.connected
-                && self.state.consecutive_failures >= OFFLINE_FAILURE_THRESHOLD
+            if self.state.connected && self.state.consecutive_failures >= OFFLINE_FAILURE_THRESHOLD
             {
                 eprintln!(
                     "[{}] Telescope offline after {} failed cycles; backing off.",
@@ -1672,7 +1669,10 @@ mod tests {
         let initial = Duration::from_secs(60);
         let max = Duration::from_secs(600);
         // 60 -> 120 -> 240 -> 480 -> 600 (capped) -> 600 (stays)
-        assert_eq!(backoff_delay(initial, initial, max), Duration::from_secs(120));
+        assert_eq!(
+            backoff_delay(initial, initial, max),
+            Duration::from_secs(120)
+        );
         assert_eq!(
             backoff_delay(Duration::from_secs(120), initial, max),
             Duration::from_secs(240)
@@ -1709,6 +1709,9 @@ mod tests {
         let initial = Duration::from_secs(60);
         let max = Duration::from_secs(10);
         assert_eq!(backoff_delay(initial, initial, max), initial);
-        assert_eq!(backoff_delay(Duration::from_secs(120), initial, max), initial);
+        assert_eq!(
+            backoff_delay(Duration::from_secs(120), initial, max),
+            initial
+        );
     }
 }
