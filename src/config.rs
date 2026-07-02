@@ -28,6 +28,32 @@ pub struct TelescopeConfig {
     pub chat: TelescopeChatOverrides,
     #[serde(default = "default_image_cooldown_seconds")]
     pub image_cooldown_seconds: u64,
+    /// Backoff settings for retrying the initial baseline when this telescope's
+    /// NINA API is unreachable at startup, so an offline rig isn't abandoned
+    /// forever.
+    #[serde(default)]
+    pub reconnect: ReconnectConfig,
+}
+
+/// Exponential-backoff schedule for baseline reconnect attempts. The first
+/// retry waits `initial_seconds`, and each subsequent failure doubles the wait
+/// up to `max_seconds`. Neither value is clamped — a `max_seconds` larger than
+/// the 600s default is honored as-is.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReconnectConfig {
+    #[serde(default = "default_reconnect_initial_seconds")]
+    pub initial_seconds: u64,
+    #[serde(default = "default_reconnect_max_seconds")]
+    pub max_seconds: u64,
+}
+
+impl Default for ReconnectConfig {
+    fn default() -> Self {
+        Self {
+            initial_seconds: default_reconnect_initial_seconds(),
+            max_seconds: default_reconnect_max_seconds(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,6 +85,14 @@ fn default_enabled() -> bool {
 
 fn default_image_cooldown_seconds() -> u64 {
     60
+}
+
+fn default_reconnect_initial_seconds() -> u64 {
+    60
+}
+
+fn default_reconnect_max_seconds() -> u64 {
+    600
 }
 
 fn default_telescope_name() -> String {
@@ -123,6 +157,7 @@ impl Default for TelescopeConfig {
             api: ApiConfig::default(),
             chat: TelescopeChatOverrides::default(),
             image_cooldown_seconds: default_image_cooldown_seconds(),
+            reconnect: ReconnectConfig::default(),
         }
     }
 }
@@ -209,6 +244,7 @@ impl From<ConfigEnvelope> for Config {
                         api,
                         chat: TelescopeChatOverrides::default(),
                         image_cooldown_seconds,
+                        reconnect: ReconnectConfig::default(),
                     }],
                 }
             }
@@ -552,11 +588,40 @@ mod tests {
         );
         assert!(config.telescopes[1].chat.discord_webhook_url.is_none());
         assert_eq!(config.telescopes[1].image_cooldown_seconds, 120);
+        // No `reconnect` key -> defaults (60s initial, 600s max).
+        assert_eq!(config.telescopes[0].reconnect.initial_seconds, 60);
+        assert_eq!(config.telescopes[0].reconnect.max_seconds, 600);
         let shared = config.chat.discord.as_ref().unwrap();
         assert_eq!(
             shared.default_webhook_url.as_deref(),
             Some("https://discord.com/api/webhooks/0/default")
         );
+    }
+
+    #[test]
+    fn test_reconnect_config_defaults_and_overrides() {
+        // Telescope A: no `reconnect` -> both defaults.
+        // Telescope B: partial `reconnect` -> only the given field overrides.
+        // Telescope C: max well above the 600s default is honored (no clamp).
+        let json = r#"{
+            "telescopes": [
+                { "name": "a", "api": { "base_url": "http://a", "timeout_seconds": 30, "retry_attempts": 3 } },
+                { "name": "b", "api": { "base_url": "http://b", "timeout_seconds": 30, "retry_attempts": 3 },
+                  "reconnect": { "initial_seconds": 5 } },
+                { "name": "c", "api": { "base_url": "http://c", "timeout_seconds": 30, "retry_attempts": 3 },
+                  "reconnect": { "initial_seconds": 30, "max_seconds": 3600 } }
+            ]
+        }"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+
+        assert_eq!(config.telescopes[0].reconnect.initial_seconds, 60);
+        assert_eq!(config.telescopes[0].reconnect.max_seconds, 600);
+
+        assert_eq!(config.telescopes[1].reconnect.initial_seconds, 5);
+        assert_eq!(config.telescopes[1].reconnect.max_seconds, 600);
+
+        assert_eq!(config.telescopes[2].reconnect.initial_seconds, 30);
+        assert_eq!(config.telescopes[2].reconnect.max_seconds, 3600);
     }
 
     #[test]

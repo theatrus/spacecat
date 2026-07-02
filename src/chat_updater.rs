@@ -14,6 +14,27 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
 
+/// Default first-retry wait when a telescope is unreachable at startup. A rig
+/// that's powered off (or whose API isn't up yet) shouldn't permanently kill
+/// its monitoring task — we keep re-checking until it comes back, starting
+/// here and backing off exponentially.
+pub(crate) const DEFAULT_RECONNECT_INITIAL: Duration = Duration::from_secs(60);
+/// Default ceiling for the exponential reconnect backoff.
+pub(crate) const DEFAULT_RECONNECT_MAX: Duration = Duration::from_secs(600);
+
+/// Number of consecutive failed poll cycles before we treat a telescope as
+/// offline and post a chat alert. Debounces against a single transient blip;
+/// because the loop already backs off after the first failure, these cycles
+/// are spaced out (≈60s, then 120s, …), so a small count still means minutes.
+const OFFLINE_FAILURE_THRESHOLD: u32 = 3;
+
+/// Double `current`, capped at `max` — but never below `initial`, so a
+/// misconfigured `max < initial` can't shrink the wait. Shared by the startup
+/// baseline retry and the mid-run reconnect loop so both back off identically.
+fn backoff_delay(current: Duration, initial: Duration, max: Duration) -> Duration {
+    (current * 2).min(max.max(initial))
+}
+
 /// Information about the current observation target
 #[derive(Debug, Clone)]
 struct TargetInfo {
@@ -52,6 +73,13 @@ struct UpdaterState {
     /// `upsert_status` call when nothing meaningful has changed since the
     /// previous poll cycle.
     last_status_fingerprint: Option<String>,
+    /// Whether the telescope is currently *reported* as connected. Drives the
+    /// offline/reconnect logging and chat alerts. Set true once the startup
+    /// baseline succeeds; flips to false only after the failure debounce.
+    connected: bool,
+    /// Consecutive failed poll cycles since the last successful one. Used to
+    /// debounce the offline alert (see `OFFLINE_FAILURE_THRESHOLD`).
+    consecutive_failures: u32,
 }
 
 impl UpdaterState {
@@ -70,6 +98,8 @@ impl UpdaterState {
             sequence_running: false,
             wait_until: None,
             last_status_fingerprint: None,
+            connected: false,
+            consecutive_failures: 0,
         }
     }
 
@@ -130,6 +160,10 @@ pub struct ChatUpdater {
     chat_manager: Arc<ChatServiceManager>,
     chat_target: ChatTarget,
     image_cooldown: Duration,
+    /// First-retry wait when the telescope is unreachable at startup.
+    reconnect_initial: Duration,
+    /// Ceiling for the exponential reconnect backoff.
+    reconnect_max: Duration,
     /// Telescope name — used to prefix chat message titles and console logs
     /// so users running multiple telescopes can tell rigs apart.
     telescope_name: String,
@@ -148,6 +182,8 @@ impl ChatUpdater {
             chat_manager,
             chat_target,
             image_cooldown: Duration::from_secs(60),
+            reconnect_initial: DEFAULT_RECONNECT_INITIAL,
+            reconnect_max: DEFAULT_RECONNECT_MAX,
             telescope_name,
         }
     }
@@ -167,6 +203,27 @@ impl ChatUpdater {
         self
     }
 
+    /// Set the exponential-backoff schedule for baseline reconnect attempts:
+    /// the first retry waits `initial_seconds`, doubling each failure up to
+    /// `max_seconds`. Values are not clamped — a large `max_seconds` is honored.
+    pub fn with_reconnect_backoff(mut self, initial_seconds: u64, max_seconds: u64) -> Self {
+        self.reconnect_initial = Duration::from_secs(initial_seconds);
+        self.reconnect_max = Duration::from_secs(max_seconds);
+        self
+    }
+
+    /// First-retry wait for an unreachable telescope's baseline.
+    pub fn reconnect_initial(&self) -> Duration {
+        self.reconnect_initial
+    }
+
+    /// Next backoff delay after a failed reconnect attempt: double `current`,
+    /// capped at `reconnect_max` (but never below `reconnect_initial`, so a
+    /// misconfigured `max < initial` can't shrink the wait).
+    pub fn next_reconnect_delay(&self, current: Duration) -> Duration {
+        backoff_delay(current, self.reconnect_initial, self.reconnect_max)
+    }
+
     pub async fn start_polling(&mut self, poll_interval: Duration) {
         let n = self.telescope_name.clone();
         println!("[{n}] Starting chat updater loop (events and images)...");
@@ -176,18 +233,113 @@ impl ChatUpdater {
         );
         println!("[{n}] Polling interval: {poll_interval:?}");
 
-        if let Err(e) = self.initialize_baseline().await {
-            eprintln!("[{n}] Failed to initialize baseline: {e}");
-            return;
+        // If the telescope is unreachable at startup, don't give up forever.
+        // Retry the baseline until it succeeds, backing off exponentially — in
+        // a multi-telescope setup one offline rig must not kill its own task.
+        let mut delay = self.reconnect_initial;
+        loop {
+            // Map the (non-Send) error to a String in the scrutinee so no
+            // `Box<dyn Error>` is bound across the await point below.
+            match self.initialize_baseline().await.map_err(|e| e.to_string()) {
+                Ok(()) => break,
+                Err(msg) => {
+                    eprintln!(
+                        "[{n}] Failed to initialize baseline: {msg}; retrying in {delay:?}"
+                    );
+                    sleep(delay).await;
+                    delay = self.next_reconnect_delay(delay);
+                }
+            }
         }
 
+        // Steady-state polling. The pollers themselves report whether the API
+        // answered, so a rig that drops mid-session is noticed without a
+        // separate health probe: when a whole cycle fails to reach the API we
+        // back off on the shared schedule instead of hammering every endpoint
+        // at the fast poll rate. Catching up on missed data is automatic — the
+        // pollers dedupe against seen state — so no re-baseline is needed.
+        let mut reconnect_delay = self.reconnect_initial;
         loop {
-            self.poll_sequence().await;
-            self.poll_events().await;
-            self.poll_images().await;
-            self.refresh_status_message().await;
-            sleep(poll_interval).await;
+            // Run every poller so live state stays current; the cycle counts as
+            // "reachable" if any endpoint answered.
+            let seq_ok = self.poll_sequence().await;
+            let events_ok = self.poll_events().await;
+            let images_ok = self.poll_images().await;
+            let reachable = seq_ok || events_ok || images_ok;
+
+            self.record_reachability(reachable).await;
+
+            if reachable {
+                self.refresh_status_message().await;
+                reconnect_delay = self.reconnect_initial;
+                sleep(poll_interval).await;
+            } else {
+                sleep(reconnect_delay).await;
+                reconnect_delay = self.next_reconnect_delay(reconnect_delay);
+            }
         }
+    }
+
+    /// Record the outcome of a poll cycle and manage the reported-connection
+    /// state. Logs and posts a chat alert on each transition, debouncing the
+    /// offline direction until `OFFLINE_FAILURE_THRESHOLD` consecutive cycles
+    /// have failed (so a single transient blip stays quiet); reconnect fires as
+    /// soon as the API answers again.
+    pub async fn record_reachability(&mut self, reachable: bool) {
+        if reachable {
+            self.state.consecutive_failures = 0;
+            if !self.state.connected {
+                eprintln!(
+                    "[{}] Telescope reconnected; resuming polling.",
+                    self.telescope_name
+                );
+                self.state.connected = true;
+                if self.chat_manager.service_count() > 0 {
+                    self.send_connectivity_notification(true).await;
+                }
+            }
+        } else {
+            self.state.consecutive_failures += 1;
+            if self.state.connected
+                && self.state.consecutive_failures >= OFFLINE_FAILURE_THRESHOLD
+            {
+                eprintln!(
+                    "[{}] Telescope offline after {} failed cycles; backing off.",
+                    self.telescope_name, self.state.consecutive_failures
+                );
+                self.state.connected = false;
+                if self.chat_manager.service_count() > 0 {
+                    self.send_connectivity_notification(false).await;
+                }
+            }
+        }
+    }
+
+    /// Post an offline/back-online connectivity alert to chat.
+    async fn send_connectivity_notification(&self, online: bool) {
+        let message = if online {
+            ChatMessage::new(&self.titled("✅ Telescope back online"))
+                .color(colors::GREEN)
+                .field("Status", "Reconnected; resuming monitoring.", false)
+        } else {
+            ChatMessage::new(&self.titled("🔌 Telescope offline"))
+                .color(colors::RED)
+                .field(
+                    "Status",
+                    &format!(
+                        "No response after {} consecutive poll cycles; retrying with backoff.",
+                        self.state.consecutive_failures
+                    ),
+                    false,
+                )
+        };
+        let message = message.footer(&format!(
+            "{}",
+            chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC")
+        ));
+        self.chat_manager
+            .send_message(&message, &self.chat_target)
+            .await;
     }
 
     /// Build a live-status embed from current state and push it to any
@@ -326,6 +478,7 @@ impl ChatUpdater {
             self.send_welcome_message().await;
         }
 
+        self.state.connected = true;
         Ok(())
     }
 
@@ -425,7 +578,10 @@ impl ChatUpdater {
         }
     }
 
-    pub async fn poll_events(&mut self) {
+    /// Returns whether the API responded (i.e. the telescope is reachable),
+    /// so the poll loop can detect a mid-run disconnect without a separate
+    /// health probe.
+    pub async fn poll_events(&mut self) -> bool {
         match self.client.get_event_history().await {
             Ok(events) => {
                 for event in events.response {
@@ -438,8 +594,12 @@ impl ChatUpdater {
                         self.handle_event(&event).await;
                     }
                 }
+                true
             }
-            Err(e) => eprintln!("Error fetching events: {e}"),
+            Err(e) => {
+                eprintln!("Error fetching events: {e}");
+                false
+            }
         }
     }
 
@@ -678,7 +838,8 @@ impl ChatUpdater {
         }
     }
 
-    pub async fn poll_sequence(&mut self) {
+    /// Returns whether the API responded (see [`Self::poll_events`]).
+    pub async fn poll_sequence(&mut self) -> bool {
         match self.client.get_sequence().await {
             Ok(sequence) => {
                 let new_sequence_target = extract_current_target(&sequence);
@@ -724,16 +885,19 @@ impl ChatUpdater {
                         }
                     }
                 }
+                true
             }
             Err(e) => {
                 if self.state.sequence.is_none() {
                     eprintln!("Error fetching sequence (will retry silently): {e}");
                 }
+                false
             }
         }
     }
 
-    pub async fn poll_images(&mut self) {
+    /// Returns whether the API responded (see [`Self::poll_events`]).
+    pub async fn poll_images(&mut self) -> bool {
         match self.client.get_all_image_history().await {
             Ok(images) => {
                 for (index, image) in images.response.iter().enumerate() {
@@ -745,8 +909,12 @@ impl ChatUpdater {
                         }
                     }
                 }
+                true
             }
-            Err(e) => eprintln!("Error fetching images: {e}"),
+            Err(e) => {
+                eprintln!("Error fetching images: {e}");
+                false
+            }
         }
     }
 
@@ -1492,5 +1660,55 @@ fn get_event_title(event: &str) -> String {
         event_types::ROTATOR_MOVED => "🧭 Rotator Moved".to_string(),
         event_types::ROTATOR_MOVED_MECHANICAL => "🧭 Rotator Moved (Mech.)".to_string(),
         _ => format!("📡 {}", event),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backoff_doubles_up_to_max() {
+        let initial = Duration::from_secs(60);
+        let max = Duration::from_secs(600);
+        // 60 -> 120 -> 240 -> 480 -> 600 (capped) -> 600 (stays)
+        assert_eq!(backoff_delay(initial, initial, max), Duration::from_secs(120));
+        assert_eq!(
+            backoff_delay(Duration::from_secs(120), initial, max),
+            Duration::from_secs(240)
+        );
+        assert_eq!(
+            backoff_delay(Duration::from_secs(240), initial, max),
+            Duration::from_secs(480)
+        );
+        assert_eq!(
+            backoff_delay(Duration::from_secs(480), initial, max),
+            Duration::from_secs(600)
+        );
+        assert_eq!(backoff_delay(max, initial, max), Duration::from_secs(600));
+    }
+
+    #[test]
+    fn backoff_honors_max_above_default() {
+        // A large configured max is not clamped — it keeps doubling past 600s.
+        let initial = Duration::from_secs(60);
+        let max = Duration::from_secs(3600);
+        assert_eq!(
+            backoff_delay(Duration::from_secs(600), initial, max),
+            Duration::from_secs(1200)
+        );
+        assert_eq!(
+            backoff_delay(Duration::from_secs(2400), initial, max),
+            Duration::from_secs(3600)
+        );
+    }
+
+    #[test]
+    fn backoff_never_shrinks_below_initial_when_max_misconfigured() {
+        // max < initial must not shrink the wait below the first interval.
+        let initial = Duration::from_secs(60);
+        let max = Duration::from_secs(10);
+        assert_eq!(backoff_delay(initial, initial, max), initial);
+        assert_eq!(backoff_delay(Duration::from_secs(120), initial, max), initial);
     }
 }
