@@ -236,7 +236,11 @@ mod windows_service_impl {
                             }
                             // Map the (non-Send) error to a String so no
                             // `Box<dyn Error>` is held across the await below.
-                            match updater.initialize_baseline().await.map_err(|e| e.to_string()) {
+                            match updater
+                                .initialize_baseline()
+                                .await
+                                .map_err(|e| e.to_string())
+                            {
                                 Ok(()) => break,
                                 Err(msg) => {
                                     eprintln!(
