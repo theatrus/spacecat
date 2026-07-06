@@ -63,7 +63,7 @@ jobs:
           test -f /usr/lib/systemd/system/spacecat.service
           test -f /etc/spacecat/config.json
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: spacecat-fedora-${{ matrix.fedora }}-rpms
           path: out/*.rpm
