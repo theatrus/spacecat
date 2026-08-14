@@ -3,7 +3,7 @@
   <Product Id="*" 
            Name="SpaceCat" 
            Language="1033" 
-           Version="0.1.0.0" 
+           Version="0.3.0.0" 
            Manufacturer="SpaceCat Team" 
            UpgradeCode="7E8F5D42-3A1B-4C8E-B9F2-1A2B3C4D5E6F">
     
