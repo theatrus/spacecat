@@ -3,6 +3,7 @@ using NINA.Plugin;
 using NINA.Plugin.Interfaces;
 using NINA.Profile.Interfaces;
 using SpaceCat.NINA.Protocol;
+using SpaceCat.NINA.Settings;
 
 namespace SpaceCat.NINA;
 
@@ -20,6 +21,7 @@ public sealed class SpaceCatPlugin : PluginBase
     private readonly IProfileService profileService;
     private readonly Guid nodeId = NodeIdentityStore.LoadOrCreate();
     private readonly Guid sessionId = Guid.NewGuid();
+    private DirectConnectionSettings connectionSettings = DirectConnectionSettings.Local;
 
     [ImportingConstructor]
     public SpaceCatPlugin(IProfileService profileService)
@@ -35,6 +37,16 @@ public sealed class SpaceCatPlugin : PluginBase
     public override Task Teardown()
     {
         return base.Teardown();
+    }
+
+    internal DirectConnectionSettings ConnectionSettings
+    {
+        get => connectionSettings;
+        set
+        {
+            value.Validate();
+            connectionSettings = value;
+        }
     }
 
     /// <summary>

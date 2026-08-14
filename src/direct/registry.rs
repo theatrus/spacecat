@@ -5,11 +5,20 @@ use std::collections::HashMap;
 use thiserror::Error;
 use uuid::Uuid;
 
+/// Trusted transport selected by the SpaceCat listener, not claimed by the
+/// plugin. Local is the default deployment; Remote is an explicit WSS option.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DirectConnectionMode {
+    LocalPipe,
+    RemoteWebSocket,
+}
+
 /// One active N.I.N.A. plugin connection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegisteredRig {
     pub rig_id: RigId,
     pub connection_id: Uuid,
+    pub connection_mode: DirectConnectionMode,
     pub hello: ClientHello,
 }
 
@@ -63,14 +72,24 @@ impl DirectRigRegistry {
         }
     }
 
-    /// Register or reconnect a plugin instance.
+    /// Register or reconnect a plugin instance using the simple local mode.
+    pub fn register(
+        &mut self,
+        connection_id: Uuid,
+        hello: ClientHello,
+    ) -> Result<Registration, RegistrationError> {
+        self.register_with_mode(connection_id, DirectConnectionMode::LocalPipe, hello)
+    }
+
+    /// Register or reconnect a plugin instance using an explicit transport.
     ///
     /// Reusing a connection for a new profile performs an atomic profile
     /// switch. A second process claiming an already active profile is rejected
     /// so commands can never be routed ambiguously.
-    pub fn register(
+    pub fn register_with_mode(
         &mut self,
         connection_id: Uuid,
+        connection_mode: DirectConnectionMode,
         hello: ClientHello,
     ) -> Result<Registration, RegistrationError> {
         self.validate(connection_id, &hello)?;
@@ -113,6 +132,7 @@ impl DirectRigRegistry {
         let rig = RegisteredRig {
             rig_id,
             connection_id,
+            connection_mode,
             hello,
         };
         self.by_rig.insert(rig_id, rig.clone());
@@ -243,18 +263,35 @@ mod tests {
         assert_ne!(north.rig.rig_id, south.rig.rig_id);
         assert_eq!(north.rig.rig_id.node_id, id(1));
         assert_eq!(south.rig.rig_id.node_id, id(1));
+        assert_eq!(north.rig.connection_mode, DirectConnectionMode::LocalPipe);
     }
 
     #[test]
     fn same_profile_guid_on_different_systems_is_not_a_collision() {
         let mut registry = DirectRigRegistry::new();
 
-        let observatory_a = registry.register(id(101), hello(1, 11, 21, 1001)).unwrap();
-        let observatory_b = registry.register(id(102), hello(2, 11, 22, 1002)).unwrap();
+        let observatory_a = registry
+            .register_with_mode(
+                id(101),
+                DirectConnectionMode::RemoteWebSocket,
+                hello(1, 11, 21, 1001),
+            )
+            .unwrap();
+        let observatory_b = registry
+            .register_with_mode(
+                id(102),
+                DirectConnectionMode::RemoteWebSocket,
+                hello(2, 11, 22, 1002),
+            )
+            .unwrap();
 
         assert_eq!(observatory_a.rig.rig_id.profile_id, id(11));
         assert_eq!(observatory_b.rig.rig_id.profile_id, id(11));
         assert_ne!(observatory_a.rig.rig_id, observatory_b.rig.rig_id);
+        assert_eq!(
+            observatory_a.rig.connection_mode,
+            DirectConnectionMode::RemoteWebSocket
+        );
         assert_eq!(registry.len(), 2);
     }
 
@@ -284,12 +321,28 @@ mod tests {
     #[test]
     fn reconnect_replaces_stale_connection_for_the_same_session() {
         let mut registry = DirectRigRegistry::new();
-        registry.register(id(101), hello(1, 11, 21, 1001)).unwrap();
+        registry
+            .register_with_mode(
+                id(101),
+                DirectConnectionMode::RemoteWebSocket,
+                hello(1, 11, 21, 1001),
+            )
+            .unwrap();
 
-        let registration = registry.register(id(102), hello(1, 11, 21, 1001)).unwrap();
+        let registration = registry
+            .register_with_mode(
+                id(102),
+                DirectConnectionMode::RemoteWebSocket,
+                hello(1, 11, 21, 1001),
+            )
+            .unwrap();
 
         assert_eq!(registration.previous_connection_id, Some(id(101)));
         assert_eq!(registration.rig.connection_id, id(102));
+        assert_eq!(
+            registration.rig.connection_mode,
+            DirectConnectionMode::RemoteWebSocket
+        );
         assert!(registry.rig_for_connection(id(101)).is_none());
         assert!(registry.rig_for_connection(id(102)).is_some());
         assert!(registry.disconnect(id(101)).is_none());

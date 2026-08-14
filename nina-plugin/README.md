@@ -23,6 +23,16 @@ open an outbound authenticated WebSocket to the central hub. Each rig is keyed
 by a persistent per-installation node ID plus N.I.N.A.'s profile GUID, so no
 Advanced API port or inbound listener is required on the imaging computers.
 
+Connection mode is explicit:
+
+- **Local (default):** no endpoint or pairing setup; the plugin connects to the
+  bundled on-machine SpaceCat runtime and the user owns the local chat keys.
+- **Remote:** the user supplies a `wss://` hub URL and pairs the node; Discord
+  and Matrix keys remain only on the central SpaceCat hub.
+
+Remote mode never silently falls back to Local, preventing duplicate
+notifications or an unexpected second bot.
+
 ## Build
 
 The initial project targets N.I.N.A. 3.2 and .NET 8:

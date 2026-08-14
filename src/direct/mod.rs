@@ -11,4 +11,6 @@ pub use protocol::{
     AgentHello, ClientHello, DIRECT_WEBSOCKET_PATH, DirectMessage, LOCAL_PIPE_PREFIX,
     PROTOCOL_VERSION, RigId, local_pipe_name,
 };
-pub use registry::{DirectRigRegistry, RegisteredRig, Registration, RegistrationError};
+pub use registry::{
+    DirectConnectionMode, DirectRigRegistry, RegisteredRig, Registration, RegistrationError,
+};

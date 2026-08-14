@@ -70,6 +70,39 @@ and connected-plugin registry. Read requests use a freshness-stamped cached
 snapshot or make a bounded round trip to the relevant plugin. Write commands
 are never queued for an offline rig.
 
+## Direct connection modes
+
+Direct mode has two explicit connection choices. SpaceCat does not probe and
+guess between them, and Remote never silently falls back to Local.
+
+### Local (default)
+
+Local is the simple all-in-one path for a single imaging computer:
+
+1. Install the SpaceCat N.I.N.A. plugin.
+2. Leave **Connection mode** set to **Local**.
+3. Configure locally owned Discord and/or Matrix credentials in the plugin UI.
+4. The plugin ensures the bundled SpaceCat runtime is running and connects to
+   it through the node-scoped Windows named pipe.
+
+Local requires no URL, pairing code, open port, or Advanced API installation.
+Chat credentials remain on that computer and will be stored with Windows data
+protection rather than in normal profile JSON.
+
+### Remote
+
+Remote connects one or more imaging computers to a central SpaceCat hub:
+
+1. Select **Connection mode: Remote**.
+2. Enter the hub's `wss://` URL and a one-time pairing code.
+3. The plugin stores only the resulting node-bound credential and opens an
+   outbound WebSocket to the hub.
+
+The central hub owns the Discord/Matrix credentials and bot connections. The
+imaging computers do not run a local bot, accept inbound connections, or expose
+Advanced API. Losing the remote connection produces a visible offline state;
+it does not start a second local bot.
+
 ## Multiple N.I.N.A. instances
 
 Every plugin sends a versioned `client_hello` containing three identifiers:
