@@ -31,7 +31,7 @@ jobs:
             cargo git xz tar findutils
           rpmdev-setuptree
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # cargo vendor needs the source tree and git archive needs the
           # checkout to be a git repo; a full checkout is simplest.
