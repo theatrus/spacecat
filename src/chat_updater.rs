@@ -1,6 +1,6 @@
 use crate::api::SpaceCatApiClient;
 use crate::autofocus::AutofocusResponse;
-use crate::chat::{ChatField, ChatMessage, ChatServiceManager, ChatTarget};
+use crate::chat::{ChatAttachment, ChatField, ChatMessage, ChatServiceManager, ChatTarget};
 use crate::discord::colors;
 use crate::events::{Event, EventDetails, FilterInfo, TargetCoordinates, event_types};
 use crate::images::ImageMetadata;
@@ -1212,8 +1212,19 @@ impl ChatUpdater {
                 )
                 .field("Position Change", &position_change_text, true)
                 .field(
-                    "HFR",
-                    &format!("{:.3}", af_data.calculated_focus_point.value),
+                    "HFR Before",
+                    &af_data
+                        .initial_hfr()
+                        .map(|v| format!("{v:.3}"))
+                        .unwrap_or_else(|| "n/a".to_string()),
+                    true,
+                )
+                .field(
+                    "HFR After",
+                    &af_data
+                        .final_hfr()
+                        .map(|v| format!("{v:.3}"))
+                        .unwrap_or_else(|| "n/a".to_string()),
                     true,
                 )
                 .field(
@@ -1228,8 +1239,20 @@ impl ChatUpdater {
                 )
                 .footer(&format!("Focuser: {}", af_data.auto_focuser_name));
 
+        // Attach the rendered autofocus graph; failures are non-fatal and
+        // the notification just goes out without it.
+        let attachments = match crate::charts::render_autofocus_graph_png(af_data) {
+            Ok(png) => vec![ChatAttachment {
+                data: png,
+                filename: "autofocus.png".to_string(),
+            }],
+            Err(e) => {
+                eprintln!("Failed to render autofocus graph: {e}");
+                Vec::new()
+            }
+        };
         self.chat_manager
-            .send_message(&message, &self.chat_target)
+            .send_message_with_attachments(&message, &self.chat_target, &attachments)
             .await;
     }
 
@@ -1518,10 +1541,44 @@ impl ChatUpdater {
             self.add_meridian_flip_info(&mut message);
         }
 
-        // Send message with thumbnail
+        // Send message with thumbnail plus, when the guider has data, a
+        // rendered guiding graph
+        let extra_attachments = self.render_guiding_graph_attachment(index).await;
         self.chat_manager
-            .send_message_with_image(&message, &self.chat_target, &self.client, index as u32)
+            .send_message_with_image(
+                &message,
+                &self.chat_target,
+                &self.client,
+                index as u32,
+                extra_attachments,
+            )
             .await;
+    }
+
+    /// Fetch the guide graph and render it as a PNG attachment. Any
+    /// failure (guider disconnected, empty history, render error) is
+    /// non-fatal — the image notification just goes out without a graph.
+    async fn render_guiding_graph_attachment(&self, index: usize) -> Vec<ChatAttachment> {
+        let graph = match self.client.get_guider_graph().await {
+            Ok(graph) => graph,
+            Err(e) => {
+                eprintln!("Guiding graph unavailable: {e}");
+                return Vec::new();
+            }
+        };
+        if !graph.success || !graph.response.has_graph_data() {
+            return Vec::new();
+        }
+        match crate::charts::render_guider_graph_png(&graph.response) {
+            Ok(png) => vec![ChatAttachment {
+                data: png,
+                filename: format!("guiding_{index}.png"),
+            }],
+            Err(e) => {
+                eprintln!("Failed to render guiding graph: {e}");
+                Vec::new()
+            }
+        }
     }
 }
 

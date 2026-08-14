@@ -2,6 +2,7 @@
 
 pub mod api;
 pub mod autofocus;
+pub mod charts;
 pub mod chat;
 pub mod chat_updater;
 pub mod config;

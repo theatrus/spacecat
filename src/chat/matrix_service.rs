@@ -1,4 +1,4 @@
-use super::{ChatMessage, ChatService, ChatTarget};
+use super::{ChatAttachment, ChatMessage, ChatService, ChatTarget};
 use crate::error::ChatError;
 use async_trait::async_trait;
 use matrix_sdk::{
@@ -206,6 +206,52 @@ impl ChatService for MatrixChatService {
                 service_name: "Matrix".to_string(),
                 reason: e.to_string(),
             })?;
+        Ok(())
+    }
+
+    async fn send_message_with_attachments(
+        &self,
+        message: &ChatMessage,
+        target: &ChatTarget,
+        attachments: &[ChatAttachment],
+    ) -> Result<(), ChatError> {
+        if attachments.is_empty() {
+            return self.send_message(message, target).await;
+        }
+        let room = self.get_room(target).await?;
+
+        let content = RoomMessageEventContent::notice_markdown(Self::format_message(message));
+        room.send(content)
+            .await
+            .map_err(|e| ChatError::MessageSend {
+                service_name: "Matrix".to_string(),
+                reason: e.to_string(),
+            })?;
+
+        for attachment in attachments {
+            let mime_type = if attachment.filename.ends_with(".png") {
+                "image/png"
+            } else {
+                "image/jpeg"
+            };
+            let mime = mime_type
+                .parse::<mime::Mime>()
+                .map_err(|e| ChatError::MessageSend {
+                    service_name: "Matrix".to_string(),
+                    reason: format!("Invalid MIME type: {}", e),
+                })?;
+            room.send_attachment(
+                &attachment.filename,
+                &mime,
+                attachment.data.clone(),
+                Default::default(),
+            )
+            .await
+            .map_err(|e| ChatError::MessageSend {
+                service_name: "Matrix".to_string(),
+                reason: e.to_string(),
+            })?;
+        }
         Ok(())
     }
 

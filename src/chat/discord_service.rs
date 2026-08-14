@@ -1,4 +1,4 @@
-use super::{ChatMessage, ChatService, ChatTarget};
+use super::{ChatAttachment, ChatMessage, ChatService, ChatTarget};
 use crate::discord::{DiscordWebhook, Embed, colors};
 use crate::error::ChatError;
 use async_trait::async_trait;
@@ -79,6 +79,30 @@ impl ChatService for DiscordChatService {
         let embed = Self::build_embed(message);
         webhook
             .execute_with_file(None, Some(embed), image_data, filename)
+            .await
+            .map_err(|e| ChatError::Discord {
+                message: e.to_string(),
+            })?;
+        Ok(())
+    }
+
+    async fn send_message_with_attachments(
+        &self,
+        message: &ChatMessage,
+        target: &ChatTarget,
+        attachments: &[ChatAttachment],
+    ) -> Result<(), ChatError> {
+        if attachments.is_empty() {
+            return self.send_message(message, target).await;
+        }
+        let webhook = self.build_webhook(target)?;
+        let embed = Self::build_embed(message);
+        let files: Vec<(&[u8], &str)> = attachments
+            .iter()
+            .map(|a| (a.data.as_slice(), a.filename.as_str()))
+            .collect();
+        webhook
+            .execute_with_files(None, Some(embed), &files)
             .await
             .map_err(|e| ChatError::Discord {
                 message: e.to_string(),

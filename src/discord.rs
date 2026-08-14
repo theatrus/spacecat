@@ -271,12 +271,25 @@ impl DiscordWebhook {
         file_data: &[u8],
         filename: &str,
     ) -> Result<(), DiscordError> {
+        self.execute_with_files(content, embed, &[(file_data, filename)])
+            .await
+    }
+
+    pub async fn execute_with_files(
+        &self,
+        content: Option<&str>,
+        embed: Option<Embed>,
+        files: &[(&[u8], &str)],
+    ) -> Result<(), DiscordError> {
         let mut form = reqwest::multipart::Form::new();
 
-        // Add the file
-        let file_part =
-            reqwest::multipart::Part::bytes(file_data.to_vec()).file_name(filename.to_string());
-        form = form.part("file", file_part);
+        // Discord's webhook API expects multipart part names files[0],
+        // files[1], ... for attachments
+        for (i, (file_data, filename)) in files.iter().enumerate() {
+            let file_part =
+                reqwest::multipart::Part::bytes(file_data.to_vec()).file_name(filename.to_string());
+            form = form.part(format!("files[{}]", i), file_part);
+        }
 
         // Create the payload
         let message = WebhookMessage {

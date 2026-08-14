@@ -1,0 +1,40 @@
+{
+  "Response": {
+    "RMS": {
+      "RA": 0.34,
+      "Dec": 0.28,
+      "Total": 0.44,
+      "RAText": "RA: 0.34 (0.71\")",
+      "DecText": "Dec: 0.28 (0.59\")",
+      "TotalText": "Tot: 0.44 (0.92\")",
+      "PeakRAText": "RA Peak: 0.98 (2.06\")",
+      "PeakDecText": "Dec Peak: 0.75 (1.58\")",
+      "Scale": 2.1,
+      "PeakRA": 0.98,
+      "PeakDec": 0.75,
+      "DataPoints": 8
+    },
+    "Interval": 2,
+    "MaxY": 4,
+    "MinY": -4,
+    "MaxDurationY": 2500,
+    "MinDurationY": -2500,
+    "GuideSteps": [
+      { "Id": 101, "IdOffsetLeft": 0.3, "IdOffsetRight": 0.7, "RADistanceRaw": -0.12, "RADistanceRawDisplay": -0.25, "RADuration": -120, "DECDistanceRaw": 0.08, "DECDistanceRawDisplay": 0.17, "DECDuration": 90, "Dither": "NO" },
+      { "Id": 102, "IdOffsetLeft": 0.3, "IdOffsetRight": 0.7, "RADistanceRaw": 0.21, "RADistanceRawDisplay": 0.44, "RADuration": 200, "DECDistanceRaw": -0.05, "DECDistanceRawDisplay": -0.11, "DECDuration": 0, "Dither": "NO" },
+      { "Id": 103, "IdOffsetLeft": 0.3, "IdOffsetRight": 0.7, "RADistanceRaw": 0.55, "RADistanceRawDisplay": 1.16, "RADuration": 450, "DECDistanceRaw": 0.31, "DECDistanceRawDisplay": 0.65, "DECDuration": 310, "Dither": "1" },
+      { "Id": 104, "IdOffsetLeft": 0.3, "IdOffsetRight": 0.7, "RADistanceRaw": -0.42, "RADistanceRawDisplay": -0.88, "RADuration": -380, "DECDistanceRaw": -0.22, "DECDistanceRawDisplay": -0.46, "DECDuration": -200, "Dither": "NO" },
+      { "Id": 105, "IdOffsetLeft": 0.3, "IdOffsetRight": 0.7, "RADistanceRaw": 0.05, "RADistanceRawDisplay": 0.1, "RADuration": 0, "DECDistanceRaw": 0.02, "DECDistanceRawDisplay": 0.04, "DECDuration": 0, "Dither": "NO" },
+      { "Id": 106, "IdOffsetLeft": 0.3, "IdOffsetRight": 0.7, "RADistanceRaw": "NaN", "RADistanceRawDisplay": "NaN", "RADuration": 0, "DECDistanceRaw": "NaN", "DECDistanceRawDisplay": "NaN", "DECDuration": 0, "Dither": "NO" },
+      { "Id": 107, "IdOffsetLeft": 0.3, "IdOffsetRight": 0.7, "RADistanceRaw": -0.18, "RADistanceRawDisplay": -0.38, "RADuration": -150, "DECDistanceRaw": 0.12, "DECDistanceRawDisplay": 0.25, "DECDuration": 110, "Dither": "NO" },
+      { "Id": 108, "IdOffsetLeft": 0.3, "IdOffsetRight": 0.7, "RADistanceRaw": 0.09, "RADistanceRawDisplay": 0.19, "RADuration": 80, "DECDistanceRaw": -0.07, "DECDistanceRawDisplay": -0.15, "DECDuration": -60, "Dither": "NO" }
+    ],
+    "HistorySize": 100,
+    "PixelScale": 2.1,
+    "Scale": 1
+  },
+  "Error": "",
+  "StatusCode": 200,
+  "Success": true,
+  "Type": "API"
+}
