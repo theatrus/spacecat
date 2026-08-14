@@ -10,6 +10,11 @@ on:
 permissions:
   contents: write
 
+env:
+  # Embedded in the binary by build.rs; the RPM builds from a source
+  # tarball with no .git directory, so git can't provide it there.
+  SPACECAT_GIT_SHA: ${{ github.sha }}
+
 jobs:
   build:
     name: Build RPM on Fedora ${{ matrix.fedora }}

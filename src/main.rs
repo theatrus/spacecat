@@ -22,7 +22,11 @@ use std::time::Duration;
 
 #[derive(Parser)]
 #[command(name = "spacecat")]
-#[command(about = "SpaceCat - Astronomical Observation System", long_about = None)]
+#[command(
+    about = "SpaceCat — like cat, but for space: pipes your telescope to chat",
+    long_about = None
+)]
+#[command(version = spacecat::version::VERSION_STRING)]
 struct Cli {
     /// Path to configuration file
     #[arg(long, default_value = "config.json", global = true)]
@@ -120,6 +124,7 @@ enum WindowsServiceAction {
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
+    println!("SpaceCat {}", spacecat::version::VERSION_STRING);
 
     let config_path = &cli.config;
     let telescope = cli.telescope.as_deref();

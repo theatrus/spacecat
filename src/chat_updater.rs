@@ -1059,7 +1059,10 @@ impl ChatUpdater {
         // Add mount info
         self.add_mount_info(&mut message).await;
 
-        message = message.footer("Ready to monitor telescope events and images");
+        message = message.footer(&format!(
+            "SpaceCat {} — ready to monitor telescope events and images",
+            crate::version::VERSION_STRING
+        ));
 
         self.chat_manager
             .send_message(&message, &self.chat_target)
