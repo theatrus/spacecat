@@ -118,6 +118,25 @@ impl AutofocusResponse {
 }
 
 impl AutofocusData {
+    /// HFR before the run: the initial focus point when NINA measured it,
+    /// otherwise the measured point taken at the initial position (NINA
+    /// reports the initial value as "NaN" when it skipped that exposure).
+    pub fn initial_hfr(&self) -> Option<f64> {
+        if self.initial_focus_point.value.is_finite() {
+            return Some(self.initial_focus_point.value);
+        }
+        self.measure_points
+            .iter()
+            .find(|p| p.position == self.initial_focus_point.position)
+            .map(|p| p.value)
+            .filter(|v| v.is_finite())
+    }
+
+    /// HFR after the run: the fitted value at the calculated focus point.
+    pub fn final_hfr(&self) -> Option<f64> {
+        Some(self.calculated_focus_point.value).filter(|v| v.is_finite())
+    }
+
     /// Get focus positions in ascending order
     pub fn get_focus_positions(&self) -> Vec<i32> {
         let mut positions: Vec<i32> = self.measure_points.iter().map(|p| p.position).collect();

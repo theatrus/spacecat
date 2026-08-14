@@ -22,6 +22,12 @@ url = "2.5"
 async-trait = "0.1"
 mime = "0.3"
 thiserror = "2.0"
+# Guiding graph rendering. Minimal feature set: PNG bitmap output with the
+# pure-Rust ab_glyph text path so no system font libraries are needed on
+# Windows/ARM release builds (the font itself is embedded from assets/).
+plotters = { version = "0.3", default-features = false, features = ["bitmap_backend", "line_series", "ab_glyph"] }
+# In-memory PNG encoding for the rendered chart (plotters only writes files)
+png = "0.18"
 # Discord bot stack. Note: serenity 0.12 pins tokio-tungstenite 0.21
 # → rustls 0.22 → an old rustls-webpki line. The associated RUSTSEC
 # advisories (-0049/-0098/-0099/-0104) are ignored in `.cargo/audit.toml`

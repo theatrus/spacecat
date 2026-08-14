@@ -189,6 +189,13 @@ impl TelescopeChatOverrides {
     }
 }
 
+/// A file to attach to a chat message
+#[derive(Debug, Clone)]
+pub struct ChatAttachment {
+    pub data: Vec<u8>,
+    pub filename: String,
+}
+
 /// Trait for chat service implementations
 #[async_trait]
 pub trait ChatService: Send + Sync {
@@ -205,6 +212,24 @@ pub trait ChatService: Send + Sync {
         image_data: &[u8],
         filename: &str,
     ) -> Result<(), ChatError>;
+
+    /// Send a message with any number of file attachments. The default
+    /// implementation degrades to the single-image send (first attachment
+    /// only) for services that don't override it.
+    async fn send_message_with_attachments(
+        &self,
+        message: &ChatMessage,
+        target: &ChatTarget,
+        attachments: &[ChatAttachment],
+    ) -> Result<(), ChatError> {
+        match attachments.first() {
+            Some(first) => {
+                self.send_message_with_image(message, target, &first.data, &first.filename)
+                    .await
+            }
+            None => self.send_message(message, target).await,
+        }
+    }
 
     fn service_name(&self) -> &'static str;
 
@@ -292,39 +317,62 @@ impl ChatServiceManager {
         }
     }
 
+    /// Send an image-history notification: the thumbnail for `image_index`
+    /// plus any extra attachments (e.g. the rendered guiding graph). If the
+    /// thumbnail download fails the extras still go out; with nothing to
+    /// attach this degrades to a plain message.
     pub async fn send_message_with_image(
         &self,
         message: &ChatMessage,
         target: &ChatTarget,
         client: &SpaceCatApiClient,
         image_index: u32,
+        extra_attachments: Vec<ChatAttachment>,
     ) {
+        let mut attachments = Vec::new();
         match client.get_thumbnail(image_index).await {
             Ok(thumbnail_data) => {
-                let filename = format!("thumbnail_{}.jpg", image_index);
-                for service in &self.services {
-                    if !service.can_route(target) {
-                        continue;
-                    }
-                    if let Err(e) = service
-                        .send_message_with_image(message, target, &thumbnail_data.data, &filename)
-                        .await
-                    {
-                        eprintln!(
-                            "Failed to send image message to {}: {}",
-                            service.service_name(),
-                            e
-                        );
-                    }
-                }
+                attachments.push(ChatAttachment {
+                    data: thumbnail_data.data,
+                    filename: format!("thumbnail_{}.jpg", image_index),
+                });
             }
             Err(e) => {
                 eprintln!(
                     "Failed to download thumbnail for image {}: {}",
                     image_index, e
                 );
-                // Fallback to sending without image
-                self.send_message(message, target).await;
+            }
+        }
+        attachments.extend(extra_attachments);
+        self.send_message_with_attachments(message, target, &attachments)
+            .await;
+    }
+
+    /// Send a message with pre-built attachments to every routable service.
+    pub async fn send_message_with_attachments(
+        &self,
+        message: &ChatMessage,
+        target: &ChatTarget,
+        attachments: &[ChatAttachment],
+    ) {
+        if attachments.is_empty() {
+            self.send_message(message, target).await;
+            return;
+        }
+        for service in &self.services {
+            if !service.can_route(target) {
+                continue;
+            }
+            if let Err(e) = service
+                .send_message_with_attachments(message, target, attachments)
+                .await
+            {
+                eprintln!(
+                    "Failed to send message with attachments to {}: {}",
+                    service.service_name(),
+                    e
+                );
             }
         }
     }

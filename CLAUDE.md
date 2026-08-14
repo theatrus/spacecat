@@ -28,6 +28,7 @@ and sequence automation.
 - **`src/mount.rs`**: Mount information structures, status parsing, and position tracking
 - **`src/sequence.rs`**: Sequence management, container parsing, and target extraction utilities
 - **`src/autofocus.rs`**: Autofocus data structures, parsing, and analysis methods
+- **`src/charts.rs`**: PNG chart rendering (guiding graph, autofocus curve) with an embedded font for chat attachments
 - **`src/poller.rs`**: Real-time event polling with deduplication
 - **`src/chat_updater.rs`**: Combined event and image polling with multi-chat service integration and autofocus detection
 - **`src/chat/mod.rs`**: Chat service abstraction layer supporting multiple chat platforms
@@ -44,6 +45,7 @@ The system connects to NINA Advanced API at `http://192.168.0.82:1888` with endp
 - `/v2/api/image-history?all=true` - Image metadata and session statistics
 - `/v2/api/sequence/json` - Current sequence status and target information
 - `/v2/api/equipment/focuser/last-af` - Last autofocus session data
+- `/v2/api/equipment/guider/graph` - Guide steps history for the guiding graph
 - `/v2/api/equipment/mount` - Mount status, position, and capabilities
 - `/v2/api/image/{index}` - Individual image data with base64 encoding
 - `/v2/api/image/thumbnail/{index}` - Thumbnail images for previews
@@ -187,7 +189,8 @@ The system provides comprehensive CLI commands for all functionality. All comman
 - `cargo run -- get-thumbnail <index>` - Download image thumbnails
 - `cargo run -- poll` - Real-time event polling with configurable intervals
 - `cargo run -- chat-updater` - Combined event/image monitoring with multi-chat service integration
-- `cargo run -- last-autofocus` - Display detailed autofocus analysis and quality metrics
+- `cargo run -- last-autofocus [--graph af.png]` - Display detailed autofocus analysis; optionally render the run as a PNG graph
+- `cargo run -- guider-graph [--output guide.png]` - Fetch the guide graph, print RMS summary, and render it as a PNG
 - `cargo run -- mount-info` - Display comprehensive mount status, position, and capabilities
 
 All commands support the global `--config` flag to specify a custom configuration file:

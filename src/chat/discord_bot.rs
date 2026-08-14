@@ -12,7 +12,7 @@
 //!   /events, /last-image.
 
 use super::status_state::{StatusMessage, StatusState};
-use super::{ChatMessage, ChatService, ChatTarget, DiscordBotConfig};
+use super::{ChatAttachment, ChatMessage, ChatService, ChatTarget, DiscordBotConfig};
 use crate::api::SpaceCatApiClient;
 use crate::error::ChatError;
 use async_trait::async_trait;
@@ -181,6 +181,37 @@ impl ChatService for DiscordBotService {
         let payload = CreateMessage::new()
             .embed(Self::build_embed(message))
             .add_file(attachment);
+        channel
+            .send_message(&self.http, payload)
+            .await
+            .map_err(|e| ChatError::Discord {
+                message: e.to_string(),
+            })?;
+        Ok(())
+    }
+
+    async fn send_message_with_attachments(
+        &self,
+        message: &ChatMessage,
+        target: &ChatTarget,
+        attachments: &[ChatAttachment],
+    ) -> Result<(), ChatError> {
+        if attachments.is_empty() {
+            return self.send_message(message, target).await;
+        }
+        let channel = self
+            .resolve_channel(target)
+            .ok_or_else(|| ChatError::Discord {
+                message: "No Discord channel available (no default and no telescope override)"
+                    .to_string(),
+            })?;
+        let mut payload = CreateMessage::new().embed(Self::build_embed(message));
+        for attachment in attachments {
+            payload = payload.add_file(CreateAttachment::bytes(
+                attachment.data.clone(),
+                attachment.filename.clone(),
+            ));
+        }
         channel
             .send_message(&self.http, payload)
             .await

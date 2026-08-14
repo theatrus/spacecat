@@ -3,7 +3,7 @@ use crate::config::ApiConfig;
 use crate::events::EventHistoryResponse;
 use crate::filterwheel::FilterWheelInfoResponse;
 use crate::focuser::FocuserInfoResponse;
-use crate::guider::GuiderInfoResponse;
+use crate::guider::{GuiderGraphResponse, GuiderInfoResponse};
 use crate::images::{ImageHistoryResponse, ImageResponse, ThumbnailResponse};
 use crate::mount::MountInfoResponse;
 use crate::rotator::RotatorInfoResponse;
@@ -329,6 +329,13 @@ impl SpaceCatApiClient {
     /// Fetch current guider state from the /equipment/guider/info endpoint
     pub async fn get_guider_info(&self) -> Result<GuiderInfoResponse, ApiError> {
         self.generic_request_with_retry("/equipment/guider/info", &[])
+            .await
+    }
+
+    /// Fetch the guide graph data (last n guide steps plus RMS statistics)
+    /// from the /equipment/guider/graph endpoint
+    pub async fn get_guider_graph(&self) -> Result<GuiderGraphResponse, ApiError> {
+        self.generic_request_with_retry("/equipment/guider/graph", &[])
             .await
     }
 

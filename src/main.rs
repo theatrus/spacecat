@@ -89,7 +89,17 @@ enum Commands {
         interval: u64,
     },
     /// Get the last autofocus data from API
-    LastAutofocus,
+    LastAutofocus {
+        /// Render the autofocus run as a PNG graph to this file
+        #[arg(short, long)]
+        graph: Option<String>,
+    },
+    /// Get the guide graph data from API
+    GuiderGraph {
+        /// Render the guide graph as a PNG to this file
+        #[arg(short, long, default_value = "guider_graph.png")]
+        output: String,
+    },
     /// Get mount information from API
     MountInfo,
     /// Windows service management commands
@@ -187,9 +197,15 @@ async fn main() {
                 std::process::exit(1);
             }
         }
-        Commands::LastAutofocus => {
-            if let Err(e) = cmd_last_autofocus(config_path, telescope).await {
+        Commands::LastAutofocus { graph } => {
+            if let Err(e) = cmd_last_autofocus(graph.as_deref(), config_path, telescope).await {
                 eprintln!("LastAutofocus command failed: {e}");
+                std::process::exit(1);
+            }
+        }
+        Commands::GuiderGraph { output } => {
+            if let Err(e) = cmd_guider_graph(&output, config_path, telescope).await {
+                eprintln!("GuiderGraph command failed: {e}");
                 std::process::exit(1);
             }
         }
@@ -561,6 +577,7 @@ async fn cmd_chat_updater(interval: u64, config_path: &str) -> Result<(), SpaceC
 }
 
 async fn cmd_last_autofocus(
+    graph: Option<&str>,
     config_path: &str,
     telescope: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -572,6 +589,41 @@ async fn cmd_last_autofocus(
         .map_err(|e| format!("Failed to load autofocus data from API: {e}"))?;
     println!("Successfully loaded autofocus data from API");
     display_autofocus_data(&autofocus);
+    if let Some(path) = graph {
+        let png = spacecat::charts::render_autofocus_graph_png(&autofocus.response)
+            .map_err(|e| format!("Failed to render autofocus graph: {e}"))?;
+        std::fs::write(path, &png)?;
+        println!("Autofocus graph written to {path}");
+    }
+    Ok(())
+}
+
+async fn cmd_guider_graph(
+    output: &str,
+    config_path: &str,
+    telescope: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    println!("Loading guide graph data from API...");
+    let client = checked_client(config_path, telescope).await?;
+    let graph = client
+        .get_guider_graph()
+        .await
+        .map_err(|e| format!("Failed to load guide graph from API: {e}"))?;
+    let history = &graph.response;
+    println!(
+        "Guide steps: {} (history size {}, interval {}s, scale: {})",
+        history.guide_steps.len(),
+        history.history_size,
+        history.interval,
+        history.scale_unit()
+    );
+    if let Some(rms) = history.rms_summary() {
+        println!("RMS: {rms}");
+    }
+    let png = spacecat::charts::render_guider_graph_png(history)
+        .map_err(|e| format!("Failed to render guide graph: {e}"))?;
+    std::fs::write(output, &png)?;
+    println!("Guide graph written to {output}");
     Ok(())
 }
 
