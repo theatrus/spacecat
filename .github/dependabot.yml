@@ -9,9 +9,9 @@ updates:
       time: "09:00"
     open-pull-requests-limit: 10
     reviewers:
-      - "@me"
+      - "theatrus"
     assignees:
-      - "@me"
+      - "theatrus"
     commit-message:
       prefix: "deps"
       prefix-development: "deps-dev"
@@ -26,9 +26,9 @@ updates:
       time: "09:00"
     open-pull-requests-limit: 5
     reviewers:
-      - "@me"
+      - "theatrus"
     assignees:
-      - "@me"
+      - "theatrus"
     commit-message:
       prefix: "ci"
       include: "scope"
