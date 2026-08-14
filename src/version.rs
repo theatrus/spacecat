@@ -1,5 +1,9 @@
 //! Build identity: crate version plus the git SHA embedded by `build.rs`.
 
+/// Display wordmark: the pipe pun. The binary, crate, and config keep
+/// the plain `spacecat` name.
+pub const WORDMARK: &str = "space | cat";
+
 /// Crate version from Cargo.toml.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 

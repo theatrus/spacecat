@@ -993,8 +993,9 @@ impl ChatUpdater {
 
     // Chat notification methods
     async fn send_welcome_message(&self) {
-        let mut message = ChatMessage::new(&self.titled("🚀 SpaceCat Observatory Monitor Started"))
-            .color(colors::GREEN);
+        let mut message =
+            ChatMessage::new(&self.titled("🚀 space | cat — observatory monitor started"))
+                .color(colors::GREEN);
 
         // Inferred NINA state from event history
         let summary = self.format_startup_status();
@@ -1060,7 +1061,8 @@ impl ChatUpdater {
         self.add_mount_info(&mut message).await;
 
         message = message.footer(&format!(
-            "SpaceCat {} — ready to monitor telescope events and images",
+            "{} {} — ready to monitor telescope events and images",
+            crate::version::WORDMARK,
             crate::version::VERSION_STRING
         ));
 
