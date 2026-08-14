@@ -9,6 +9,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # Embedded in the binary by build.rs
+  SPACECAT_GIT_SHA: ${{ github.sha }}
 
 jobs:
   create-release:

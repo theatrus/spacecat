@@ -1,4 +1,6 @@
-# SpaceCat 🔭
+# space | cat 🔭
+
+*pipes your telescope to chat*
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Rust](https://img.shields.io/badge/rust-1.97+-orange.svg)](https://www.rust-lang.org)
