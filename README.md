@@ -23,6 +23,11 @@ really.
 
 ### Installation
 
+> **N.I.N.A. plugin work is in progress.** SpaceCat will continue to support
+> the existing Advanced API source alongside a native Direct source. The two
+> source modes can each use either local or hosted chat delivery; see the
+> [N.I.N.A. integration architecture](docs/NINA_PLUGIN_ARCHITECTURE.md).
+
 #### Option 1: RPM Package (Recommended for Fedora/RHEL/CentOS)
 
 ```bash

@@ -13,8 +13,8 @@
 
 use super::status_state::{StatusMessage, StatusState};
 use super::{ChatAttachment, ChatMessage, ChatService, ChatTarget, DiscordBotConfig};
-use crate::api::SpaceCatApiClient;
 use crate::error::ChatError;
+use crate::source::SharedRigSource;
 use async_trait::async_trait;
 use poise::serenity_prelude::{self as serenity, CreateAttachment, CreateMessage};
 use std::collections::HashMap;
@@ -25,8 +25,8 @@ use tokio::sync::Mutex;
 /// Per-bot state carried by the Poise framework. Each slash command has
 /// `ctx.data()` access to this.
 pub struct BotData {
-    /// One API client per telescope, keyed by telescope name.
-    pub api_clients: HashMap<String, SpaceCatApiClient>,
+    /// One source-neutral rig connection per telescope, keyed by name.
+    pub rig_sources: HashMap<String, SharedRigSource>,
     /// Discord channel ID -> telescope name. Slash commands invoked in a
     /// mapped channel default to that telescope.
     pub channel_to_telescope: HashMap<u64, String>,
@@ -36,7 +36,7 @@ pub struct BotData {
 
 impl BotData {
     fn known_names(&self) -> Vec<&str> {
-        let mut v: Vec<&str> = self.api_clients.keys().map(|s| s.as_str()).collect();
+        let mut v: Vec<&str> = self.rig_sources.keys().map(|s| s.as_str()).collect();
         v.sort();
         v
     }
@@ -44,14 +44,14 @@ impl BotData {
     /// Resolve a telescope from an explicit override or the channel a
     /// command was invoked in. Returns a user-facing error string if the
     /// channel isn't mapped and no override was provided.
-    fn resolve_client(
+    fn resolve_source(
         &self,
         override_name: Option<&str>,
         channel_id: u64,
-    ) -> Result<(String, SpaceCatApiClient), String> {
+    ) -> Result<(String, SharedRigSource), String> {
         if let Some(name) = override_name {
             return self
-                .api_clients
+                .rig_sources
                 .get(name)
                 .cloned()
                 .map(|c| (name.to_string(), c))
@@ -64,10 +64,10 @@ impl BotData {
         }
         if let Some(name) = self.channel_to_telescope.get(&channel_id) {
             let client = self
-                .api_clients
+                .rig_sources
                 .get(name)
                 .cloned()
-                .expect("channel_to_telescope -> api_clients invariant");
+                .expect("channel_to_telescope -> rig_sources invariant");
             return Ok((name.clone(), client));
         }
         Err(format!(
@@ -322,7 +322,7 @@ impl ChatService for DiscordBotService {
 /// alive for the life of the process.
 pub async fn run_bot(
     bot_config: &DiscordBotConfig,
-    api_clients: HashMap<String, SpaceCatApiClient>,
+    rig_sources: HashMap<String, SharedRigSource>,
     channel_to_telescope: HashMap<u64, String>,
 ) -> Result<(DiscordBotService, tokio::task::JoinHandle<()>), ChatError> {
     let write_acl: std::collections::HashSet<u64> = bot_config.write_acl.iter().copied().collect();
@@ -355,7 +355,7 @@ pub async fn run_bot(
                     .await
                     .map_err(|e| -> BotError { Box::new(e) })?;
                 Ok(BotData {
-                    api_clients,
+                    rig_sources,
                     channel_to_telescope,
                     write_acl,
                 })
@@ -437,10 +437,10 @@ fn phase1_commands() -> Vec<poise::Command<BotData, BotError>> {
 async fn resolve_or_reply<'a>(
     ctx: Context<'a>,
     telescope: Option<String>,
-) -> Result<(String, SpaceCatApiClient), BotError> {
+) -> Result<(String, SharedRigSource), BotError> {
     match ctx
         .data()
-        .resolve_client(telescope.as_deref(), ctx.channel_id().get())
+        .resolve_source(telescope.as_deref(), ctx.channel_id().get())
     {
         Ok(v) => Ok(v),
         Err(msg) => {
@@ -905,7 +905,7 @@ async fn confirm_destructive(ctx: Context<'_>, action: &str) -> Result<bool, Bot
 async fn run_command(
     ctx: Context<'_>,
     telescope: &str,
-    client: &SpaceCatApiClient,
+    client: &SharedRigSource,
     label: &str,
     endpoint: &str,
     params: &[(&str, &str)],

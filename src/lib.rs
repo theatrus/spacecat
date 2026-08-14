@@ -19,6 +19,7 @@ pub mod rotator;
 pub mod sequence;
 pub mod serde_helpers;
 pub mod service_wrapper;
+pub mod source;
 pub mod version;
 #[cfg(windows)]
 pub mod windows_service;

@@ -12,6 +12,10 @@ pub enum SpaceCatError {
     #[error("API error: {0}")]
     Api(#[from] crate::api::ApiError),
 
+    /// Observatory data-source errors
+    #[error("Rig source error: {0}")]
+    Source(#[from] crate::source::RigSourceError),
+
     /// Configuration errors
     #[error("Configuration error: {0}")]
     Config(#[from] crate::config::ConfigError),

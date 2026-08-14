@@ -1,10 +1,10 @@
 //! Service wrapper abstraction for running SpaceCat as CLI or background service
 
-use crate::api::SpaceCatApiClient;
 use crate::chat::{ChatServiceManager, DiscordChatService, MatrixChatService, run_bot};
 use crate::chat_updater::ChatUpdater;
 use crate::config::{Config, TelescopeConfig};
 use crate::error::{ChatError, ServiceError, ServiceResult, SpaceCatError};
+use crate::source::{AdvancedApiSource, SharedRigSource};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::mpsc;
@@ -122,16 +122,18 @@ pub async fn build_shared_chat_manager(
             bot_config.state_file
         );
 
-        // Build the per-telescope API client map and the channel routing
-        // table the bot needs for slash commands. Warn (don't error) if a
+        // Build the per-telescope source map and the channel routing table the
+        // bot needs for slash commands. Advanced API remains the configured
+        // source until direct-mode configuration is introduced. Warn (don't error) if a
         // telescope has both a channel_id and a webhook_url — the channel
         // takes precedence and the webhook is ignored.
-        let mut api_clients = HashMap::new();
+        let mut rig_sources: HashMap<String, SharedRigSource> = HashMap::new();
         let mut channel_to_telescope = HashMap::new();
         for telescope in &config.telescopes {
-            let client =
-                SpaceCatApiClient::new(telescope.api.clone()).map_err(SpaceCatError::Api)?;
-            api_clients.insert(telescope.name.clone(), client);
+            let source: SharedRigSource = Arc::new(
+                AdvancedApiSource::new(telescope.api.clone()).map_err(SpaceCatError::Api)?,
+            );
+            rig_sources.insert(telescope.name.clone(), source);
             if let Some(channel_id) = telescope.chat.discord_channel_id {
                 channel_to_telescope.insert(channel_id, telescope.name.clone());
                 if telescope.chat.discord_webhook_url.is_some() {
@@ -144,7 +146,7 @@ pub async fn build_shared_chat_manager(
             }
         }
 
-        let (service, join) = run_bot(bot_config, api_clients, channel_to_telescope)
+        let (service, join) = run_bot(bot_config, rig_sources, channel_to_telescope)
             .await
             .map_err(SpaceCatError::Chat)?;
         manager.add_service(Box::new(service));
@@ -163,10 +165,11 @@ pub async fn build_chat_updater(
     telescope: TelescopeConfig,
     chat_manager: Arc<ChatServiceManager>,
 ) -> Result<ChatUpdater, SpaceCatError> {
-    let client = SpaceCatApiClient::new(telescope.api.clone()).map_err(SpaceCatError::Api)?;
+    let source: SharedRigSource =
+        Arc::new(AdvancedApiSource::new(telescope.api.clone()).map_err(SpaceCatError::Api)?);
     let target = telescope.chat.to_chat_target();
     Ok(
-        ChatUpdater::new(client, telescope.name.clone(), target, chat_manager)
+        ChatUpdater::new(source, telescope.name.clone(), target, chat_manager)
             .with_image_cooldown(telescope.image_cooldown_seconds)
             .with_reconnect_backoff(
                 telescope.reconnect.initial_seconds,

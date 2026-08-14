@@ -102,6 +102,21 @@ jobs:
           # Ensure Windows service code compiles without errors on Linux (should use stubs)
           cargo check --verbose
 
+  nina-plugin:
+    name: N.I.N.A. Plugin
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Build plugin
+        run: dotnet build nina-plugin/SpaceCat.NINA/SpaceCat.NINA.csproj --configuration Release
+
   security:
     name: Security Audit
     runs-on: ubuntu-latest

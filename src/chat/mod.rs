@@ -8,8 +8,8 @@ pub use discord_service::DiscordChatService;
 pub use matrix_service::MatrixChatService;
 pub use status_state::{StatusMessage, StatusState};
 
-use crate::api::SpaceCatApiClient;
 use crate::error::ChatError;
+use crate::source::SharedRigSource;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
@@ -325,12 +325,12 @@ impl ChatServiceManager {
         &self,
         message: &ChatMessage,
         target: &ChatTarget,
-        client: &SpaceCatApiClient,
+        source: &SharedRigSource,
         image_index: u32,
         extra_attachments: Vec<ChatAttachment>,
     ) {
         let mut attachments = Vec::new();
-        match client.get_thumbnail(image_index).await {
+        match source.get_thumbnail(image_index).await {
             Ok(thumbnail_data) => {
                 attachments.push(ChatAttachment {
                     data: thumbnail_data.data,
