@@ -1,7 +1,7 @@
 # SpaceCat 🔭
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Rust](https://img.shields.io/badge/rust-1.93+-orange.svg)](https://www.rust-lang.org)
+[![Rust](https://img.shields.io/badge/rust-1.97+-orange.svg)](https://www.rust-lang.org)
 [![Build Status](https://github.com/theatrus/spacecat/workflows/CI/badge.svg)](https://github.com/theatrus/spacecat/actions)
 
 **SpaceCat** is a Rust-based monitor that watches one or more [NINA](https://nighttime-imaging.eu) imaging
@@ -440,7 +440,7 @@ Write endpoints used by the `/spacecat ...` Discord slash commands:
 
 ### Prerequisites
 
-- **Rust 1.93+**: Install from [rustup.rs](https://rustup.rs/)
+- **Rust 1.97+**: Install from [rustup.rs](https://rustup.rs/)
 - **Git**: For version control
 - **OpenSSL development headers**: For HTTPS support
 
