@@ -6,6 +6,7 @@ pub mod charts;
 pub mod chat;
 pub mod chat_updater;
 pub mod config;
+pub mod direct;
 pub mod discord;
 pub mod error;
 pub mod events;

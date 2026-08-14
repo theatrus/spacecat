@@ -22,6 +22,7 @@ url = "2.5"
 async-trait = "0.1"
 mime = "0.3"
 thiserror = "2.0"
+uuid = { version = "1", features = ["serde", "v4"] }
 # Guiding graph rendering. Minimal feature set: PNG bitmap output with the
 # pure-Rust ab_glyph text path so no system font libraries are needed on
 # Windows/ARM release builds (the font itself is embedded from assets/).

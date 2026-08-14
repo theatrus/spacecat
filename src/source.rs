@@ -50,6 +50,19 @@ pub struct RigCapabilities {
 }
 
 impl RigCapabilities {
+    pub const fn none() -> Self {
+        Self {
+            event_history: false,
+            image_history: false,
+            thumbnails: false,
+            sequence: false,
+            equipment_snapshots: false,
+            autofocus_details: false,
+            guider_graph: false,
+            commands: false,
+        }
+    }
+
     pub const fn advanced_api() -> Self {
         Self {
             event_history: true,
