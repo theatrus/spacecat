@@ -97,6 +97,11 @@ pub const INDEX_HTML: &str = r#"<!doctype html>
   }
   .hint { color: var(--muted); font-size: .8rem; }
   .error { color: var(--bad); margin: .5rem 0; }
+  .banner {
+    border: 1px solid var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent);
+    border-radius: var(--radius); padding: .7rem 1rem; margin-bottom: 1rem;
+    font-size: .88rem;
+  }
   #toast {
     position: fixed; bottom: 1.1rem; left: 50%; transform: translateX(-50%);
     background: var(--panel2); border: 1px solid var(--border);
@@ -174,6 +179,15 @@ async function renderGuilds() {
     return;
   }
   app.innerHTML = "";
+  if (data.bot_configured === false) {
+    const banner = document.createElement("div");
+    banner.className = "banner";
+    banner.innerHTML = "<b>This hub is running without a Discord bot token.</b> " +
+      "Channel and role pickers, install checks, notifications, and slash commands " +
+      "are all disabled until the hub operator sets <code>discord.bot_token</code> " +
+      "and restarts the hub.";
+    app.appendChild(banner);
+  }
   for (const g of data.guilds) {
     const card = document.createElement("div");
     card.className = "card";
@@ -218,6 +232,13 @@ function channelSelect(options, current) {
   // Discord-sourced picker. A routed channel that no longer appears in the
   // listing (deleted, or the bot lost visibility) stays selectable so the
   // form round-trips faithfully.
+  if (!options.channels.length) {
+    const why = options.bot_configured === false
+      ? "hub has no bot token"
+      : "none visible to the bot — check its channel permissions";
+    return '<select class="f-channel" disabled><option value="">no channels (' +
+      why + ")</option></select>";
+  }
   let html = '<select class="f-channel"><option value="">— no channel (not posting) —</option>';
   let seen = false;
   for (const c of options.channels) {
@@ -309,14 +330,18 @@ async function renderTelescopes(guildId, el) {
       box.onchange = () => box.closest(".chip").classList.toggle("on", box.checked);
     });
     row.querySelector(".b-save").onclick = async () => {
-      const channel = row.querySelector(".f-channel").value;
+      const channelBox = row.querySelector(".f-channel");
       const roles = [...row.querySelectorAll(".chip input:checked")].map((box) => box.value);
       const body = {
-        discord_channel_id: channel === "" ? null : channel,
         image_cooldown_seconds: parseInt(row.querySelector(".f-cooldown").value, 10) || 0,
         write_policy: row.querySelector(".f-policy").value,
         allowed_role_ids: roles,
       };
+      // A disabled picker means the hub couldn't list channels; keep the
+      // existing routing rather than silently clearing it.
+      if (!channelBox.disabled) {
+        body.discord_channel_id = channelBox.value === "" ? null : channelBox.value;
+      }
       try {
         await api("/api/telescopes/" + id, { method: "PATCH", body: JSON.stringify(body) });
         toast("Saved");
@@ -392,6 +417,15 @@ mod tests {
         assert!(INDEX_HTML.contains("chips"));
         assert!(!INDEX_HTML.contains("placeholder=\"channel id\""));
         assert!(!INDEX_HTML.contains("placeholder=\"role ids\""));
+    }
+
+    #[test]
+    fn page_surfaces_missing_bot_token() {
+        // A hub without a bot token must say so, not just look broken.
+        assert!(INDEX_HTML.contains("bot_configured"));
+        assert!(INDEX_HTML.contains("without a Discord bot token"));
+        // And a disabled picker must not clear existing routing on save.
+        assert!(INDEX_HTML.contains("channelBox.disabled"));
     }
 
     #[test]
