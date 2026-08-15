@@ -405,7 +405,7 @@ async fn cmd_direct_hub_probe(
         avatar_url: None,
     })?;
     db.register_guild(100, "Probe observatory", 1)?;
-    let telescope = db.create_telescope(100, "N.I.N.A. hosted probe", 1)?;
+    let telescope = db.create_telescope(1, "N.I.N.A. hosted probe")?;
     let pairing_token = db.issue_pairing_token(telescope.id, 1)?;
     let state = HubState::build(HubConfig::default(), db, None)?;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
