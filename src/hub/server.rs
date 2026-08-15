@@ -42,6 +42,40 @@ pub struct HubState {
     pub guild_checker: Option<Arc<dyn GuildChecker>>,
     /// Live rig connections from `/v1/direct`.
     pub rig_connections: Arc<super::direct_server::RigConnections>,
+    /// Per-IP rate limits for abuse-prone endpoints.
+    pub limits: Arc<HubLimits>,
+}
+
+/// Rate limits for the endpoints an unauthenticated client can hammer.
+pub struct HubLimits {
+    /// OAuth state minting (`/login`): each row is a DB insert.
+    pub login: super::rate_limit::RateLimiter,
+    /// Failed `/v1/direct` authentication attempts: token guessing.
+    pub direct_auth: super::rate_limit::RateLimiter,
+}
+
+impl Default for HubLimits {
+    fn default() -> Self {
+        Self {
+            login: super::rate_limit::RateLimiter::new(30, std::time::Duration::from_secs(60)),
+            direct_auth: super::rate_limit::RateLimiter::new(
+                10,
+                std::time::Duration::from_secs(60),
+            ),
+        }
+    }
+}
+
+/// Client IP for rate limiting: the first X-Forwarded-For hop when present
+/// (the hub is designed to sit behind a TLS-terminating reverse proxy),
+/// otherwise the socket peer.
+pub fn client_ip(headers: &HeaderMap, peer: std::net::SocketAddr) -> String {
+    headers
+        .get("x-forwarded-for")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(',').next())
+        .map(|ip| ip.trim().to_string())
+        .unwrap_or_else(|| peer.ip().to_string())
 }
 
 pub fn router(state: HubState) -> Router {
@@ -70,6 +104,11 @@ pub fn router(state: HubState) -> Router {
             "/api/telescopes/{telescope_id}/pairing-tokens",
             delete(api_revoke_pairing_tokens),
         )
+        .route(
+            "/api/telescopes/{telescope_id}/credentials",
+            delete(api_revoke_credentials),
+        )
+        .route("/api/guilds/{guild_id}/audit", get(api_guild_audit))
         .route(
             crate::direct::protocol::DIRECT_WEBSOCKET_PATH,
             get(super::direct_server::direct_ws),
@@ -111,10 +150,22 @@ struct LoginQuery {
 
 /// Start the Discord OAuth dance: mint a single-use state row carrying the
 /// PKCE verifier and redirect to Discord.
-async fn login(State(state): State<HubState>, Query(query): Query<LoginQuery>) -> Response {
+async fn login(
+    State(state): State<HubState>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    Query(query): Query<LoginQuery>,
+) -> Response {
     let Some(oauth) = &state.oauth else {
         return service_unavailable("Discord login is not configured on this hub");
     };
+    if !state.limits.login.check(&client_ip(&headers, peer)) {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            "too many login attempts; try again in a minute",
+        )
+            .into_response();
+    }
     // Opportunistic GC keeps the auth tables from growing without a cron.
     let _ = state.db.cleanup_auth_rows();
 
@@ -317,13 +368,19 @@ async fn authorize_manage(
         );
     }
 
+    // The snapshot's permission bits go stale until the next login, so a
+    // live check confirms the user still holds management rights right now.
     if let Some(checker) = &state.guild_checker
         && !checker
-            .user_in_guild(guild_id as u64, session.discord_user_id as u64)
+            .user_can_manage(guild_id as u64, session.discord_user_id as u64)
             .await
     {
         return ManageAuth::Denied(
-            (StatusCode::FORBIDDEN, "no longer a member of this guild").into_response(),
+            (
+                StatusCode::FORBIDDEN,
+                "you no longer hold Manage Server in this guild",
+            )
+                .into_response(),
         );
     }
 
@@ -431,6 +488,9 @@ async fn api_register_guild(
     {
         return internal_error(e);
     }
+    state
+        .db
+        .audit(session.discord_user_id, guild_id, "guild_registered", &name);
     Json(serde_json::json!({ "registered": true })).into_response()
 }
 
@@ -496,7 +556,12 @@ async fn api_create_telescope(
         .db
         .create_telescope(guild_id, name, session.discord_user_id)
     {
-        Ok(telescope) => Json(telescope_json(&telescope)).into_response(),
+        Ok(telescope) => {
+            state
+                .db
+                .audit(session.discord_user_id, guild_id, "telescope_created", name);
+            Json(telescope_json(&telescope)).into_response()
+        }
         Err(_) => bad_request("a telescope with this name already exists in this guild"),
     }
 }
@@ -592,6 +657,14 @@ async fn api_update_telescope(
     if let Err(e) = state.db.update_telescope(telescope.id, &update) {
         return internal_error(e);
     }
+    if let Some(session) = session_from_headers(&state, &headers) {
+        state.db.audit(
+            session.discord_user_id,
+            telescope.guild_id,
+            "telescope_updated",
+            &telescope.name,
+        );
+    }
     match state.db.get_telescope(telescope.id) {
         Ok(Some(updated)) => Json(telescope_json(&updated)).into_response(),
         Ok(None) => (StatusCode::NOT_FOUND, "no such telescope").into_response(),
@@ -609,7 +682,17 @@ async fn api_delete_telescope(
         Err(response) => return response,
     };
     match state.db.delete_telescope(telescope.id) {
-        Ok(()) => Json(serde_json::json!({ "deleted": true })).into_response(),
+        Ok(()) => {
+            if let Some(session) = session_from_headers(&state, &headers) {
+                state.db.audit(
+                    session.discord_user_id,
+                    telescope.guild_id,
+                    "telescope_deleted",
+                    &telescope.name,
+                );
+            }
+            Json(serde_json::json!({ "deleted": true })).into_response()
+        }
         Err(e) => internal_error(e),
     }
 }
@@ -636,11 +719,19 @@ async fn api_issue_pairing_token(
         .db
         .issue_pairing_token(telescope.id, session.discord_user_id)
     {
-        Ok(token) => Json(serde_json::json!({
-            "token": token,
-            "expires_in_seconds": super::tenants::PAIRING_TOKEN_TTL_SECONDS,
-        }))
-        .into_response(),
+        Ok(token) => {
+            state.db.audit(
+                session.discord_user_id,
+                telescope.guild_id,
+                "pairing_token_issued",
+                &telescope.name,
+            );
+            Json(serde_json::json!({
+                "token": token,
+                "expires_in_seconds": super::tenants::PAIRING_TOKEN_TTL_SECONDS,
+            }))
+            .into_response()
+        }
         Err(e) => internal_error(e),
     }
 }
@@ -655,7 +746,78 @@ async fn api_revoke_pairing_tokens(
         Err(response) => return response,
     };
     match state.db.revoke_pairing_tokens(telescope.id) {
-        Ok(revoked) => Json(serde_json::json!({ "revoked": revoked })).into_response(),
+        Ok(revoked) => {
+            if let Some(session) = session_from_headers(&state, &headers) {
+                state.db.audit(
+                    session.discord_user_id,
+                    telescope.guild_id,
+                    "pairing_tokens_revoked",
+                    &telescope.name,
+                );
+            }
+            Json(serde_json::json!({ "revoked": revoked })).into_response()
+        }
+        Err(e) => internal_error(e),
+    }
+}
+
+/// Revoke every rig credential for a telescope and drop its live
+/// connection. The rig must re-pair with a fresh token.
+async fn api_revoke_credentials(
+    State(state): State<HubState>,
+    Path(telescope_id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let telescope = match telescope_for_manage(&state, &headers, &telescope_id, true).await {
+        Ok(telescope) => telescope,
+        Err(response) => return response,
+    };
+    let revoked = match state.db.revoke_rig_credentials(telescope.id) {
+        Ok(revoked) => revoked,
+        Err(e) => return internal_error(e),
+    };
+    let disconnected = match state.rig_connections.remove(telescope.id) {
+        Some(connection) => {
+            connection.request_close("credentials revoked by a server admin");
+            true
+        }
+        None => false,
+    };
+    if let Some(session) = session_from_headers(&state, &headers) {
+        state.db.audit(
+            session.discord_user_id,
+            telescope.guild_id,
+            "credentials_revoked",
+            &telescope.name,
+        );
+    }
+    Json(serde_json::json!({ "revoked": revoked, "disconnected": disconnected })).into_response()
+}
+
+/// Newest-first management audit entries for a guild.
+async fn api_guild_audit(
+    State(state): State<HubState>,
+    Path(guild_id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let guild_id = match parse_id_param(&guild_id) {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+    if let ManageAuth::Denied(response) = authorize_manage(&state, &headers, guild_id, false).await
+    {
+        return response;
+    }
+    match state.db.guild_audit(guild_id, 100) {
+        Ok(entries) => Json(serde_json::json!({
+            "entries": entries.iter().map(|entry| serde_json::json!({
+                "at": entry.at,
+                "user_id": snowflake_string(entry.discord_user_id),
+                "action": entry.action,
+                "detail": entry.detail,
+            })).collect::<Vec<_>>(),
+        }))
+        .into_response(),
         Err(e) => internal_error(e),
     }
 }
@@ -760,16 +922,34 @@ pub async fn serve(
         println!("Central Discord bot and chat updater manager started");
     }
 
+    // Hourly sweep of expired sessions and stale OAuth states, in addition
+    // to the opportunistic cleanup on login.
+    {
+        let db = db.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+                if let Err(e) = db.cleanup_auth_rows() {
+                    eprintln!("Warning: auth-row cleanup failed: {e}");
+                }
+            }
+        });
+    }
+
     let state = HubState {
         db,
         config: Arc::new(config),
         oauth,
         guild_checker,
         rig_connections,
+        limits: Arc::new(HubLimits::default()),
     };
-    axum::serve(listener, router(state))
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    axum::serve(
+        listener,
+        router(state).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
     Ok(())
 }
 
@@ -807,10 +987,18 @@ mod tests {
             oauth,
             guild_checker: checker,
             rig_connections: Arc::new(crate::hub::direct_server::RigConnections::default()),
+            limits: Arc::new(HubLimits::default()),
         };
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, router(state)).await.unwrap() });
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                router(state).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            .unwrap()
+        });
         (format!("http://{addr}"), db)
     }
 
@@ -830,6 +1018,9 @@ mod tests {
             self.bot
         }
         async fn user_in_guild(&self, _guild_id: u64, _user_id: u64) -> bool {
+            self.member
+        }
+        async fn user_can_manage(&self, _guild_id: u64, _user_id: u64) -> bool {
             self.member
         }
     }
@@ -1314,6 +1505,73 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), 400);
+    }
+
+    #[tokio::test]
+    async fn credential_revocation_and_audit_trail() {
+        let (base, db, client, csrf) = managed_hub(Some(Arc::new(StubChecker {
+            bot: true,
+            member: true,
+        })))
+        .await;
+
+        client
+            .post(format!("{base}/api/guilds/{OWNED_GUILD}/register"))
+            .header("x-csrf-token", &csrf)
+            .send()
+            .await
+            .unwrap();
+        let telescope: serde_json::Value = client
+            .post(format!("{base}/api/guilds/{OWNED_GUILD}/telescopes"))
+            .header("x-csrf-token", &csrf)
+            .json(&serde_json::json!({ "name": "c925" }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let id = telescope["id"].as_i64().unwrap();
+
+        // Pair a credential out-of-band, then revoke through the endpoint.
+        let credential = db.create_rig_credential(id, "node-1", "profile-1").unwrap();
+        assert!(db.lookup_rig_credential(&credential).unwrap().is_some());
+        let body: serde_json::Value = client
+            .delete(format!("{base}/api/telescopes/{id}/credentials"))
+            .header("x-csrf-token", &csrf)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(body["revoked"], 1);
+        assert_eq!(body["disconnected"], false);
+        assert!(db.lookup_rig_credential(&credential).unwrap().is_none());
+
+        // The audit endpoint lists the actions, newest first.
+        let audit: serde_json::Value = client
+            .get(format!("{base}/api/guilds/{OWNED_GUILD}/audit"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let actions: Vec<&str> = audit["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["action"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            actions,
+            vec![
+                "credentials_revoked",
+                "telescope_created",
+                "guild_registered"
+            ]
+        );
     }
 
     #[tokio::test]

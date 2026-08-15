@@ -19,6 +19,10 @@ pub trait GuildChecker: Send + Sync {
     async fn bot_in_guild(&self, guild_id: u64) -> bool;
     /// Is this user currently a member of this guild?
     async fn user_in_guild(&self, guild_id: u64, user_id: u64) -> bool;
+    /// Does this user currently hold guild management rights (owner,
+    /// ADMINISTRATOR, or MANAGE_GUILD via any role)? Unlike the OAuth
+    /// snapshot, this reflects demotions immediately.
+    async fn user_can_manage(&self, guild_id: u64, user_id: u64) -> bool;
 }
 
 /// Production checker using the bot token over Discord's REST API. No
@@ -54,12 +58,47 @@ impl GuildChecker for SerenityGuildChecker {
             .await
             .is_ok()
     }
+
+    async fn user_can_manage(&self, guild_id: u64, user_id: u64) -> bool {
+        use serenity::model::Permissions;
+        use serenity::model::id::{GuildId, UserId};
+
+        let guild = match self.http.get_guild(GuildId::new(guild_id)).await {
+            Ok(guild) => guild,
+            Err(_) => return false,
+        };
+        if guild.owner_id.get() == user_id {
+            return true;
+        }
+        let member = match self
+            .http
+            .get_member(GuildId::new(guild_id), UserId::new(user_id))
+            .await
+        {
+            Ok(member) => member,
+            Err(_) => return false,
+        };
+        let manage = Permissions::ADMINISTRATOR | Permissions::MANAGE_GUILD;
+        // The @everyone role (id == guild id) applies to every member.
+        let everyone = guild
+            .roles
+            .get(&serenity::model::id::RoleId::new(guild_id))
+            .is_some_and(|role| role.permissions.intersects(manage));
+        everyone
+            || member.roles.iter().any(|role_id| {
+                guild
+                    .roles
+                    .get(role_id)
+                    .is_some_and(|role| role.permissions.intersects(manage))
+            })
+    }
 }
 
 #[derive(Hash, PartialEq, Eq)]
 enum CacheKey {
     Bot(u64),
     Member(u64, u64),
+    Manage(u64, u64),
 }
 
 /// Wraps any checker with a positive-only TTL cache.
@@ -124,6 +163,18 @@ impl<C: GuildChecker> GuildChecker for CachedGuildChecker<C> {
         }
         ok
     }
+
+    async fn user_can_manage(&self, guild_id: u64, user_id: u64) -> bool {
+        let key = CacheKey::Manage(guild_id, user_id);
+        if self.cached(&key) {
+            return true;
+        }
+        let ok = self.inner.user_can_manage(guild_id, user_id).await;
+        if ok {
+            self.remember(key);
+        }
+        ok
+    }
 }
 
 #[cfg(test)]
@@ -143,6 +194,10 @@ mod tests {
             self.answer
         }
         async fn user_in_guild(&self, _guild_id: u64, _user_id: u64) -> bool {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.answer
+        }
+        async fn user_can_manage(&self, _guild_id: u64, _user_id: u64) -> bool {
             self.calls.fetch_add(1, Ordering::SeqCst);
             self.answer
         }

@@ -240,6 +240,21 @@ pub async fn run_connection(
                     Message::Text(text) => {
                         match serde_json::from_str::<DirectMessage>(&text) {
                             Ok(DirectMessage::Query(query)) => {
+                                let now = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .map(|d| d.as_secs() as i64)
+                                    .unwrap_or(0);
+                                if query.expired_at(now) {
+                                    // Never run stale work — especially
+                                    // commands — after a hang or reconnect.
+                                    let _ = out_tx.send(DirectMessage::QueryResult(QueryResult {
+                                        id: query.id,
+                                        ok: false,
+                                        payload: serde_json::Value::Null,
+                                        error: Some("query expired before execution".to_string()),
+                                    }));
+                                    continue;
+                                }
                                 let api = api.clone();
                                 let out = out_tx.clone();
                                 tokio::spawn(async move {

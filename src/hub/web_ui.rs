@@ -198,6 +198,7 @@ async function renderTelescopes(guildId, el) {
         '" placeholder="role ids"></td>' +
       "<td><button class=\"b-save\">Save</button> " +
       "<button class=\"b-token\">Pairing token</button> " +
+      "<button class=\"b-revoke danger\">Revoke access</button> " +
       "<button class=\"b-delete danger\">Delete</button></td></tr>";
   }
   html += "</table>" +
@@ -234,6 +235,16 @@ async function renderTelescopes(guildId, el) {
       try {
         await api("/api/telescopes/" + id, { method: "PATCH", body: JSON.stringify(body) });
         toast("Saved");
+        renderTelescopes(guildId, el);
+      } catch (e) { toast(e.message); }
+    };
+    row.querySelector(".b-revoke").onclick = async () => {
+      if (!confirm("Revoke this telescope's credentials? The rig is disconnected " +
+        "and must re-pair with a new token.")) return;
+      try {
+        await api("/api/telescopes/" + id + "/credentials", { method: "DELETE" });
+        await api("/api/telescopes/" + id + "/pairing-tokens", { method: "DELETE" });
+        toast("Access revoked");
         renderTelescopes(guildId, el);
       } catch (e) { toast(e.message); }
     };

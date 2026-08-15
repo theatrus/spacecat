@@ -111,6 +111,16 @@ const MIGRATIONS: &[&str] = &[
         revoked_at INTEGER
     ) STRICT;
     CREATE INDEX idx_rig_credentials_telescope ON rig_credentials(telescope_id);",
+    // V5: audit trail of management actions, queryable per guild.
+    "CREATE TABLE audit_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        at INTEGER NOT NULL,
+        discord_user_id INTEGER NOT NULL,
+        guild_id INTEGER NOT NULL,
+        action TEXT NOT NULL,
+        detail TEXT NOT NULL DEFAULT ''
+    ) STRICT;
+    CREATE INDEX idx_audit_guild ON audit_log(guild_id, at);",
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -192,6 +202,52 @@ impl Db {
                 rusqlite::Error::QueryReturnedNoRows => Ok(None),
                 other => Err(other),
             })
+        })
+    }
+}
+
+/// One audit trail entry.
+#[derive(Debug, Clone)]
+pub struct AuditRow {
+    pub at: i64,
+    pub discord_user_id: i64,
+    pub action: String,
+    pub detail: String,
+}
+
+impl Db {
+    /// Record a management action. Failures are logged, never propagated —
+    /// auditing must not break the action it records.
+    pub fn audit(&self, discord_user_id: i64, guild_id: i64, action: &str, detail: &str) {
+        let result = self.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO audit_log (at, discord_user_id, guild_id, action, detail)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![unix_now(), discord_user_id, guild_id, action, detail],
+            )
+            .map(|_| ())
+        });
+        if let Err(e) = result {
+            eprintln!("Warning: audit write failed: {e}");
+        }
+    }
+
+    /// Newest-first audit entries for one guild.
+    pub fn guild_audit(&self, guild_id: i64, limit: u32) -> Result<Vec<AuditRow>, DbError> {
+        self.with_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT at, discord_user_id, action, detail FROM audit_log
+                 WHERE guild_id = ?1 ORDER BY at DESC, id DESC LIMIT ?2",
+            )?;
+            let rows = stmt.query_map(rusqlite::params![guild_id, limit], |r| {
+                Ok(AuditRow {
+                    at: r.get(0)?,
+                    discord_user_id: r.get(1)?,
+                    action: r.get(2)?,
+                    detail: r.get(3)?,
+                })
+            })?;
+            rows.collect()
         })
     }
 }

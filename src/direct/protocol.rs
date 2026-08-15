@@ -90,8 +90,19 @@ pub struct AuthRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QueryRequest {
     pub id: Uuid,
+    /// Unix time after which the rig must not execute this query. Guards
+    /// against stale commands running after a hang or reconnect.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<i64>,
     #[serde(flatten)]
     pub kind: QueryKind,
+}
+
+impl QueryRequest {
+    /// True when the query must be rejected rather than executed.
+    pub fn expired_at(&self, now: i64) -> bool {
+        self.expires_at.is_some_and(|deadline| now > deadline)
+    }
 }
 
 /// The operations a rig can be asked to perform. These mirror the
@@ -210,6 +221,7 @@ mod tests {
     fn query_request_has_stable_json_contract() {
         let message = DirectMessage::Query(QueryRequest {
             id: Uuid::parse_str("7afcde18-b5a8-46fd-ad1f-ed54cf3bbc4e").unwrap(),
+            expires_at: None,
             kind: QueryKind::Thumbnail { index: 3 },
         });
         let value = serde_json::to_value(&message).unwrap();
@@ -224,6 +236,7 @@ mod tests {
     fn command_query_roundtrips() {
         let message = DirectMessage::Query(QueryRequest {
             id: Uuid::new_v4(),
+            expires_at: Some(1_900_000_000),
             kind: QueryKind::Command {
                 endpoint: "equipment/mount/unpark".to_string(),
                 params: vec![("wait".to_string(), "true".to_string())],
@@ -244,6 +257,24 @@ mod tests {
         assert!(result.ok);
         assert!(result.payload.is_null());
         assert!(result.error.is_none());
+    }
+
+    #[test]
+    fn query_expiry_semantics() {
+        let no_deadline = QueryRequest {
+            id: Uuid::new_v4(),
+            expires_at: None,
+            kind: QueryKind::EventHistory,
+        };
+        assert!(!no_deadline.expired_at(i64::MAX));
+
+        let with_deadline = QueryRequest {
+            id: Uuid::new_v4(),
+            expires_at: Some(100),
+            kind: QueryKind::EventHistory,
+        };
+        assert!(!with_deadline.expired_at(100));
+        assert!(with_deadline.expired_at(101));
     }
 
     #[test]
