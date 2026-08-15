@@ -20,3 +20,4 @@ pub mod server;
 pub mod store;
 pub mod tenants;
 pub mod updaters;
+pub mod web_ui;
