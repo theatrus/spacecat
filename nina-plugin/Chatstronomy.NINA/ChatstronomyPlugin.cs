@@ -116,6 +116,60 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
         }
     }
 
+    public bool UseLocalMatrix
+    {
+        get => settings.UseLocalMatrix;
+        set
+        {
+            settings.UseLocalMatrix = value;
+            RaisePropertyChanged();
+            RefreshStatus();
+        }
+    }
+
+    public string MatrixHomeserverUrl
+    {
+        get => settings.MatrixHomeserverUrl;
+        set
+        {
+            settings.MatrixHomeserverUrl = value;
+            RaisePropertyChanged();
+            RefreshStatus();
+        }
+    }
+
+    public string MatrixUsername
+    {
+        get => settings.MatrixUsername;
+        set
+        {
+            settings.MatrixUsername = value;
+            RaisePropertyChanged();
+            RefreshStatus();
+        }
+    }
+
+    public string MatrixPassword
+    {
+        get => settings.MatrixPassword;
+        set
+        {
+            settings.MatrixPassword = value;
+            RefreshStatus();
+        }
+    }
+
+    public string MatrixRoomId
+    {
+        get => settings.MatrixRoomId;
+        set
+        {
+            settings.MatrixRoomId = value;
+            RaisePropertyChanged();
+            RefreshStatus();
+        }
+    }
+
     public string HostedServiceUrl
     {
         get => settings.HostedServiceUrl;
@@ -259,7 +313,21 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
                 StartLocalRuntime,
                 StopLocalRuntimeWithNina)
             : null;
-        return new ChatstronomyConfiguration(delivery, localRuntime);
+        var matrix = UsesLocalRuntime && UseLocalMatrix
+            ? new MatrixDeliveryConfiguration(
+                ChatstronomyConfigurationValidator.RequireMatrixHomeserver(
+                    MatrixHomeserverUrl),
+                ChatstronomyConfigurationValidator.RequireSecret(
+                    MatrixUsername,
+                    "Matrix username"),
+                ChatstronomyConfigurationValidator.RequireSecret(
+                    MatrixPassword,
+                    "Matrix password"),
+                ChatstronomyConfigurationValidator.RequireSecret(
+                    MatrixRoomId,
+                    "Default Matrix room ID"))
+            : null;
+        return new ChatstronomyConfiguration(delivery, matrix, localRuntime);
     }
 
     internal DirectConnectionSettings ConnectionSettings
@@ -321,6 +389,11 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
             nameof(DiscordBotToken),
             nameof(DiscordApplicationId),
             nameof(DiscordChannelId),
+            nameof(UseLocalMatrix),
+            nameof(MatrixHomeserverUrl),
+            nameof(MatrixUsername),
+            nameof(MatrixPassword),
+            nameof(MatrixRoomId),
             nameof(HostedServiceUrl),
             nameof(HostedCredentialReference),
             nameof(HostedCredentialStatus),

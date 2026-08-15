@@ -25,10 +25,14 @@ decides where chat is owned:
 - **Chatstronomy.com:** the plugin connects outbound to the hosted service using
   an opaque credential reference produced by the hosted sign-in/pairing flow.
 
-Webhook URLs and Discord bot tokens are stored per N.I.N.A. profile in Windows
-Credential Manager, not in profile JSON. Hosted credentials are similarly not
-serialized by this configuration layer: it stores only the reference that the
-hosted credential flow resolves.
+Either local Discord choice can also enable a Matrix account. The plugin captures
+the homeserver URL, username, password, and default room ID, allowing the same
+local runtime to publish to Discord and Matrix together.
+
+Webhook URLs, Discord bot tokens, and Matrix passwords are stored per N.I.N.A.
+profile in Windows Credential Manager, not in profile JSON. Hosted credentials
+are similarly not serialized by this configuration layer: it stores only the
+reference that the hosted credential flow resolves.
 
 In Direct mode, several N.I.N.A. instances can feed one Chatstronomy bot even when
 they run on different computers. Local plugins use a named pipe; remote plugins

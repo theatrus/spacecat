@@ -59,6 +59,36 @@ internal sealed class ChatstronomySettings
         set => options.SetValueString(nameof(DiscordChannelId), value?.Trim() ?? string.Empty);
     }
 
+    public bool UseLocalMatrix
+    {
+        get => options.GetValueBoolean(nameof(UseLocalMatrix), false);
+        set => options.SetValueBoolean(nameof(UseLocalMatrix), value);
+    }
+
+    public string MatrixHomeserverUrl
+    {
+        get => options.GetValueString(nameof(MatrixHomeserverUrl), "https://matrix.org/");
+        set => options.SetValueString(nameof(MatrixHomeserverUrl), value?.Trim() ?? string.Empty);
+    }
+
+    public string MatrixUsername
+    {
+        get => options.GetValueString(nameof(MatrixUsername), string.Empty);
+        set => options.SetValueString(nameof(MatrixUsername), value?.Trim() ?? string.Empty);
+    }
+
+    public string MatrixPassword
+    {
+        get => WindowsCredentialStore.Read(CredentialTarget("matrix-password")) ?? string.Empty;
+        set => WindowsCredentialStore.Write(CredentialTarget("matrix-password"), value);
+    }
+
+    public string MatrixRoomId
+    {
+        get => options.GetValueString(nameof(MatrixRoomId), string.Empty);
+        set => options.SetValueString(nameof(MatrixRoomId), value?.Trim() ?? string.Empty);
+    }
+
     public string HostedServiceUrl
     {
         get => options.GetValueString(nameof(HostedServiceUrl), "https://chatstronomy.com/");

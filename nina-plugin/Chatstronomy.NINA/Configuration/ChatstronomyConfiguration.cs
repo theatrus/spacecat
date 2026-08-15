@@ -18,6 +18,12 @@ internal sealed record HostedDeliveryConfiguration(
     string CredentialReference)
     : ChatDeliveryConfiguration;
 
+internal sealed record MatrixDeliveryConfiguration(
+    Uri HomeserverUrl,
+    string Username,
+    string Password,
+    string DefaultRoomId);
+
 internal sealed record LocalRuntimeConfiguration(
     string ExecutablePath,
     bool StartWithNina,
@@ -25,6 +31,7 @@ internal sealed record LocalRuntimeConfiguration(
 
 internal sealed record ChatstronomyConfiguration(
     ChatDeliveryConfiguration Delivery,
+    MatrixDeliveryConfiguration? Matrix,
     LocalRuntimeConfiguration? LocalRuntime);
 
 internal static class ChatstronomyConfigurationValidator
@@ -60,7 +67,7 @@ internal static class ChatstronomyConfigurationValidator
             throw new InvalidOperationException($"{label} is required.");
         }
 
-        return value.Trim();
+        return value;
     }
 
     public static Uri RequireHostedUrl(string value)
@@ -70,6 +77,18 @@ internal static class ChatstronomyConfigurationValidator
         {
             throw new InvalidOperationException(
                 "Chatstronomy service URL must be an absolute https:// URL.");
+        }
+
+        return uri;
+    }
+
+    public static Uri RequireMatrixHomeserver(string value)
+    {
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri)
+            || (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp))
+        {
+            throw new InvalidOperationException(
+                "Matrix homeserver URL must be an absolute http:// or https:// URL.");
         }
 
         return uri;

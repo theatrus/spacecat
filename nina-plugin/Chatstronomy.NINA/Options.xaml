@@ -122,6 +122,66 @@
                     BorderThickness="1"
                     Visibility="{Binding UsesLocalRuntime, Converter={StaticResource BooleanToVisibilityConverter}}">
                     <StackPanel>
+                        <TextBlock FontSize="16" FontWeight="SemiBold" Text="Matrix (optional)" />
+                        <TextBlock
+                            Margin="0,3,0,10"
+                            Text="Connect the local Chatstronomy runtime to Matrix in addition to the selected Discord delivery."
+                            TextWrapping="Wrap" />
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock VerticalAlignment="Center" Text="Enable local Matrix delivery" />
+                            <CheckBox
+                                Grid.Column="1"
+                                IsChecked="{Binding UseLocalMatrix}" />
+                        </Grid>
+                        <Grid Visibility="{Binding UseLocalMatrix, Converter={StaticResource BooleanToVisibilityConverter}}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="180" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <TextBlock Margin="0,4,12,4" VerticalAlignment="Center" Text="Homeserver URL" />
+                            <TextBox
+                                Grid.Column="1"
+                                Margin="0,4"
+                                Text="{Binding MatrixHomeserverUrl, UpdateSourceTrigger=LostFocus}" />
+                            <TextBlock Grid.Row="1" Margin="0,4,12,4" VerticalAlignment="Center" Text="Username" />
+                            <TextBox
+                                Grid.Row="1"
+                                Grid.Column="1"
+                                Margin="0,4"
+                                Text="{Binding MatrixUsername, UpdateSourceTrigger=LostFocus}" />
+                            <TextBlock Grid.Row="2" Margin="0,4,12,4" VerticalAlignment="Center" Text="Password" />
+                            <PasswordBox
+                                Grid.Row="2"
+                                Grid.Column="1"
+                                Margin="0,4"
+                                ui:PasswordBoxBinding.Password="{Binding MatrixPassword, Mode=TwoWay, UpdateSourceTrigger=LostFocus}" />
+                            <TextBlock Grid.Row="3" Margin="0,4,12,4" VerticalAlignment="Center" Text="Default room ID" />
+                            <TextBox
+                                Grid.Row="3"
+                                Grid.Column="1"
+                                Margin="0,4"
+                                Text="{Binding MatrixRoomId, UpdateSourceTrigger=LostFocus}" />
+                        </Grid>
+                    </StackPanel>
+                </Border>
+
+                <Border
+                    Margin="0,16,0,0"
+                    Padding="12"
+                    BorderBrush="{DynamicResource ControlBorderBrush}"
+                    BorderThickness="1"
+                    Visibility="{Binding UsesLocalRuntime, Converter={StaticResource BooleanToVisibilityConverter}}">
+                    <StackPanel>
                         <TextBlock FontSize="16" FontWeight="SemiBold" Text="Local Chatstronomy runtime" />
                         <TextBlock
                             Margin="0,3,0,10"

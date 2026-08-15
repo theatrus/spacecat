@@ -27,6 +27,11 @@ surface provides three mutually exclusive choices:
 | Discord app / bot | Local computer | Windows Credential Manager | Notifications and Discord commands |
 | Chatstronomy.com | Hosted service | Hosted credential resolver | Hosted chat delivery and remote routing |
 
+For either local Discord choice, Matrix can be enabled independently with a
+homeserver, account, and default room. The Matrix password uses the same
+profile-scoped Windows Credential Manager storage as the Discord secrets. One
+local runtime can therefore deliver to Discord and Matrix simultaneously.
+
 Local delivery configuration includes the runtime executable path, whether the
 plugin should start it with N.I.N.A., and whether a plugin-owned process should
 stop with N.I.N.A. These settings define lifecycle ownership without committing
@@ -104,8 +109,8 @@ Local is the simple all-in-one path for a single imaging computer:
 
 1. Install the Chatstronomy N.I.N.A. plugin.
 2. Leave **Connection mode** set to **Local**.
-3. Select Discord webhook or Discord app / bot delivery and configure its local
-   credentials in the plugin UI.
+3. Select Discord webhook or Discord app / bot delivery, optionally enable
+   Matrix, and configure the local credentials in the plugin UI.
 4. The plugin ensures the bundled Chatstronomy runtime is running and connects to
    it through the node-scoped Windows named pipe.
 
