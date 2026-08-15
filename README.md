@@ -1,5 +1,9 @@
 # Chatstronomy 🔭 💬
 
+<p align="center">
+  <img src="assets/branding/chatstronomy-icon.png" alt="Chatstronomy: space cat piped into chat" width="320">
+</p>
+
 *pipe your observatory into chat*
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)

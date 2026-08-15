@@ -67,9 +67,11 @@ registry; it does not replace or require changes to other plugins. Tagged
 GitHub release from the main Chatstronomy agent releases.
 
 The plugin manifest uses the 512 px derivative
-`assets/branding/chatstronomy-featured.png`; the N.I.N.A. catalog, main Windows
-binary, Start menu shortcut, and Add/Remove Programs entry all share the same
-logo artwork. Windows surfaces use the multi-resolution
+`assets/branding/chatstronomy-featured.png`; the plugin assembly repeats that
+image URL as `FeaturedImageURL` metadata so N.I.N.A. also shows it after
+installation. The N.I.N.A. catalog, installed-plugin view, main Windows binary,
+Start menu shortcut, and Add/Remove Programs entry all share the same logo
+artwork. Windows surfaces use the multi-resolution
 `assets/branding/chatstronomy.ico` derivative.
 
 The project currently exports the N.I.N.A. plugin manifest and the shared
