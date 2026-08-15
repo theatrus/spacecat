@@ -26,4 +26,8 @@
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
   </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Chatstronomy.NINA.Tests" />
+  </ItemGroup>
 </Project>

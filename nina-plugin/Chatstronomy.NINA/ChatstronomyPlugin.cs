@@ -60,6 +60,18 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
         }
     }
 
+    public bool UseMatrixOnly
+    {
+        get => settings.DeliveryMode == ChatDeliveryMode.MatrixOnly;
+        set
+        {
+            if (value)
+            {
+                SetDeliveryMode(ChatDeliveryMode.MatrixOnly);
+            }
+        }
+    }
+
     public bool UseHostedService
     {
         get => settings.DeliveryMode == ChatDeliveryMode.HostedService;
@@ -73,6 +85,8 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
     }
 
     public bool UsesLocalRuntime => !UseHostedService;
+
+    public bool CanToggleLocalMatrix => UsesLocalRuntime && !UseMatrixOnly;
 
     public string DiscordWebhookUrl
     {
@@ -118,7 +132,7 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
 
     public bool UseLocalMatrix
     {
-        get => settings.UseLocalMatrix;
+        get => UseMatrixOnly || settings.UseLocalMatrix;
         set
         {
             settings.UseLocalMatrix = value;
@@ -285,7 +299,7 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
 
     internal ChatstronomyConfiguration BuildConfiguration()
     {
-        ChatDeliveryConfiguration delivery = settings.DeliveryMode switch
+        ChatDeliveryConfiguration? delivery = settings.DeliveryMode switch
         {
             ChatDeliveryMode.DiscordWebhook => new DiscordWebhookDeliveryConfiguration(
                 ChatstronomyConfigurationValidator.RequireDiscordWebhook(DiscordWebhookUrl)),
@@ -293,7 +307,7 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
                 ChatstronomyConfigurationValidator.RequireSecret(
                     DiscordBotToken,
                     "Discord bot token"),
-                ChatstronomyConfigurationValidator.RequireDiscordSnowflake(
+                ChatstronomyConfigurationValidator.OptionalDiscordSnowflake(
                     DiscordApplicationId,
                     "Discord application ID"),
                 ChatstronomyConfigurationValidator.RequireDiscordSnowflake(
@@ -304,6 +318,7 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
                 ChatstronomyConfigurationValidator.RequireSecret(
                     HostedCredentialReference,
                     "Hosted credential")),
+            ChatDeliveryMode.MatrixOnly => null,
             _ => throw new InvalidOperationException("Unknown Chatstronomy delivery mode."),
         };
 
@@ -383,8 +398,10 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
         {
             nameof(UseDiscordWebhook),
             nameof(UseDiscordBot),
+            nameof(UseMatrixOnly),
             nameof(UseHostedService),
             nameof(UsesLocalRuntime),
+            nameof(CanToggleLocalMatrix),
             nameof(DiscordWebhookUrl),
             nameof(DiscordBotToken),
             nameof(DiscordApplicationId),

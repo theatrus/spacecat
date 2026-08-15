@@ -22,12 +22,13 @@ decides where chat is owned:
   through a user-owned Discord webhook.
 - **Discord app / bot:** the local runtime owns a user-created Discord bot and can
   provide interactive commands as well as notifications.
+- **Matrix:** the local runtime owns a Matrix account without requiring Discord.
 - **Chatstronomy.com:** the plugin connects outbound to the hosted service using
   an opaque credential reference produced by the hosted sign-in/pairing flow.
 
-Either local Discord choice can also enable a Matrix account. The plugin captures
-the homeserver URL, username, password, and default room ID, allowing the same
-local runtime to publish to Discord and Matrix together.
+Matrix can run by itself or alongside either local Discord choice. The plugin
+captures the HTTPS homeserver URL, username, password, and default room ID,
+allowing the same local runtime to publish to Discord and Matrix together.
 
 Webhook URLs, Discord bot tokens, and Matrix passwords are stored per N.I.N.A.
 profile in Windows Credential Manager, not in profile JSON. Hosted credentials
@@ -56,6 +57,7 @@ The initial project targets N.I.N.A. 3.2 and .NET 8:
 
 ```powershell
 dotnet build nina-plugin/Chatstronomy.NINA/Chatstronomy.NINA.csproj
+dotnet run --project nina-plugin/Chatstronomy.NINA.Tests/Chatstronomy.NINA.Tests.csproj
 ```
 
 ## Package and registry manifest

@@ -4,5 +4,6 @@ internal enum ChatDeliveryMode
 {
     DiscordWebhook,
     DiscordBot,
+    MatrixOnly,
     HostedService,
 }

@@ -19,18 +19,19 @@ becoming a second data source.
 ## Chat delivery configuration
 
 Chat delivery is selected separately from the source mode. The N.I.N.A. options
-surface provides three mutually exclusive choices:
+surface provides four mutually exclusive choices:
 
 | Delivery choice | Runtime owner | Credential location | Capability |
 |---|---|---|---|
 | Discord webhook | Local computer | Windows Credential Manager | Outbound notifications |
 | Discord app / bot | Local computer | Windows Credential Manager | Notifications and Discord commands |
+| Matrix | Local computer | Windows Credential Manager | Matrix notifications and commands |
 | Chatstronomy.com | Hosted service | Hosted credential resolver | Hosted chat delivery and remote routing |
 
-For either local Discord choice, Matrix can be enabled independently with a
-homeserver, account, and default room. The Matrix password uses the same
-profile-scoped Windows Credential Manager storage as the Discord secrets. One
-local runtime can therefore deliver to Discord and Matrix simultaneously.
+Matrix can be selected as the only local chat service or enabled alongside either
+local Discord choice. Its homeserver must use HTTPS. The Matrix password uses the
+same profile-scoped Windows Credential Manager storage as the Discord secrets.
+One local runtime can therefore deliver to Discord and Matrix simultaneously.
 
 Local delivery configuration includes the runtime executable path, whether the
 plugin should start it with N.I.N.A., and whether a plugin-owned process should
@@ -109,8 +110,8 @@ Local is the simple all-in-one path for a single imaging computer:
 
 1. Install the Chatstronomy N.I.N.A. plugin.
 2. Leave **Connection mode** set to **Local**.
-3. Select Discord webhook or Discord app / bot delivery, optionally enable
-   Matrix, and configure the local credentials in the plugin UI.
+3. Select Discord webhook, Discord app / bot, or Matrix-only delivery. Matrix can
+   also be enabled alongside either Discord choice.
 4. The plugin ensures the bundled Chatstronomy runtime is running and connects to
    it through the node-scoped Windows named pipe.
 

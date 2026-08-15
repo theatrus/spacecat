@@ -36,6 +36,15 @@
 
                         <RadioButton
                             GroupName="ChatstronomyDelivery"
+                            Content="Matrix only — local Matrix account"
+                            IsChecked="{Binding UseMatrixOnly}" />
+                        <TextBlock
+                            Margin="22,2,0,10"
+                            Text="Run Chatstronomy on this computer using Matrix without requiring Discord."
+                            TextWrapping="Wrap" />
+
+                        <RadioButton
+                            GroupName="ChatstronomyDelivery"
                             Content="Chatstronomy.com — hosted bot"
                             IsChecked="{Binding UseHostedService}" />
                         <TextBlock
@@ -76,7 +85,7 @@
                         Grid.Column="1"
                         Margin="0,4"
                         ui:PasswordBoxBinding.Password="{Binding DiscordBotToken, Mode=TwoWay, UpdateSourceTrigger=LostFocus}" />
-                    <TextBlock Grid.Row="1" Margin="0,4,12,4" VerticalAlignment="Center" Text="Application ID" />
+                    <TextBlock Grid.Row="1" Margin="0,4,12,4" VerticalAlignment="Center" Text="Application ID (optional)" />
                     <TextBox
                         Grid.Row="1"
                         Grid.Column="1"
@@ -122,19 +131,20 @@
                     BorderThickness="1"
                     Visibility="{Binding UsesLocalRuntime, Converter={StaticResource BooleanToVisibilityConverter}}">
                     <StackPanel>
-                        <TextBlock FontSize="16" FontWeight="SemiBold" Text="Matrix (optional)" />
+                        <TextBlock FontSize="16" FontWeight="SemiBold" Text="Matrix delivery" />
                         <TextBlock
                             Margin="0,3,0,10"
-                            Text="Connect the local Chatstronomy runtime to Matrix in addition to the selected Discord delivery."
+                            Text="Use Matrix by itself, or connect it alongside the selected local Discord delivery."
                             TextWrapping="Wrap" />
                         <Grid Margin="0,0,0,8">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
-                            <TextBlock VerticalAlignment="Center" Text="Enable local Matrix delivery" />
+                            <TextBlock VerticalAlignment="Center" Text="Enable Matrix alongside Discord" />
                             <CheckBox
                                 Grid.Column="1"
+                                IsEnabled="{Binding CanToggleLocalMatrix}"
                                 IsChecked="{Binding UseLocalMatrix}" />
                         </Grid>
                         <Grid Visibility="{Binding UseLocalMatrix, Converter={StaticResource BooleanToVisibilityConverter}}">
@@ -148,7 +158,7 @@
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
-                            <TextBlock Margin="0,4,12,4" VerticalAlignment="Center" Text="Homeserver URL" />
+                            <TextBlock Margin="0,4,12,4" VerticalAlignment="Center" Text="HTTPS homeserver URL" />
                             <TextBox
                                 Grid.Column="1"
                                 Margin="0,4"

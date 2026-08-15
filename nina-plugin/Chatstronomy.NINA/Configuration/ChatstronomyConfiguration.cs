@@ -9,7 +9,7 @@ internal sealed record DiscordWebhookDeliveryConfiguration(Uri WebhookUrl)
 
 internal sealed record DiscordBotDeliveryConfiguration(
     string BotToken,
-    ulong ApplicationId,
+    ulong? ApplicationId,
     ulong DefaultChannelId)
     : ChatDeliveryConfiguration;
 
@@ -30,7 +30,7 @@ internal sealed record LocalRuntimeConfiguration(
     bool StopWithNina);
 
 internal sealed record ChatstronomyConfiguration(
-    ChatDeliveryConfiguration Delivery,
+    ChatDeliveryConfiguration? Delivery,
     MatrixDeliveryConfiguration? Matrix,
     LocalRuntimeConfiguration? LocalRuntime);
 
@@ -41,10 +41,11 @@ internal static class ChatstronomyConfigurationValidator
         if (!Uri.TryCreate(value, UriKind.Absolute, out var uri)
             || uri.Scheme != Uri.UriSchemeHttps
             || !IsDiscordHost(uri.Host)
-            || !uri.AbsolutePath.StartsWith("/api/webhooks/", StringComparison.OrdinalIgnoreCase))
+            || !uri.IsDefaultPort
+            || !IsDiscordWebhookPath(uri.AbsolutePath))
         {
             throw new InvalidOperationException(
-                "Enter a valid HTTPS Discord webhook URL (…/api/webhooks/…).");
+                "Enter a complete HTTPS Discord webhook URL containing its numeric ID and token.");
         }
 
         return uri;
@@ -58,6 +59,16 @@ internal static class ChatstronomyConfigurationValidator
         }
 
         return id;
+    }
+
+    public static ulong? OptionalDiscordSnowflake(string value, string label)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        return RequireDiscordSnowflake(value, label);
     }
 
     public static string RequireSecret(string value, string label)
@@ -85,10 +96,11 @@ internal static class ChatstronomyConfigurationValidator
     public static Uri RequireMatrixHomeserver(string value)
     {
         if (!Uri.TryCreate(value, UriKind.Absolute, out var uri)
-            || (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp))
+            || uri.Scheme != Uri.UriSchemeHttps
+            || string.IsNullOrWhiteSpace(uri.Host))
         {
             throw new InvalidOperationException(
-                "Matrix homeserver URL must be an absolute http:// or https:// URL.");
+                "Matrix homeserver URL must be an absolute https:// URL.");
         }
 
         return uri;
@@ -126,4 +138,33 @@ internal static class ChatstronomyConfigurationValidator
         || host.EndsWith(".discord.com", StringComparison.OrdinalIgnoreCase)
         || host.Equals("discordapp.com", StringComparison.OrdinalIgnoreCase)
         || host.EndsWith(".discordapp.com", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsDiscordWebhookPath(string path)
+    {
+        var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var webhookIdIndex = 2;
+
+        if (segments.Length == 5
+            && segments[0].Equals("api", StringComparison.OrdinalIgnoreCase)
+            && IsDiscordApiVersion(segments[1])
+            && segments[2].Equals("webhooks", StringComparison.OrdinalIgnoreCase))
+        {
+            webhookIdIndex = 3;
+        }
+        else if (segments.Length != 4
+            || !segments[0].Equals("api", StringComparison.OrdinalIgnoreCase)
+            || !segments[1].Equals("webhooks", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return ulong.TryParse(segments[webhookIdIndex], out var webhookId)
+            && webhookId != 0
+            && !string.IsNullOrWhiteSpace(segments[webhookIdIndex + 1]);
+    }
+
+    private static bool IsDiscordApiVersion(string value) =>
+        value.Length > 1
+        && (value[0] == 'v' || value[0] == 'V')
+        && value.Skip(1).All(char.IsDigit);
 }
