@@ -52,10 +52,11 @@ rusqlite = { version = "0.37", optional = true }
 hmac = { version = "0.12", optional = true }
 sha2 = { version = "0.10", optional = true }
 subtle = { version = "2", optional = true }
-# Relay client (rig side): outbound WebSocket to a Chatstronomy hub. Pinned to
-# the same tokio-tungstenite line serenity 0.12 uses so only one tungstenite
-# stack is in the graph.
-tokio-tungstenite = { version = "0.21", features = ["rustls-tls-webpki-roots"] }
+# Relay client (rig side): outbound WebSocket to a Chatstronomy hub. Tracks
+# the tokio-tungstenite line axum's ws feature uses, which also keeps our
+# outbound TLS on modern rustls. (serenity 0.12 still pins its own 0.21 copy
+# for the gateway — an upstream limitation, see the audit.toml note.)
+tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
 futures-util = "0.3"
 
 # Windows service dependencies (Windows only)

@@ -112,28 +112,47 @@ impl RigResolver for HubRigResolver {
     }
 }
 
-/// Per-telescope write policy: disabled, or a role allowlist matched against
-/// the invoking member's roles.
+/// Per-telescope write policy.
+///
+/// - `disabled`: nobody, not even admins — a deliberate off switch.
+/// - `admins` (the default): whoever manages the guild on Discord — its
+///   owner or members holding ADMINISTRATOR/MANAGE_GUILD. The integration's
+///   owner controls their scopes out of the box, straight from Discord.
+/// - `roles`: guild managers plus members holding an allowlisted role.
 fn check_write_policy(row: &TelescopeRow, invocation: &CommandContext) -> Result<(), String> {
+    // `manages_guild` and `role_ids` describe the invoker's standing in the
+    // guild the command came from. Discord's channel model already binds an
+    // interaction to one guild, but this guard makes the invariant local:
+    // an invoker's standing never authorizes another guild's telescope.
+    if invocation.guild_id != Some(row.guild_id as u64) {
+        return Err("This telescope belongs to a different server.".to_string());
+    }
     match row.write_policy.as_str() {
+        "admins" if invocation.manages_guild => Ok(()),
+        "admins" => Err(
+            "Write commands on this telescope are limited to server managers. \
+             Ask an admin to add your role in the hub settings."
+                .to_string(),
+        ),
         "roles" => {
-            let allowed = row
-                .allowed_role_ids
-                .iter()
-                .any(|role| invocation.role_ids.contains(&(*role as u64)));
+            let allowed = invocation.manages_guild
+                || row
+                    .allowed_role_ids
+                    .iter()
+                    .any(|role| invocation.role_ids.contains(&(*role as u64)));
             if allowed {
                 Ok(())
             } else {
                 Err(
                     "You are not authorized to run write commands for this telescope. \
-                         Ask a server admin to grant your role in the hub settings."
+                     Ask a server admin to grant your role in the hub settings."
                         .to_string(),
                 )
             }
         }
         _ => Err(
             "Write commands are disabled for this telescope. A server admin can \
-                 enable them in the hub settings."
+             enable them in the hub settings."
                 .to_string(),
         ),
     }
@@ -177,6 +196,14 @@ mod tests {
             channel_id,
             user_id: 7,
             role_ids: roles,
+            manages_guild: false,
+        }
+    }
+
+    fn manager_invocation(guild_id: u64, channel_id: u64) -> CommandContext {
+        CommandContext {
+            manages_guild: true,
+            ..invocation(guild_id, channel_id, Vec::new())
         }
     }
 
@@ -230,22 +257,48 @@ mod tests {
     }
 
     #[test]
-    fn write_policy_disabled_by_default() {
+    fn default_policy_lets_managers_and_only_managers_write() {
+        // New telescopes default to 'admins': the integration's owner and
+        // other server managers control their scopes out of the box.
         let (_db, connections, resolver, id) = setup();
         connect(&connections, id);
+        assert!(
+            resolver
+                .resolve_for_write(&manager_invocation(100, 42), None)
+                .is_ok()
+        );
         let err = resolver
-            .write_allowed(&invocation(100, 42, vec![1111]), "c925")
+            .resolve_for_write(&invocation(100, 42, vec![1111]), None)
             .err()
             .unwrap();
-        assert!(err.contains("disabled"));
+        assert!(err.contains("server managers"), "got: {err}");
+    }
+
+    #[test]
+    fn disabled_policy_blocks_even_managers() {
+        let (db, connections, resolver, id) = setup();
+        connect(&connections, id);
+        db.update_telescope(
+            id,
+            &TelescopeUpdate {
+                write_policy: Some("disabled".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let err = resolver
+            .resolve_for_write(&manager_invocation(100, 42), None)
+            .err()
+            .unwrap();
+        assert!(err.contains("disabled"), "got: {err}");
     }
 
     #[test]
     fn write_auth_applies_to_the_channel_routed_telescope() {
-        // Guild 100 owns channel 42 (writes disabled). Guild 200 has a
-        // same-named telescope with a permissive role policy. A guild-200
-        // member invoking in channel 42 must be judged by guild 100's
-        // policy — the rig the command actuates — not their own guild's.
+        // Guild 200 has a same-named telescope with a permissive role
+        // policy. A guild-200 invocation reaching guild 100's channel-routed
+        // rig (impossible on real Discord, but defended anyway) is denied by
+        // the guild-match guard, whatever the invoker's standing.
         let (db, connections, resolver, id) = setup();
         connect(&connections, id);
         db.register_guild(200, "other", 1).unwrap();
@@ -264,7 +317,12 @@ mod tests {
             .resolve_for_write(&invocation(200, 42, vec![9]), None)
             .err()
             .unwrap();
-        assert!(err.contains("disabled"), "got: {err}");
+        assert!(err.contains("different server"), "got: {err}");
+        let err = resolver
+            .resolve_for_write(&manager_invocation(200, 42), None)
+            .err()
+            .unwrap();
+        assert!(err.contains("different server"), "got: {err}");
     }
 
     #[test]

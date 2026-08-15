@@ -148,6 +148,7 @@ pub fn router(state: HubState) -> Router {
             delete(api_revoke_credentials),
         )
         .route("/api/guilds/{guild_id}/audit", get(api_guild_audit))
+        .route("/api/guilds/{guild_id}/options", get(api_guild_options))
         .route(
             crate::direct::protocol::DIRECT_WEBSOCKET_PATH,
             get(super::direct_server::direct_ws),
@@ -672,10 +673,9 @@ async fn api_update_telescope(
             Err(response) => return response,
         };
     if let Some(policy) = &body.write_policy
-        && policy != "disabled"
-        && policy != "roles"
+        && !["disabled", "admins", "roles"].contains(&policy.as_str())
     {
-        return bad_request("write_policy must be 'disabled' or 'roles'");
+        return bad_request("write_policy must be 'disabled', 'admins', or 'roles'");
     }
     if let Some(cooldown) = body.image_cooldown_seconds
         && !(0..=86400).contains(&cooldown)
@@ -865,6 +865,49 @@ async fn api_revoke_credentials(
         &telescope.name,
     );
     Json(serde_json::json!({ "revoked": revoked, "disconnected": disconnected })).into_response()
+}
+
+/// Picker options for a guild: its text channels and assignable roles,
+/// straight from Discord — nobody should ever type an ID.
+async fn api_guild_options(
+    State(state): State<HubState>,
+    Path(guild_id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let guild_id = match parse_id_param(&guild_id) {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+    if let ManageAuth::Denied(response) = authorize_manage(&state, &headers, guild_id, false).await
+    {
+        return response;
+    }
+    let (channels, roles) = match &state.guild_checker {
+        Some(checker) => {
+            let (channels, roles) = tokio::join!(
+                checker.guild_channels(guild_id as u64),
+                checker.guild_roles(guild_id as u64),
+            );
+            (channels, roles)
+        }
+        None => (Vec::new(), Vec::new()),
+    };
+    let to_json = |items: Vec<super::guild_check::NamedId>| {
+        items
+            .into_iter()
+            .map(|item| {
+                serde_json::json!({
+                    "id": item.id.to_string(),
+                    "name": item.name,
+                })
+            })
+            .collect::<Vec<_>>()
+    };
+    Json(serde_json::json!({
+        "channels": to_json(channels),
+        "roles": to_json(roles),
+    }))
+    .into_response()
 }
 
 /// Newest-first management audit entries for a guild.
@@ -1060,6 +1103,18 @@ mod tests {
         }
         async fn channel_in_guild(&self, _channel_id: u64, _guild_id: u64) -> bool {
             self.channel
+        }
+        async fn guild_channels(&self, _guild_id: u64) -> Vec<super::super::guild_check::NamedId> {
+            vec![super::super::guild_check::NamedId {
+                id: 555,
+                name: "observatory".to_string(),
+            }]
+        }
+        async fn guild_roles(&self, _guild_id: u64) -> Vec<super::super::guild_check::NamedId> {
+            vec![super::super::guild_check::NamedId {
+                id: 1111,
+                name: "astronomers".to_string(),
+            }]
         }
     }
 
@@ -1427,7 +1482,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(telescope["name"], "c925");
-        assert_eq!(telescope["write_policy"], "disabled");
+        // Managers control new scopes by default, straight from Discord.
+        assert_eq!(telescope["write_policy"], "admins");
         let id = telescope["id"].as_i64().unwrap();
 
         // Update channel routing and write policy.
@@ -1652,6 +1708,34 @@ mod tests {
             .await
             .unwrap();
         telescope["id"].as_i64().unwrap()
+    }
+
+    #[tokio::test]
+    async fn options_endpoint_serves_channels_and_roles() {
+        let (base, _db, client, _csrf) = managed_hub(Some(Arc::new(StubChecker {
+            bot: true,
+            member: true,
+            channel: true,
+        })))
+        .await;
+        let body: serde_json::Value = client
+            .get(format!("{base}/api/guilds/{OWNED_GUILD}/options"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(body["channels"][0]["id"], "555");
+        assert_eq!(body["channels"][0]["name"], "observatory");
+        assert_eq!(body["roles"][0]["id"], "1111");
+        assert_eq!(body["roles"][0]["name"], "astronomers");
+
+        // Options are manage-gated like everything else.
+        let anonymous = reqwest::get(format!("{base}/api/guilds/{OWNED_GUILD}/options"))
+            .await
+            .unwrap();
+        assert_eq!(anonymous.status(), 401);
     }
 
     #[tokio::test]

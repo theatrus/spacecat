@@ -24,6 +24,18 @@ pub trait GuildChecker: Send + Sync {
     /// Does this channel belong to this guild? Guards channel routing so a
     /// tenant can never claim another guild's channel.
     async fn channel_in_guild(&self, channel_id: u64, guild_id: u64) -> bool;
+    /// The guild's text channels, for pickers. Empty on any error.
+    async fn guild_channels(&self, guild_id: u64) -> Vec<NamedId>;
+    /// The guild's assignable roles (no @everyone, no bot-managed roles),
+    /// for pickers. Empty on any error.
+    async fn guild_roles(&self, guild_id: u64) -> Vec<NamedId>;
+}
+
+/// A Discord entity as a picker option.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NamedId {
+    pub id: u64,
+    pub name: String,
 }
 
 /// Production checker using the bot token over Discord's REST API. No
@@ -61,6 +73,49 @@ impl GuildChecker for SerenityGuildChecker {
             }
             _ => false,
         }
+    }
+
+    async fn guild_channels(&self, guild_id: u64) -> Vec<NamedId> {
+        use serenity::model::channel::ChannelType;
+        let Ok(channels) = self
+            .http
+            .get_channels(serenity::model::id::GuildId::new(guild_id))
+            .await
+        else {
+            return Vec::new();
+        };
+        let mut out: Vec<NamedId> = channels
+            .into_iter()
+            .filter(|c| matches!(c.kind, ChannelType::Text | ChannelType::News))
+            .map(|c| NamedId {
+                id: c.id.get(),
+                name: c.name,
+            })
+            .collect();
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        out
+    }
+
+    async fn guild_roles(&self, guild_id: u64) -> Vec<NamedId> {
+        let Ok(roles) = self
+            .http
+            .get_guild_roles(serenity::model::id::GuildId::new(guild_id))
+            .await
+        else {
+            return Vec::new();
+        };
+        let mut out: Vec<NamedId> = roles
+            .into_iter()
+            // @everyone (id == guild id) and bot-managed roles aren't
+            // meaningful grants for humans.
+            .filter(|r| r.id.get() != guild_id && !r.managed)
+            .map(|r| NamedId {
+                id: r.id.get(),
+                name: r.name,
+            })
+            .collect();
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        out
     }
 
     async fn user_can_manage(&self, guild_id: u64, user_id: u64) -> bool {
@@ -179,6 +234,16 @@ impl<C: GuildChecker> GuildChecker for CachedGuildChecker<C> {
         }
         ok
     }
+
+    // Picker listings pass through uncached: they're hit only when someone
+    // opens the management page, and stale channel/role names confuse.
+    async fn guild_channels(&self, guild_id: u64) -> Vec<NamedId> {
+        self.inner.guild_channels(guild_id).await
+    }
+
+    async fn guild_roles(&self, guild_id: u64) -> Vec<NamedId> {
+        self.inner.guild_roles(guild_id).await
+    }
 }
 
 #[cfg(test)]
@@ -204,6 +269,12 @@ mod tests {
         async fn channel_in_guild(&self, _channel_id: u64, _guild_id: u64) -> bool {
             self.calls.fetch_add(1, Ordering::SeqCst);
             self.answer
+        }
+        async fn guild_channels(&self, _guild_id: u64) -> Vec<NamedId> {
+            Vec::new()
+        }
+        async fn guild_roles(&self, _guild_id: u64) -> Vec<NamedId> {
+            Vec::new()
         }
     }
 
