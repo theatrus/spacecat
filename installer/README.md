@@ -1,10 +1,10 @@
-# SpaceCat 🔭
+# Chatstronomy 🔭
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Rust](https://img.shields.io/badge/rust-1.93+-orange.svg)](https://www.rust-lang.org)
-[![Build Status](https://github.com/theatrus/spacecat/workflows/CI/badge.svg)](https://github.com/theatrus/spacecat/actions)
+[![Build Status](https://github.com/theatrus/chatstronomy/workflows/CI/badge.svg)](https://github.com/theatrus/chatstronomy/actions)
 
-**SpaceCat** is a Rust-based tool for posting to Discord events from a [NINA](https://nighttime-imaging.eu)
+**Chatstronomy** is a Rust-based tool for posting to Discord events from a [NINA](https://nighttime-imaging.eu)
 installation, specifically using the [Advanced API](https://github.com/christian-photo/ninaAPI) extension.
 
 ## On Vibe Coding
@@ -21,36 +21,36 @@ really.
 
 ```bash
 # Download the latest release
-wget https://github.com/theatrus/spacecat/releases/latest/download/spacecat-*.rpm
+wget https://github.com/theatrus/chatstronomy/releases/latest/download/chatstronomy-*.rpm
 
 # Install the package
-sudo dnf install ./spacecat-*.rpm
+sudo dnf install ./chatstronomy-*.rpm
 
 # Configure the system
-sudo vim /etc/spacecat/config.json
+sudo vim /etc/chatstronomy/config.json
 
 # Enable and start the service
-sudo systemctl enable --now spacecat.service
+sudo systemctl enable --now chatstronomy.service
 
 # Check status
-sudo systemctl status spacecat.service
+sudo systemctl status chatstronomy.service
 ```
 
 #### Option 2: Build from Source
 
 ```bash
 # Clone the repository
-git clone https://github.com/theatrus/spacecat.git
-cd spacecat
+git clone https://github.com/theatrus/chatstronomy.git
+cd chatstronomy
 
 # Build the project (Windows service support included automatically on Windows)
 cargo build --release
 
 # Copy the binary to your PATH
-sudo cp target/release/spacecat /usr/local/bin/
+sudo cp target/release/chatstronomy /usr/local/bin/
 
 # Create configuration
-cp packaging/config/spacecat.conf ~/.config/spacecat/config.json
+cp packaging/config/chatstronomy.conf ~/.config/chatstronomy/config.json
 ```
 
 ### Configuration
@@ -81,82 +81,82 @@ running it on the same system.
 
 ### Command Line Interface
 
-SpaceCat provides a comprehensive CLI with multiple commands:
+Chatstronomy provides a comprehensive CLI with multiple commands:
 
 ```bash
 # Show help
-spacecat --help
+chatstronomy --help
 
 # Get current sequence information
-spacecat sequence
+chatstronomy sequence
 
 # View event history
-spacecat events
+chatstronomy events
 
 # Show last 10 events with details
-spacecat last-events --count 10
+chatstronomy last-events --count 10
 
 # Get image history and statistics
-spacecat images
+chatstronomy images
 
 # Download a specific image
-spacecat get-image 0 --params "autoPrepare=true"
+chatstronomy get-image 0 --params "autoPrepare=true"
 
 # Get image thumbnail
-spacecat get-thumbnail 5 --output "image_5.jpg" --image-type "LIGHT"
+chatstronomy get-thumbnail 5 --output "image_5.jpg" --image-type "LIGHT"
 
 # Poll for new events (5 cycles, 2 second intervals)
-spacecat poll --interval 2 --count 5
+chatstronomy poll --interval 2 --count 5
 
 # Start continuous Discord updates (recommended)
-spacecat discord-updater --interval 5
+chatstronomy discord-updater --interval 5
 
 # Get latest autofocus results
-spacecat last-autofocus
+chatstronomy last-autofocus
 
 # Check mount information
-spacecat mount-info
+chatstronomy mount-info
 ```
 
 ### Service Mode
 
 #### Linux (systemd)
 
-For production use on Linux, run SpaceCat as a systemd service:
+For production use on Linux, run Chatstronomy as a systemd service:
 
 ```bash
 # Check service logs
-journalctl -u spacecat.service -f
+journalctl -u chatstronomy.service -f
 
 # Restart after configuration changes
-sudo systemctl restart spacecat.service
+sudo systemctl restart chatstronomy.service
 
 # Monitor service status
-sudo systemctl status spacecat.service
+sudo systemctl status chatstronomy.service
 ```
 
 #### Windows Service
 
-For production use on Windows, SpaceCat can run as a Windows service:
+For production use on Windows, Chatstronomy can run as a Windows service:
 
 ```powershell
 # Install the service (run as Administrator)
-spacecat.exe windows-service install
+chatstronomy.exe windows-service install
 
 # Configure the service
-# Edit C:\ProgramData\SpaceCat\config.json
+# Edit C:\ProgramData\Chatstronomy\config.json
 
 # Start the service
-spacecat.exe windows-service start
+chatstronomy.exe windows-service start
 
 # Check service status
-spacecat.exe windows-service status
+chatstronomy.exe windows-service status
 
 # Stop the service
-spacecat.exe windows-service stop
+chatstronomy.exe windows-service stop
 
 # Uninstall the service
-spacecat.exe windows-service uninstall
+chatstronomy.exe windows-service uninstall
 ```
 
 **Note**: Windows service functionality is automatically available when running on Windows.
@@ -184,8 +184,8 @@ brew install rust openssl git
 
 ```bash
 # Clone and build
-git clone https://github.com/theatrus/spacecat.git
-cd spacecat
+git clone https://github.com/theatrus/chatstronomy.git
+cd chatstronomy
 
 # Development build
 cargo build
@@ -211,7 +211,7 @@ cargo fmt
 ```json
 {
   "api": {
-    "base_url": "http://192.168.0.82:1888",    // SpaceCat API base URL
+    "base_url": "http://192.168.0.82:1888",    // Chatstronomy API base URL
     "timeout_seconds": 30,                      // HTTP request timeout
     "retry_attempts": 3                         // Number of retry attempts
   }
@@ -242,7 +242,7 @@ cargo fmt
 
 ## 🔌 API Integration
 
-SpaceCat integrates with the NINA Advanced API through the following endpoints:
+Chatstronomy integrates with the NINA Advanced API through the following endpoints:
 
 - **`/v2/api/version`** - API health check and version info
 - **`/v2/api/event-history`** - Equipment event monitoring  
@@ -261,7 +261,7 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
 ### Development Workflow
 
 1. **Fork** the repository
-2. **Clone** your fork: `git clone https://github.com/YOUR-USERNAME/spacecat.git`
+2. **Clone** your fork: `git clone https://github.com/YOUR-USERNAME/chatstronomy.git`
 3. **Create** a feature branch: `git checkout -b feature/amazing-feature`
 4. **Make** your changes and add tests
 5. **Test** your changes: `cargo test && cargo clippy`
@@ -285,4 +285,4 @@ This project is licensed under the **Apache License 2.0** - see the [LICENSE](LI
 
 **Made with ❤️ for the astronomy community**
 
-*SpaceCat helps astronomers automate and monitor their observations, bringing the universe closer to everyone.*
+*Chatstronomy helps astronomers automate and monitor their observations, bringing the universe closer to everyone.*

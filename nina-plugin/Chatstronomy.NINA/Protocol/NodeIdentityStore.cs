@@ -1,4 +1,4 @@
-namespace SpaceCat.NINA.Protocol;
+namespace Chatstronomy.NINA.Protocol;
 
 /// <summary>
 /// Persists a non-secret node ID shared by every N.I.N.A. instance running
@@ -13,7 +13,7 @@ internal static class NodeIdentityStore
     {
         var directory = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "SpaceCat");
+            "Chatstronomy");
         var path = Path.Combine(directory, FileName);
         Directory.CreateDirectory(directory);
 
@@ -46,7 +46,7 @@ internal static class NodeIdentityStore
             }
         }
 
-        throw new IOException($"Could not read or create the SpaceCat node ID at {path}");
+        throw new IOException($"Could not read or create the Chatstronomy node ID at {path}");
     }
 
     private static bool TryRead(string path, out Guid nodeId)

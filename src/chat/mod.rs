@@ -160,7 +160,7 @@ pub struct DiscordBotConfig {
 }
 
 fn default_state_file() -> String {
-    "./spacecat-state.json".to_string()
+    "./chatstronomy-state.json".to_string()
 }
 
 /// Per-telescope chat routing overrides. Either field, when present, replaces

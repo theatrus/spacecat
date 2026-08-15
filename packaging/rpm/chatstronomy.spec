@@ -5,13 +5,13 @@
 # debug), so there is nothing for find-debuginfo to harvest.
 %global debug_package %{nil}
 
-Name:           spacecat
+Name:           chatstronomy
 Version:        0.3.0
 Release:        1%{?dist}
-Summary:        SpaceCat - Astronomical Observation System
+Summary:        Chatstronomy - Astronomical Observation System
 
 License:        Apache-2.0
-URL:            https://github.com/theatrus/spacecat
+URL:            https://github.com/theatrus/chatstronomy
 
 # Both sources are produced by scripts/make-rpm-sources.sh (the git archive does
 # not contain the vendored crates needed for an offline build).
@@ -42,7 +42,7 @@ Requires(postun): systemd
 # neither is a runtime dependency.
 
 %description
-SpaceCat is a Rust-based astronomical observation system that interfaces with
+Chatstronomy is a Rust-based astronomical observation system that interfaces with
 the NINA Advanced API for monitoring and posting to multiple chat services
 (Discord, Matrix). It provides real-time event tracking, image history
 management, autofocus analysis, and sequence automation across multiple
@@ -73,16 +73,16 @@ cargo build --release --locked
 install -Dpm0755 target/release/%{name} %{buildroot}%{_bindir}/%{name}
 
 # systemd chat-updater service integration.
-install -Dpm0644 packaging/rpm/systemd/spacecat.service \
+install -Dpm0644 packaging/rpm/systemd/chatstronomy.service \
     %{buildroot}%{_unitdir}/%{name}.service
-install -Dpm0644 packaging/rpm/systemd/spacecat.sysusers \
+install -Dpm0644 packaging/rpm/systemd/chatstronomy.sysusers \
     %{buildroot}%{_sysusersdir}/%{name}.conf
-install -Dpm0644 packaging/rpm/systemd/spacecat.conf \
-    %{buildroot}%{_sysconfdir}/%{name}/spacecat.conf
-install -Dpm0640 packaging/rpm/spacecat-default.json \
+install -Dpm0644 packaging/rpm/systemd/chatstronomy.conf \
+    %{buildroot}%{_sysconfdir}/%{name}/chatstronomy.conf
+install -Dpm0640 packaging/rpm/chatstronomy-default.json \
     %{buildroot}%{_sysconfdir}/%{name}/config.json
 
-# The spacecat system user is created by the sysusers.d file trigger that
+# The chatstronomy system user is created by the sysusers.d file trigger that
 # systemd installs for %%{_sysusersdir}, so no %%pre useradd is needed.
 %post
 %systemd_post %{name}.service
@@ -100,10 +100,10 @@ install -Dpm0640 packaging/rpm/spacecat-default.json \
 %{_unitdir}/%{name}.service
 %{_sysusersdir}/%{name}.conf
 %dir %{_sysconfdir}/%{name}
-%config(noreplace) %{_sysconfdir}/%{name}/spacecat.conf
+%config(noreplace) %{_sysconfdir}/%{name}/chatstronomy.conf
 # config.json holds chat credentials; keep it group-readable by the service
 # user only and never clobber operator edits on upgrade.
-%attr(0640,root,spacecat) %config(noreplace) %{_sysconfdir}/%{name}/config.json
+%attr(0640,root,chatstronomy) %config(noreplace) %{_sysconfdir}/%{name}/config.json
 
 %changelog
 * Thu Jul 02 2026 Yann Ramin <github@theatr.us> - 0.2.1-1
@@ -116,6 +116,6 @@ install -Dpm0640 packaging/rpm/spacecat-default.json \
 
 * Mon Jun 30 2026 Yann Ramin <github@theatr.us> - 0.1.0-1
 - Rework packaging for offline mock/COPR builds from vendored crates
-- Create the spacecat system user via sysusers.d
-- Ship spacecat.service (chat-updater mode) with an EnvironmentFile of knobs
-  and a disabled-by-default /etc/spacecat/config.json
+- Create the chatstronomy system user via sysusers.d
+- Ship chatstronomy.service (chat-updater mode) with an EnvironmentFile of knobs
+  and a disabled-by-default /etc/chatstronomy/config.json

@@ -1,11 +1,11 @@
 using System.Text.Json.Serialization;
 
-namespace SpaceCat.NINA.Protocol;
+namespace Chatstronomy.NINA.Protocol;
 
 internal static class DirectProtocol
 {
     internal const ushort CurrentVersion = 1;
-    private const string PipePrefix = "spacecat-agent-v1";
+    private const string PipePrefix = "chatstronomy-agent-v1";
     internal const string WebSocketPath = "/v1/direct";
 
     internal static string LocalPipeName(Guid nodeId) => $"{PipePrefix}-{nodeId:N}";

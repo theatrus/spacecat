@@ -1,6 +1,6 @@
 # N.I.N.A. integration architecture
 
-SpaceCat treats **how observatory data is collected** and **where chat services
+Chatstronomy treats **how observatory data is collected** and **where chat services
 run** as independent choices. Direct mode is an additional integration, not a
 replacement for Advanced API mode.
 
@@ -9,9 +9,9 @@ replacement for Advanced API mode.
 | Source | Local delivery | Central/hosted delivery |
 |---|---|---|
 | Advanced API | Rust agent polls N.I.N.A. and runs user-owned Discord/Matrix clients | Rust agent polls N.I.N.A. and relays outbound to the hosted service |
-| N.I.N.A. Direct | N.I.N.A. plugin connects to SpaceCat over a Windows named pipe | N.I.N.A. plugin opens an outbound authenticated WebSocket to the SpaceCat hub |
+| N.I.N.A. Direct | N.I.N.A. plugin connects to Chatstronomy over a Windows named pipe | N.I.N.A. plugin opens an outbound authenticated WebSocket to the Chatstronomy hub |
 
-Advanced API deployments remain usable without installing the SpaceCat N.I.N.A.
+Advanced API deployments remain usable without installing the Chatstronomy N.I.N.A.
 plugin. When the plugin is installed in Advanced API mode, it acts as an
 in-application configuration and health surface for the Rust agent rather than
 becoming a second data source.
@@ -22,48 +22,48 @@ becoming a second data source.
 
 The source-neutral interface consumed by polling, state tracking, chat commands,
 and image delivery. `AdvancedApiSource` is the first implementation and delegates
-to the existing `SpaceCatApiClient`.
+to the existing `ChatstronomyApiClient`.
 
 `NinaDirectSource` will satisfy the same operations from the latest native
 snapshot and request/response messages carried over the Direct protocol. Each
 source advertises capabilities so callers can report unsupported operations
 clearly.
 
-Only one source is authoritative for a rig. SpaceCat will not automatically
+Only one source is authoritative for a rig. Chatstronomy will not automatically
 merge or fail over between Direct and Advanced API sources because duplicate
 events and ambiguous command results are more dangerous than a visible outage.
 
-### SpaceCat N.I.N.A. plugin (C#)
+### Chatstronomy N.I.N.A. plugin (C#)
 
 The plugin is intentionally thin. It will:
 
 1. Subscribe to N.I.N.A. device, image-save, autofocus, guider, and sequence
    mediators.
-2. Convert native information into versioned SpaceCat messages.
+2. Convert native information into versioned Chatstronomy messages.
 3. Execute an explicit allowlist of commands through N.I.N.A. mediators.
 4. Provide source/delivery settings and connection health inside N.I.N.A.
-5. Connect to SpaceCat over a Windows named pipe when local or an outbound TLS
-   WebSocket when SpaceCat runs on another system.
+5. Connect to Chatstronomy over a Windows named pipe when local or an outbound TLS
+   WebSocket when Chatstronomy runs on another system.
 
 It will not contain Discord, Matrix, notification formatting, chart rendering,
 or hosted-service logic.
 
-### SpaceCat runtime and hub (Rust)
+### Chatstronomy runtime and hub (Rust)
 
-One SpaceCat process owns state reduction, durable event delivery, chart
+One Chatstronomy process owns state reduction, durable event delivery, chart
 rendering, and the Discord/Matrix clients. It accepts any number of Direct
 plugin connections and gives every connected profile an independent rig source.
 
-When SpaceCat runs on the N.I.N.A. computer, the plugin uses a per-user named
-pipe. When SpaceCat runs centrally, each plugin connects outward to its TLS
+When Chatstronomy runs on the N.I.N.A. computer, the plugin uses a per-user named
+pipe. When Chatstronomy runs centrally, each plugin connects outward to its TLS
 WebSocket endpoint. The remote N.I.N.A. computers do not run Discord or Matrix
 bots and do not need an inbound listener or Advanced API.
 
-The Windows SpaceCat executable may still be included in the plugin ZIP for the
+The Windows Chatstronomy executable may still be included in the plugin ZIP for the
 all-in-one local option. It remains possible to install and run the Rust
 application independently for Advanced API and non-Windows deployments.
 
-### Hosted SpaceCat service
+### Hosted Chatstronomy service
 
 The hosted service owns the central Discord/Matrix credentials, tenant routing,
 and connected-plugin registry. Read requests use a freshness-stamped cached
@@ -72,17 +72,17 @@ are never queued for an offline rig.
 
 ## Direct connection modes
 
-Direct mode has two explicit connection choices. SpaceCat does not probe and
+Direct mode has two explicit connection choices. Chatstronomy does not probe and
 guess between them, and Remote never silently falls back to Local.
 
 ### Local (default)
 
 Local is the simple all-in-one path for a single imaging computer:
 
-1. Install the SpaceCat N.I.N.A. plugin.
+1. Install the Chatstronomy N.I.N.A. plugin.
 2. Leave **Connection mode** set to **Local**.
 3. Configure locally owned Discord and/or Matrix credentials in the plugin UI.
-4. The plugin ensures the bundled SpaceCat runtime is running and connects to
+4. The plugin ensures the bundled Chatstronomy runtime is running and connects to
    it through the node-scoped Windows named pipe.
 
 Local requires no URL, pairing code, open port, or Advanced API installation.
@@ -91,7 +91,7 @@ protection rather than in normal profile JSON.
 
 ### Remote
 
-Remote connects one or more imaging computers to a central SpaceCat hub:
+Remote connects one or more imaging computers to a central Chatstronomy hub:
 
 1. Select **Connection mode: Remote**.
 2. Enter the hub's `wss://` URL and a one-time pairing code.
@@ -107,7 +107,7 @@ it does not start a second local bot.
 
 Every plugin sends a versioned `client_hello` containing three identifiers:
 
-- `node_id`: generated once and stored under the Windows user's local SpaceCat
+- `node_id`: generated once and stored under the Windows user's local Chatstronomy
   data directory; all N.I.N.A. processes in that installation share it;
 - `profile_id`: the stable GUID exposed by `IProfileService.ActiveProfile.Id`;
 - `session_id`: generated each time the plugin loads and used to distinguish a
@@ -117,7 +117,7 @@ The stable rig key is `(node_id, profile_id)`. This supports both multiple
 profiles on one computer and profiles on entirely different computers. A
 profile name is display metadata and can change without changing routing.
 
-One profile may have only one active session. SpaceCat rejects a second active
+One profile may have only one active session. Chatstronomy rejects a second active
 process claiming the same rig, but permits the original session to reconnect
 and atomically replaces its stale transport. If N.I.N.A. switches profiles on a
 live connection, the registry moves that connection only after confirming the
@@ -127,7 +127,7 @@ lease expiry releases the profile so a restarted N.I.N.A. process can register.
 For example, all of these feed one bot process:
 
 ```text
-N.I.N.A. PC A / profile C925    --WSS-->  SpaceCat hub  --> Discord + Matrix
+N.I.N.A. PC A / profile C925    --WSS-->  Chatstronomy hub  --> Discord + Matrix
 N.I.N.A. PC A / profile Esprit  --WSS-->
 N.I.N.A. PC B / profile Remote  --WSS-->
 ```
@@ -144,7 +144,7 @@ The Direct protocol will use versioned envelopes for:
 - acknowledgements and heartbeats.
 
 Local communication uses a Windows named pipe named
-`spacecat-agent-v1-<node-id>` so installations cannot collide.
+`chatstronomy-agent-v1-<node-id>` so installations cannot collide.
 Cross-system communication uses the same logical envelopes over an outbound TLS
 WebSocket at `/v1/direct`. The initial wire representation is JSON so both
 implementations can be inspected and evolved easily.

@@ -5,16 +5,16 @@
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <RootNamespace>SpaceCat.NINA</RootNamespace>
-    <AssemblyName>SpaceCat</AssemblyName>
+    <RootNamespace>Chatstronomy.NINA</RootNamespace>
+    <AssemblyName>Chatstronomy</AssemblyName>
     <OutputType>Library</OutputType>
     <Version>0.1.0.0</Version>
     <AssemblyVersion>$(Version)</AssemblyVersion>
     <FileVersion>$(Version)</FileVersion>
-    <Title>SpaceCat</Title>
-    <Description>Connect N.I.N.A. to SpaceCat using Direct or Advanced API mode</Description>
+    <Title>Chatstronomy</Title>
+    <Description>Bridge N.I.N.A. with Discord and Matrix chat using Direct or Advanced API mode</Description>
     <Company>Yann Ramin</Company>
-    <Product>SpaceCat N.I.N.A. Plugin</Product>
+    <Product>Chatstronomy for N.I.N.A.</Product>
     <Copyright>Copyright (c) 2026 Yann Ramin</Copyright>
   </PropertyGroup>
 

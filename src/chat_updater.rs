@@ -994,7 +994,7 @@ impl ChatUpdater {
     // Chat notification methods
     async fn send_welcome_message(&self) {
         let mut message =
-            ChatMessage::new(&self.titled("🚀 space | cat — observatory monitor started"))
+            ChatMessage::new(&self.titled("🚀 Chatstronomy — observatory monitor started"))
                 .color(colors::GREEN);
 
         // Inferred NINA state from event history

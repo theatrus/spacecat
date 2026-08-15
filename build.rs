@@ -1,7 +1,7 @@
-//! Embeds the git SHA into the binary as `SPACECAT_GIT_SHA`.
+//! Embeds the git SHA into the binary as `CHATSTRONOMY_GIT_SHA`.
 //!
 //! Resolution order:
-//!   1. a `SPACECAT_GIT_SHA` environment variable set at build time — used
+//!   1. a `CHATSTRONOMY_GIT_SHA` environment variable set at build time — used
 //!      by CI release/RPM builds, which compile from a source tarball with
 //!      no `.git` directory;
 //!   2. `git rev-parse --short=12 HEAD` (with a `-dirty` suffix when the
@@ -13,10 +13,10 @@ use std::process::Command;
 #[cfg(windows)]
 fn embed_windows_resources() {
     let mut resource = winresource::WindowsResource::new();
-    resource.set_icon("assets/branding/spacecat.ico");
+    resource.set_icon("assets/branding/chatstronomy.ico");
     resource
         .compile()
-        .expect("failed to embed the SpaceCat Windows icon");
+        .expect("failed to embed the Chatstronomy Windows icon");
 }
 
 #[cfg(not(windows))]
@@ -46,7 +46,7 @@ fn git_sha() -> Option<String> {
 fn main() {
     embed_windows_resources();
 
-    let sha = std::env::var("SPACECAT_GIT_SHA")
+    let sha = std::env::var("CHATSTRONOMY_GIT_SHA")
         .ok()
         .filter(|s| !s.is_empty())
         // CI passes the full 40-char SHA; shorten it to match git's output
@@ -60,9 +60,9 @@ fn main() {
         .or_else(git_sha)
         .unwrap_or_else(|| "unknown".to_string());
 
-    println!("cargo:rustc-env=SPACECAT_GIT_SHA={sha}");
-    println!("cargo:rerun-if-env-changed=SPACECAT_GIT_SHA");
-    println!("cargo:rerun-if-changed=assets/branding/spacecat.ico");
+    println!("cargo:rustc-env=CHATSTRONOMY_GIT_SHA={sha}");
+    println!("cargo:rerun-if-env-changed=CHATSTRONOMY_GIT_SHA");
+    println!("cargo:rerun-if-changed=assets/branding/chatstronomy.ico");
     // Re-run when HEAD moves so the SHA stays current across commits and
     // branch switches.
     println!("cargo:rerun-if-changed=.git/HEAD");

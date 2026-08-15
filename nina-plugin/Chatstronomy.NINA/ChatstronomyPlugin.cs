@@ -2,21 +2,21 @@ using System.ComponentModel.Composition;
 using NINA.Plugin;
 using NINA.Plugin.Interfaces;
 using NINA.Profile.Interfaces;
-using SpaceCat.NINA.Protocol;
-using SpaceCat.NINA.Settings;
+using Chatstronomy.NINA.Protocol;
+using Chatstronomy.NINA.Settings;
 
-namespace SpaceCat.NINA;
+namespace Chatstronomy.NINA;
 
 /// <summary>
-/// N.I.N.A. lifecycle entry point for SpaceCat.
+/// N.I.N.A. lifecycle entry point for Chatstronomy.
 ///
 /// Direct event subscriptions and local/remote transports will be added behind
-/// this manifest in follow-up changes. Keeping the manifest in the main SpaceCat
+/// this manifest in follow-up changes. Keeping the manifest in the main Chatstronomy
 /// repository allows the native plugin and Rust protocol to be released and
 /// tested together.
 /// </summary>
 [Export(typeof(IPluginManifest))]
-public sealed class SpaceCatPlugin : PluginBase
+public sealed class ChatstronomyPlugin : PluginBase
 {
     private readonly IProfileService profileService;
     private readonly Guid nodeId = NodeIdentityStore.LoadOrCreate();
@@ -24,7 +24,7 @@ public sealed class SpaceCatPlugin : PluginBase
     private DirectConnectionSettings connectionSettings = DirectConnectionSettings.Local;
 
     [ImportingConstructor]
-    public SpaceCatPlugin(IProfileService profileService)
+    public ChatstronomyPlugin(IProfileService profileService)
     {
         this.profileService = profileService;
     }
@@ -51,13 +51,13 @@ public sealed class SpaceCatPlugin : PluginBase
 
     /// <summary>
     /// Build the identity handshake used when this N.I.N.A. process connects
-    /// to a local or remote SpaceCat hub. The node and profile GUIDs are
+    /// to a local or remote Chatstronomy hub. The node and profile GUIDs are
     /// stable; the session GUID changes each time the plugin is loaded.
     /// </summary>
     internal ClientHello CreateClientHello()
     {
         var activeProfile = profileService.ActiveProfile;
-        var pluginVersion = typeof(SpaceCatPlugin).Assembly.GetName().Version?.ToString() ?? "unknown";
+        var pluginVersion = typeof(ChatstronomyPlugin).Assembly.GetName().Version?.ToString() ?? "unknown";
         var ninaVersion = typeof(IProfileService).Assembly.GetName().Version?.ToString() ?? "unknown";
 
         return new ClientHello(

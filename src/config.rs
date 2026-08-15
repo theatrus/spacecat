@@ -145,7 +145,7 @@ impl Default for LoggingConfig {
         Self {
             level: "info".to_string(),
             enable_file_logging: false,
-            log_file: "spacecat.log".to_string(),
+            log_file: "chatstronomy.log".to_string(),
         }
     }
 }
@@ -509,7 +509,7 @@ mod tests {
             "logging": {
                 "level": "info",
                 "enable_file_logging": false,
-                "log_file": "spacecat.log"
+                "log_file": "chatstronomy.log"
             },
             "chat": {
                 "discord": {
@@ -556,7 +556,7 @@ mod tests {
             "logging": {
                 "level": "info",
                 "enable_file_logging": false,
-                "log_file": "spacecat.log"
+                "log_file": "chatstronomy.log"
             },
             "chat": {
                 "discord": {
@@ -674,7 +674,7 @@ mod tests {
         assert_eq!(bot.token, "abc");
         assert_eq!(bot.default_channel_id, Some(12345));
         assert_eq!(bot.write_acl, vec![111, 222]);
-        assert_eq!(bot.state_file, "./spacecat-state.json");
+        assert_eq!(bot.state_file, "./chatstronomy-state.json");
         assert_eq!(config.telescopes[0].chat.discord_channel_id, Some(67890));
         assert!(config.validate().is_ok());
     }

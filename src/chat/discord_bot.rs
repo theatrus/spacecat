@@ -394,7 +394,7 @@ pub async fn run_bot(
 
 // ---------- Slash commands (Phase 1, read-only) ----------
 
-/// SpaceCat telescope monitoring commands.
+/// Chatstronomy telescope monitoring commands.
 #[poise::command(
     slash_command,
     subcommands(
@@ -423,13 +423,13 @@ pub async fn run_bot(
         "start_sequence",
     )
 )]
-async fn spacecat(_ctx: Context<'_>) -> Result<(), BotError> {
+async fn chatstronomy(_ctx: Context<'_>) -> Result<(), BotError> {
     // Parent never runs directly when subcommands are defined.
     Ok(())
 }
 
 fn phase1_commands() -> Vec<poise::Command<BotData, BotError>> {
-    vec![spacecat()]
+    vec![chatstronomy()]
 }
 
 /// Shorthand for "resolve telescope, send an ephemeral error to the user if
@@ -845,10 +845,10 @@ async fn confirm_destructive(ctx: Context<'_>, action: &str) -> Result<bool, Bot
     let prompt =
         format!("⚠️ Confirm **{action}**?\nThis is a destructive operation — you have 30 seconds.");
     let row = serenity::CreateActionRow::Buttons(vec![
-        serenity::CreateButton::new("spacecat-confirm")
+        serenity::CreateButton::new("chatstronomy-confirm")
             .label("Confirm")
             .style(serenity::ButtonStyle::Danger),
-        serenity::CreateButton::new("spacecat-cancel")
+        serenity::CreateButton::new("chatstronomy-cancel")
             .label("Cancel")
             .style(serenity::ButtonStyle::Secondary),
     ]);
@@ -869,8 +869,8 @@ async fn confirm_destructive(ctx: Context<'_>, action: &str) -> Result<bool, Bot
         .await;
 
     let (confirmed, response_text) = match interaction.as_ref().map(|i| i.data.custom_id.as_str()) {
-        Some("spacecat-confirm") => (true, "✅ Confirmed, running command…"),
-        Some("spacecat-cancel") => (false, "❎ Cancelled."),
+        Some("chatstronomy-confirm") => (true, "✅ Confirmed, running command…"),
+        Some("chatstronomy-cancel") => (false, "❎ Cancelled."),
         _ => (false, "⏱️ Timed out — no action taken."),
     };
 

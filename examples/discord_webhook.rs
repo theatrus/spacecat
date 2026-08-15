@@ -1,4 +1,4 @@
-use spacecat::discord::{DiscordWebhook, Embed, WebhookMessage, colors};
+use chatstronomy::discord::{DiscordWebhook, Embed, WebhookMessage, colors};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -12,7 +12,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Sending simple message...");
     webhook
         .execute(&WebhookMessage {
-            content: Some("Hello from SpaceCat! 🔭".to_string()),
+            content: Some("Hello from Chatstronomy! 🔭".to_string()),
             ..Default::default()
         })
         .await?;
@@ -20,9 +20,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Example 2: Message with custom username and avatar
     println!("Sending custom message...");
     let custom_message = WebhookMessage {
-        content: Some("SpaceCat is monitoring the observatory!".to_string()),
-        username: Some("SpaceCat Observatory".to_string()),
-        avatar_url: Some("https://example.com/spacecat-avatar.png".to_string()),
+        content: Some("Chatstronomy is monitoring the observatory!".to_string()),
+        username: Some("Chatstronomy Observatory".to_string()),
+        avatar_url: Some("https://example.com/chatstronomy-avatar.png".to_string()),
         tts: Some(false),
         embeds: None,
         allowed_mentions: None,
@@ -38,7 +38,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Sending embed message...");
     let embed = Embed::new()
         .title("Observatory Status Report")
-        .description("Latest observations from SpaceCat")
+        .description("Latest observations from Chatstronomy")
         .color(colors::BLUE)
         .field("Camera", "ZWO ASI2600MM Duo", true)
         .field("Filter", "Hydrogen Alpha (HA)", true)
@@ -46,7 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .field("Exposure", "300s", true)
         .field("Stars Detected", "142", true)
         .field("HFR", "2.35", true)
-        .footer("SpaceCat Observatory", None)
+        .footer("Chatstronomy Observatory", None)
         .timestamp(&chrono::Utc::now().to_rfc3339());
 
     webhook
@@ -74,7 +74,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .field("Total Images", "50", true)
         .field("Duration", "4h 32m", true)
         .field("Filters Used", "L, R, G, B, HA, OIII, SII", false)
-        .author("SpaceCat", None, None)
+        .author("Chatstronomy", None, None)
         .timestamp(&chrono::Utc::now().to_rfc3339());
 
     webhook

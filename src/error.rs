@@ -1,13 +1,13 @@
-//! Error types for SpaceCat
+//! Error types for Chatstronomy
 //!
 //! This module defines all custom error types used throughout the application,
 //! providing better error handling and debugging information.
 
 use thiserror::Error;
 
-/// Main error type for SpaceCat operations
+/// Main error type for Chatstronomy operations
 #[derive(Error, Debug)]
-pub enum SpaceCatError {
+pub enum ChatstronomyError {
     /// API-related errors
     #[error("API error: {0}")]
     Api(#[from] crate::api::ApiError),
@@ -107,13 +107,13 @@ pub enum ServiceError {
 /// Result type alias for Service operations
 pub type ServiceResult<T> = std::result::Result<T, ServiceError>;
 
-impl From<String> for SpaceCatError {
+impl From<String> for ChatstronomyError {
     fn from(message: String) -> Self {
         Self::Generic { message }
     }
 }
 
-impl From<&str> for SpaceCatError {
+impl From<&str> for ChatstronomyError {
     fn from(message: &str) -> Self {
         Self::Generic {
             message: message.to_string(),

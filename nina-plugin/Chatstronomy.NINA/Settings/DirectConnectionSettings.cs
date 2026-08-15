@@ -1,7 +1,7 @@
-namespace SpaceCat.NINA.Settings;
+namespace Chatstronomy.NINA.Settings;
 
 /// <summary>
-/// How the Direct plugin reaches SpaceCat. Local is deliberately the default;
+/// How the Direct plugin reaches Chatstronomy. Local is deliberately the default;
 /// Remote must be selected and configured explicitly.
 /// </summary>
 internal enum DirectConnectionMode

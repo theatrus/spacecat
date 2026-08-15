@@ -1,7 +1,8 @@
-# Build script for SpaceCat MSI installer
+# Build script for Chatstronomy MSI installer
 # Requires WiX Toolset v3.11 or later
 
 param(
+    [ValidatePattern('^\d+\.\d+\.\d+(?:\.\d+)?$')]
     [string]$Version = "0.1.0",
     [string]$Configuration = "Release",
     [switch]$SkipBuild
@@ -15,13 +16,13 @@ $InstallerDir = $PSScriptRoot
 $TargetDir = Join-Path $ProjectRoot "target\$Configuration"
 $OutputDir = Join-Path $InstallerDir "output"
 
-Write-Host "SpaceCat MSI Builder" -ForegroundColor Cyan
+Write-Host "Chatstronomy MSI Builder" -ForegroundColor Cyan
 Write-Host "===================" -ForegroundColor Cyan
 Write-Host ""
 
 # Build the Rust project if not skipped
 if (-not $SkipBuild) {
-    Write-Host "Building SpaceCat in $Configuration mode..." -ForegroundColor Yellow
+    Write-Host "Building Chatstronomy in $Configuration mode..." -ForegroundColor Yellow
     Push-Location $ProjectRoot
     try {
         cargo build --release
@@ -37,9 +38,9 @@ if (-not $SkipBuild) {
 }
 
 # Check if binary exists
-$ExePath = Join-Path $TargetDir "spacecat.exe"
+$ExePath = Join-Path $TargetDir "chatstronomy.exe"
 if (-not (Test-Path $ExePath)) {
-    throw "SpaceCat executable not found at: $ExePath"
+    throw "Chatstronomy executable not found at: $ExePath"
 }
 
 Write-Host "Found executable: $ExePath" -ForegroundColor Green
@@ -62,7 +63,7 @@ if (-not (Test-Path $ConfigExample)) {
         logging = @{
             level = "info"
             enable_file_logging = $false
-            log_file = "spacecat.log"
+            log_file = "chatstronomy.log"
         }
         discord = @{
             webhook_url = "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN"
@@ -81,9 +82,9 @@ if (Test-Path $ReadmeSrc) {
     # Create a basic README if it doesn't exist
     Write-Host "Creating README.md..." -ForegroundColor Yellow
     @"
-# SpaceCat
+# Chatstronomy
 
-SpaceCat is an astronomical observation system that interfaces with NINA Advanced API for monitoring and posting to Discord.
+Chatstronomy is an astronomical observation system that interfaces with NINA Advanced API for monitoring and posting to Discord.
 
 ## Features
 - Real-time event monitoring
@@ -93,10 +94,10 @@ SpaceCat is an astronomical observation system that interfaces with NINA Advance
 - Mount and sequence tracking
 
 ## Configuration
-Copy `config.example.json` to `C:\ProgramData\SpaceCat\config.json` and edit with your settings.
+Copy `config.example.json` to `C:\ProgramData\Chatstronomy\config.json` and edit with your settings.
 
 ## Usage
-Run `spacecat --help` for available commands.
+Run `chatstronomy --help` for available commands.
 
 For more information, visit the project repository.
 "@ | Set-Content $ReadmeDst
@@ -160,7 +161,7 @@ limitations under the License.\par
 }
 
 # Copy executable to installer directory
-$ExeDst = Join-Path $InstallerDir "spacecat.exe"
+$ExeDst = Join-Path $InstallerDir "chatstronomy.exe"
 Copy-Item $ExePath $ExeDst -Force
 
 # Check for WiX Toolset
@@ -196,14 +197,14 @@ $Light = Join-Path $WixPath "light.exe"
 
 # Compile WiX source
 Write-Host "Compiling WiX source..." -ForegroundColor Yellow
-$WixObj = Join-Path $OutputDir "spacecat.wixobj"
+$WixObj = Join-Path $OutputDir "chatstronomy.wixobj"
 
 & $Candle `
     -dSourceDir="$InstallerDir" `
     -dIconDir="$ProjectRoot\assets\branding" `
     -dVersion="$Version" `
     -out "$WixObj" `
-    "$InstallerDir\spacecat.wxs" `
+    "$InstallerDir\chatstronomy.wxs" `
     -ext WixUIExtension `
     -ext WixUtilExtension
 
@@ -213,7 +214,7 @@ if ($LASTEXITCODE -ne 0) {
 
 # Link to create MSI
 Write-Host "Creating MSI package..." -ForegroundColor Yellow
-$MsiPath = Join-Path $OutputDir "SpaceCat-$Version-x64.msi"
+$MsiPath = Join-Path $OutputDir "Chatstronomy-$Version-x64.msi"
 
 & $Light `
     -out "$MsiPath" `
@@ -239,7 +240,7 @@ Write-Host "Location: $MsiPath" -ForegroundColor Cyan
 $FileInfo = Get-Item $MsiPath
 Write-Host "Size: $([math]::Round($FileInfo.Length / 1MB, 2)) MB" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "To install SpaceCat, run:" -ForegroundColor Yellow
+Write-Host "To install Chatstronomy, run:" -ForegroundColor Yellow
 Write-Host "  msiexec /i `"$MsiPath`"" -ForegroundColor White
 Write-Host ""
 Write-Host "For silent installation with service:" -ForegroundColor Yellow

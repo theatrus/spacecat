@@ -1,22 +1,22 @@
-//! Versioned messages exchanged between N.I.N.A. plugins and a SpaceCat hub.
+//! Versioned messages exchanged between N.I.N.A. plugins and a Chatstronomy hub.
 
 use crate::source::RigCapabilities;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// The first SpaceCat Direct protocol version.
+/// The first Chatstronomy Direct protocol version.
 pub const PROTOCOL_VERSION: u16 = 1;
 
 /// Prefix for the per-installation Windows named pipe used by local plugins.
 ///
 /// Windows APIs expect the pipe name without the `\\.\pipe\` prefix when
 /// opening a `NamedPipeClientStream`.
-pub const LOCAL_PIPE_PREFIX: &str = "spacecat-agent-v1";
+pub const LOCAL_PIPE_PREFIX: &str = "chatstronomy-agent-v1";
 
-/// Default route exposed by a remote SpaceCat hub for Direct plugin clients.
+/// Default route exposed by a remote Chatstronomy hub for Direct plugin clients.
 pub const DIRECT_WEBSOCKET_PATH: &str = "/v1/direct";
 
-/// Derive the local pipe name shared by SpaceCat and every N.I.N.A. instance
+/// Derive the local pipe name shared by Chatstronomy and every N.I.N.A. instance
 /// in the same plugin installation. Including the node ID prevents collisions
 /// between different Windows users or installations on one system.
 pub fn local_pipe_name(node_id: Uuid) -> String {
@@ -26,7 +26,7 @@ pub fn local_pipe_name(node_id: Uuid) -> String {
 /// Stable identity assigned to one N.I.N.A. profile on one host.
 ///
 /// Profile GUIDs are only assumed to be unique within a node. Combining the
-/// plugin's persistent node ID with the profile ID allows one SpaceCat hub to
+/// plugin's persistent node ID with the profile ID allows one Chatstronomy hub to
 /// distinguish rigs on different systems without using addresses or ports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct RigId {
@@ -40,7 +40,7 @@ impl std::fmt::Display for RigId {
     }
 }
 
-/// First message sent by each loaded SpaceCat N.I.N.A. plugin instance.
+/// First message sent by each loaded Chatstronomy N.I.N.A. plugin instance.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClientHello {
     pub protocol_version: u16,
@@ -54,7 +54,7 @@ pub struct ClientHello {
     pub capabilities: RigCapabilities,
 }
 
-/// Registration response returned by the SpaceCat hub.
+/// Registration response returned by the Chatstronomy hub.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentHello {
     pub protocol_version: u16,
@@ -141,7 +141,7 @@ mod tests {
 
         assert_eq!(
             local_pipe_name(node_id),
-            "spacecat-agent-v1-363db0289d794fdc89401b1ff52b9e8d"
+            "chatstronomy-agent-v1-363db0289d794fdc89401b1ff52b9e8d"
         );
     }
 }

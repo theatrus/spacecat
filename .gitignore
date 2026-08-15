@@ -1,7 +1,7 @@
 /target
 config.json
 config.*.json
-spacecat-state.json
+chatstronomy-state.json
 *.log
 /installer/output
 /artifacts

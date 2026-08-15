@@ -4,7 +4,7 @@
 //! remember the `(channel_id, message_id)` pair so subsequent poll cycles
 //! can edit the same message in place rather than spamming the channel
 //! with fresh posts. Stored at `chat.discord_bot.state_file` (default
-//! `./spacecat-state.json`).
+//! `./chatstronomy-state.json`).
 //!
 //! Atomic writes: serialize to a tempfile alongside the target, then
 //! rename in place. A crash during write leaves the previous valid file
@@ -77,7 +77,7 @@ mod tests {
     fn tmp_path(suffix: &str) -> PathBuf {
         let mut p = env::temp_dir();
         p.push(format!(
-            "spacecat-status-{}-{}.json",
+            "chatstronomy-status-{}-{}.json",
             std::process::id(),
             suffix
         ));

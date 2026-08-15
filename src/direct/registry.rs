@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use thiserror::Error;
 use uuid::Uuid;
 
-/// Trusted transport selected by the SpaceCat listener, not claimed by the
+/// Trusted transport selected by the Chatstronomy listener, not claimed by the
 /// plugin. Local is the default deployment; Remote is an explicit WSS option.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DirectConnectionMode {
@@ -52,7 +52,7 @@ pub enum RegistrationError {
     },
 }
 
-/// All native N.I.N.A. instances connected to one SpaceCat hub.
+/// All native N.I.N.A. instances connected to one Chatstronomy hub.
 ///
 /// A profile has one authoritative process at a time. Different profiles may
 /// connect concurrently from the same or different nodes, and reconnecting the

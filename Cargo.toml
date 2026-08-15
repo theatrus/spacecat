@@ -1,12 +1,12 @@
 [package]
-name = "spacecat"
+name = "chatstronomy"
 version = "0.3.0"
 edition = "2024"
 license = "Apache-2.0"
 authors = ["Yann Ramin"]
-description = "SpaceCat - Astronomical Observation System for telescope automation and monitoring"
-repository = "https://github.com/theatrus/spacecat"
-keywords = ["astronomy", "telescope", "automation", "spacecat"]
+description = "Chatstronomy - pipe N.I.N.A. observatory status and commands into Discord and Matrix"
+repository = "https://github.com/theatrus/chatstronomy"
+keywords = ["astronomy", "telescope", "automation", "chatstronomy"]
 categories = ["science", "api-bindings"]
 
 [dependencies]

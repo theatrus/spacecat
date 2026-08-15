@@ -37,7 +37,7 @@ impl MatrixChatService {
         client
             .matrix_auth()
             .login_username(username, password)
-            .initial_device_display_name("SpaceCat")
+            .initial_device_display_name("Chatstronomy")
             .await?;
         println!("Successfully logged into Matrix as {}", username);
 

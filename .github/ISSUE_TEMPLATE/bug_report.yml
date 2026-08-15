@@ -1,5 +1,5 @@
 name: Bug Report
-description: Report a bug or issue with SpaceCat
+description: Report a bug or issue with Chatstronomy
 title: "[Bug]: "
 labels: ["bug"]
 body:
@@ -11,8 +11,8 @@ body:
   - type: input
     id: version
     attributes:
-      label: SpaceCat Version
-      description: What version of SpaceCat are you running?
+      label: Chatstronomy Version
+      description: What version of Chatstronomy are you running?
       placeholder: e.g., v1.0.0
     validations:
       required: true

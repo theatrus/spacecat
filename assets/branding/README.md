@@ -1,15 +1,14 @@
-# SpaceCat icons
+# Chatstronomy logo
 
-- `spacecat-app-icon.png` is the transparent high-resolution application mark.
-- `spacecat.ico` contains the Windows application sizes from 16 through 256 px.
-- `spacecat-nina-plugin-icon.png` is the transparent plugin master with a
-  pipeline endpoint.
-- `spacecat-nina-plugin-featured.png` is the 512 px registry image used by
-  N.I.N.A.
+- `chatstronomy-icon.png` is the single transparent high-resolution master.
+- `chatstronomy-featured.png` is a 512 px derivative for the N.I.N.A. registry.
+- `chatstronomy.ico` contains Windows sizes from 16 through 256 px.
 
-The marks were generated with OpenAI's built-in image generation workflow and
-then converted from a flat magenta chroma-key background to alpha. The visual
-brief is a compact, vector-friendly Unix `cat |` pun: a terminal-geometric cat,
-a dominant shell pipe, and a restrained orbit and star. The N.I.N.A. variant
-keeps the same mark and adds a small pipeline endpoint without text, an
-electrical plug, or a puzzle-piece symbol.
+Every surface uses the same artwork. There is no separate application or plugin
+variant.
+
+The logo was generated with OpenAI's built-in image generation workflow and
+converted from a flat magenta chroma-key background to alpha. It presents the
+product as a literal Unix pipeline: a space cat, `|`, and a chat bubble. The
+name carries the same bilingual joke: *chat* means both the messaging function
+in English and “cat” in French.

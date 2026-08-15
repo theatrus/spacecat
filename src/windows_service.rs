@@ -1,4 +1,4 @@
-//! Windows service implementation for SpaceCat
+//! Windows service implementation for Chatstronomy
 //!
 //! This module provides Windows service functionality when compiled on Windows platforms.
 
@@ -23,10 +23,10 @@ mod implementation {
     use crate::service_wrapper::ServiceWrapper;
 
     // Service configuration constants
-    const SERVICE_NAME: &str = "SpaceCat";
-    const SERVICE_DISPLAY_NAME: &str = "SpaceCat Chat Updater";
+    const SERVICE_NAME: &str = "Chatstronomy";
+    const SERVICE_DISPLAY_NAME: &str = "Chatstronomy Chat Updater";
     const SERVICE_DESCRIPTION: &str =
-        "SpaceCat astronomical observation system chat updater service for Discord and Matrix";
+        "Chatstronomy astronomical observation system chat updater service for Discord and Matrix";
 
     pub fn install_service() -> Result<(), Box<dyn std::error::Error>> {
         let manager_access = ServiceManagerAccess::CONNECT | ServiceManagerAccess::CREATE_SERVICE;
@@ -54,7 +54,7 @@ mod implementation {
 
         println!("Service '{}' installed successfully.", SERVICE_NAME);
         println!("Service will start automatically on system boot.");
-        println!("To start the service now, run: spacecat windows-service start");
+        println!("To start the service now, run: chatstronomy windows-service start");
 
         Ok(())
     }
@@ -254,12 +254,12 @@ mod implementation {
     -> Result<std::path::PathBuf, Box<dyn std::error::Error + Send + Sync>> {
         use std::path::PathBuf;
 
-        // Use %ProgramData%\SpaceCat\config.json for service installations
+        // Use %ProgramData%\Chatstronomy\config.json for service installations
         let program_data =
             std::env::var("ProgramData").unwrap_or_else(|_| "C:\\ProgramData".to_string());
 
         let mut config_path = PathBuf::from(program_data);
-        config_path.push("SpaceCat");
+        config_path.push("Chatstronomy");
         config_path.push("config.json");
 
         Ok(config_path)

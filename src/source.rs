@@ -1,12 +1,12 @@
 //! Observatory data-source abstraction.
 //!
-//! SpaceCat supports two ways to communicate with N.I.N.A.:
+//! Chatstronomy supports two ways to communicate with N.I.N.A.:
 //! [`RigSourceKind::AdvancedApi`] uses the existing Advanced API HTTP plugin,
-//! while [`RigSourceKind::NinaDirect`] is reserved for the native SpaceCat
+//! while [`RigSourceKind::NinaDirect`] is reserved for the native Chatstronomy
 //! N.I.N.A. plugin transport.  Consumers such as the chat updater and Discord
 //! command handlers depend on [`RigSource`] rather than either transport.
 
-use crate::api::{ApiError, CommandResponse, SpaceCatApiClient};
+use crate::api::{ApiError, ChatstronomyApiClient, CommandResponse};
 use crate::autofocus::AutofocusResponse;
 use crate::config::ApiConfig;
 use crate::events::EventHistoryResponse;
@@ -22,17 +22,17 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use thiserror::Error;
 
-/// How a rig supplies N.I.N.A. data to SpaceCat.
+/// How a rig supplies N.I.N.A. data to Chatstronomy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RigSourceKind {
     /// Poll the separately installed N.I.N.A. Advanced API plugin over HTTP.
     AdvancedApi,
-    /// Receive events and execute commands through the SpaceCat N.I.N.A. plugin.
+    /// Receive events and execute commands through the Chatstronomy N.I.N.A. plugin.
     NinaDirect,
 }
 
-/// Features a source can expose to the source-neutral SpaceCat runtime.
+/// Features a source can expose to the source-neutral Chatstronomy runtime.
 ///
 /// Direct mode will negotiate these flags with the N.I.N.A. plugin. Keeping
 /// them explicit lets chat commands report an unsupported feature instead of
@@ -95,9 +95,9 @@ pub enum RigSourceError {
 pub type RigSourceResult<T> = Result<T, RigSourceError>;
 pub type SharedRigSource = Arc<dyn RigSource>;
 
-/// Source-neutral read and command surface used by SpaceCat's runtime.
+/// Source-neutral read and command surface used by Chatstronomy's runtime.
 ///
-/// This intentionally describes the capabilities SpaceCat consumes rather
+/// This intentionally describes the capabilities Chatstronomy consumes rather
 /// than mirroring a transport. The direct N.I.N.A. implementation can satisfy
 /// the same operations from cached snapshots and request/response messages.
 #[async_trait]
@@ -126,21 +126,21 @@ pub trait RigSource: Send + Sync {
 /// Existing Advanced API behavior exposed through [`RigSource`].
 #[derive(Debug, Clone)]
 pub struct AdvancedApiSource {
-    client: SpaceCatApiClient,
+    client: ChatstronomyApiClient,
 }
 
 impl AdvancedApiSource {
     pub fn new(config: ApiConfig) -> Result<Self, ApiError> {
         Ok(Self {
-            client: SpaceCatApiClient::new(config)?,
+            client: ChatstronomyApiClient::new(config)?,
         })
     }
 
-    pub fn from_client(client: SpaceCatApiClient) -> Self {
+    pub fn from_client(client: ChatstronomyApiClient) -> Self {
         Self { client }
     }
 
-    pub fn client(&self) -> &SpaceCatApiClient {
+    pub fn client(&self) -> &ChatstronomyApiClient {
         &self.client
     }
 }

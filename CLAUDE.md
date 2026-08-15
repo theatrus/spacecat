@@ -13,7 +13,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Architecture
 
-SpaceCat is a Rust-based astronomical observation system that interfaces with
+Chatstronomy is a Rust-based astronomical observation system that interfaces with
 NINA Advanced API for monitoring and posting to multiple chat services (Discord,
 Matrix). The system provides real-time event tracking, image history management,
 and sequence automation.
@@ -22,7 +22,7 @@ and sequence automation.
 
 - **`src/main.rs`**: Main application with CLI commands for API-only operations: sequence parsing, event monitoring, image analysis, mount information, autofocus data, and real-time polling
 - **`src/config.rs`**: JSON-based configuration system with validation and error handling
-- **`src/api.rs`**: HTTP client with generic retry logic for SpaceCat API endpoints
+- **`src/api.rs`**: HTTP client with generic retry logic for Chatstronomy API endpoints
 - **`src/events.rs`**: Event history structures and analysis methods
 - **`src/images.rs`**: Image metadata structures and session statistics
 - **`src/mount.rs`**: Mount information structures, status parsing, and position tracking
@@ -63,7 +63,7 @@ Uses `config.json` for API and chat service settings:
   "logging": {
     "level": "info",
     "enable_file_logging": false,
-    "log_file": "spacecat.log"
+    "log_file": "chatstronomy.log"
   },
   "chat": {
     "discord": {
@@ -72,7 +72,7 @@ Uses `config.json` for API and chat service settings:
     },
     "matrix": {
       "homeserver_url": "https://matrix.example.com",
-      "username": "@spacecat:matrix.example.com",
+      "username": "@chatstronomy:matrix.example.com",
       "password": "your_matrix_password",
       "room_id": "!roomid:matrix.example.com",
       "enabled": false
@@ -155,7 +155,7 @@ Uses `config.json` for API and chat service settings:
   - Automatic startup with Windows boot
   - Background execution without user login required
   - Windows Event Log integration for centralized logging
-  - System-wide configuration storage (`C:\ProgramData\SpaceCat\config.json`)
+  - System-wide configuration storage (`C:\ProgramData\Chatstronomy\config.json`)
   - Graceful shutdown handling with proper service status reporting
   - Platform-specific compilation (automatically available on Windows)
   - Compatible with Windows 10/11 and Windows Server 2016+
@@ -210,9 +210,9 @@ The system successfully demonstrates live telescope operation monitoring with 90
 ### Release Automation
 Automated binary building on GitHub tag creation (`v*.*.*`):
 
-- **Linux x86_64**: `spacecat-linux-x86_64` - Standard Linux systems
-- **Linux aarch64**: `spacecat-linux-aarch64` - ARM64 systems (Raspberry Pi 4, etc.)
-- **Windows x64**: `spacecat-windows-x64.exe` - 64-bit Windows systems
+- **Linux x86_64**: `chatstronomy-linux-x86_64` - Standard Linux systems
+- **Linux aarch64**: `chatstronomy-linux-aarch64` - ARM64 systems (Raspberry Pi 4, etc.)
+- **Windows x64**: `chatstronomy-windows-x64.exe` - 64-bit Windows systems
 
 Release process:
 1. Update version in `Cargo.toml`
@@ -236,8 +236,8 @@ Release process:
 - Added global `--config` flag to specify custom configuration file paths
 - All commands now accept a custom config path via `-c` or `--config`
 - Default configuration file remains `config.json` in the current directory
-- Windows service still uses `C:\ProgramData\SpaceCat\config.json` for service mode
-- Example usage: `spacecat --config production.json events`
+- Windows service still uses `C:\ProgramData\Chatstronomy\config.json` for service mode
+- Example usage: `chatstronomy --config production.json events`
 
 ### Multi-Chat Service Support
 - Added abstraction layer for multiple chat services

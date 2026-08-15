@@ -1,9 +1,9 @@
-//! Service wrapper abstraction for running SpaceCat as CLI or background service
+//! Service wrapper abstraction for running Chatstronomy as CLI or background service
 
 use crate::chat::{ChatServiceManager, DiscordChatService, MatrixChatService, run_bot};
 use crate::chat_updater::ChatUpdater;
 use crate::config::{Config, TelescopeConfig};
-use crate::error::{ChatError, ServiceError, ServiceResult, SpaceCatError};
+use crate::error::{ChatError, ChatstronomyError, ServiceError, ServiceResult};
 use crate::source::{AdvancedApiSource, SharedRigSource};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -73,7 +73,7 @@ impl ServiceWrapper {
 /// the bot task alive for the life of the process; drop it to detach.
 pub async fn build_shared_chat_manager(
     config: &Config,
-) -> Result<(ChatServiceManager, Option<tokio::task::JoinHandle<()>>), SpaceCatError> {
+) -> Result<(ChatServiceManager, Option<tokio::task::JoinHandle<()>>), ChatstronomyError> {
     let chat = &config.chat;
     let mut manager = ChatServiceManager::new();
     let mut bot_join: Option<tokio::task::JoinHandle<()>> = None;
@@ -106,7 +106,7 @@ pub async fn build_shared_chat_manager(
         )
         .await
         .map_err(|e| {
-            SpaceCatError::Chat(ChatError::Initialization {
+            ChatstronomyError::Chat(ChatError::Initialization {
                 service_name: "Matrix".to_string(),
                 reason: e.to_string(),
             })
@@ -131,7 +131,7 @@ pub async fn build_shared_chat_manager(
         let mut channel_to_telescope = HashMap::new();
         for telescope in &config.telescopes {
             let source: SharedRigSource = Arc::new(
-                AdvancedApiSource::new(telescope.api.clone()).map_err(SpaceCatError::Api)?,
+                AdvancedApiSource::new(telescope.api.clone()).map_err(ChatstronomyError::Api)?,
             );
             rig_sources.insert(telescope.name.clone(), source);
             if let Some(channel_id) = telescope.chat.discord_channel_id {
@@ -148,7 +148,7 @@ pub async fn build_shared_chat_manager(
 
         let (service, join) = run_bot(bot_config, rig_sources, channel_to_telescope)
             .await
-            .map_err(SpaceCatError::Chat)?;
+            .map_err(ChatstronomyError::Chat)?;
         manager.add_service(Box::new(service));
         bot_join = Some(join);
     }
@@ -164,9 +164,9 @@ pub async fn build_shared_chat_manager(
 pub async fn build_chat_updater(
     telescope: TelescopeConfig,
     chat_manager: Arc<ChatServiceManager>,
-) -> Result<ChatUpdater, SpaceCatError> {
+) -> Result<ChatUpdater, ChatstronomyError> {
     let source: SharedRigSource =
-        Arc::new(AdvancedApiSource::new(telescope.api.clone()).map_err(SpaceCatError::Api)?);
+        Arc::new(AdvancedApiSource::new(telescope.api.clone()).map_err(ChatstronomyError::Api)?);
     let target = telescope.chat.to_chat_target();
     Ok(
         ChatUpdater::new(source, telescope.name.clone(), target, chat_manager)

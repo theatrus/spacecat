@@ -1,4 +1,4 @@
-# SpaceCat Release Process
+# Chatstronomy Release Process
 
 ## Creating a Release
 
@@ -12,39 +12,39 @@
 
 Each release includes:
 
-- **spacecat-linux-x86_64**: Linux binary for x86_64 systems
-- **spacecat-linux-aarch64**: Linux binary for ARM64 systems (Raspberry Pi 4, etc.)
-- **spacecat-windows-x64.exe**: Windows binary for 64-bit systems
+- **chatstronomy-linux-x86_64**: Linux binary for x86_64 systems
+- **chatstronomy-linux-aarch64**: Linux binary for ARM64 systems (Raspberry Pi 4, etc.)
+- **chatstronomy-windows-x64.exe**: Windows binary for 64-bit systems
 
 ## Installation
 
 ### Linux
 ```bash
 # Download the appropriate binary for your architecture
-curl -L -o spacecat https://github.com/USERNAME/spacecat/releases/latest/download/spacecat-linux-x86_64
-chmod +x spacecat
-sudo mv spacecat /usr/local/bin/
+curl -L -o chatstronomy https://github.com/USERNAME/chatstronomy/releases/latest/download/chatstronomy-linux-x86_64
+chmod +x chatstronomy
+sudo mv chatstronomy /usr/local/bin/
 ```
 
 ### Windows
-1. Download `spacecat-windows-x64.exe`
-2. Rename to `spacecat.exe`
+1. Download `chatstronomy-windows-x64.exe`
+2. Rename to `chatstronomy.exe`
 3. Add to your PATH or run from the download directory
 
 ## Usage
 
 ```bash
 # Show help
-spacecat --help
+chatstronomy --help
 
 # Create sample config
 cp config.example.json config.json
 # Edit config.json with your API settings
 
 # Run basic commands
-spacecat sequence
-spacecat events
-spacecat discord-updater
+chatstronomy sequence
+chatstronomy events
+chatstronomy discord-updater
 ```
 
 See [CLAUDE.md](../CLAUDE.md) for detailed documentation.
