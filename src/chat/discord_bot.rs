@@ -67,11 +67,51 @@ impl DiscordBotService {
         }
     }
 
-    fn resolve_channel(&self, target: &ChatTarget) -> Option<serenity::ChannelId> {
-        target
-            .discord_channel_id
-            .or(self.default_channel_id)
-            .map(serenity::ChannelId::new)
+    /// Every channel this target posts to, falling back to the bot's default
+    /// channel when the target names none.
+    fn resolve_channels(&self, target: &ChatTarget) -> Vec<serenity::ChannelId> {
+        let channels = target.all_discord_channels();
+        if channels.is_empty() {
+            return self
+                .default_channel_id
+                .into_iter()
+                .map(serenity::ChannelId::new)
+                .collect();
+        }
+        channels.into_iter().map(serenity::ChannelId::new).collect()
+    }
+
+    /// Send one prepared payload to every destination. A single broken
+    /// channel is logged and skipped; the send fails only when every
+    /// destination failed.
+    async fn fan_out(
+        &self,
+        channels: Vec<serenity::ChannelId>,
+        build: impl Fn() -> CreateMessage,
+    ) -> Result<(), ChatError> {
+        if channels.is_empty() {
+            return Err(ChatError::Discord {
+                message: "No Discord channel available (no default and no telescope override)"
+                    .to_string(),
+            });
+        }
+        let mut delivered = 0;
+        let mut last_error = None;
+        for channel in channels {
+            match channel.send_message(&self.http, build()).await {
+                Ok(_) => delivered += 1,
+                Err(e) => {
+                    eprintln!("Warning: post to channel {channel} failed: {e}");
+                    last_error = Some(e);
+                }
+            }
+        }
+        match (delivered, last_error) {
+            (0, Some(e)) => Err(ChatError::Discord {
+                message: e.to_string(),
+            }),
+            _ => Ok(()),
+        }
     }
 
     fn build_embed(message: &ChatMessage) -> serenity::CreateEmbed {
@@ -101,20 +141,10 @@ impl ChatService for DiscordBotService {
         message: &ChatMessage,
         target: &ChatTarget,
     ) -> Result<(), ChatError> {
-        let channel = self
-            .resolve_channel(target)
-            .ok_or_else(|| ChatError::Discord {
-                message: "No Discord channel available (no default and no telescope override)"
-                    .to_string(),
-            })?;
-        let payload = CreateMessage::new().embed(Self::build_embed(message));
-        channel
-            .send_message(&self.http, payload)
-            .await
-            .map_err(|e| ChatError::Discord {
-                message: e.to_string(),
-            })?;
-        Ok(())
+        self.fan_out(self.resolve_channels(target), || {
+            CreateMessage::new().embed(Self::build_embed(message))
+        })
+        .await
     }
 
     async fn send_message_with_image(
@@ -124,23 +154,12 @@ impl ChatService for DiscordBotService {
         image_data: &[u8],
         filename: &str,
     ) -> Result<(), ChatError> {
-        let channel = self
-            .resolve_channel(target)
-            .ok_or_else(|| ChatError::Discord {
-                message: "No Discord channel available (no default and no telescope override)"
-                    .to_string(),
-            })?;
-        let attachment = CreateAttachment::bytes(image_data.to_vec(), filename);
-        let payload = CreateMessage::new()
-            .embed(Self::build_embed(message))
-            .add_file(attachment);
-        channel
-            .send_message(&self.http, payload)
-            .await
-            .map_err(|e| ChatError::Discord {
-                message: e.to_string(),
-            })?;
-        Ok(())
+        self.fan_out(self.resolve_channels(target), || {
+            CreateMessage::new()
+                .embed(Self::build_embed(message))
+                .add_file(CreateAttachment::bytes(image_data.to_vec(), filename))
+        })
+        .await
     }
 
     async fn send_message_with_attachments(
@@ -152,26 +171,17 @@ impl ChatService for DiscordBotService {
         if attachments.is_empty() {
             return self.send_message(message, target).await;
         }
-        let channel = self
-            .resolve_channel(target)
-            .ok_or_else(|| ChatError::Discord {
-                message: "No Discord channel available (no default and no telescope override)"
-                    .to_string(),
-            })?;
-        let mut payload = CreateMessage::new().embed(Self::build_embed(message));
-        for attachment in attachments {
-            payload = payload.add_file(CreateAttachment::bytes(
-                attachment.data.clone(),
-                attachment.filename.clone(),
-            ));
-        }
-        channel
-            .send_message(&self.http, payload)
-            .await
-            .map_err(|e| ChatError::Discord {
-                message: e.to_string(),
-            })?;
-        Ok(())
+        self.fan_out(self.resolve_channels(target), || {
+            let mut payload = CreateMessage::new().embed(Self::build_embed(message));
+            for attachment in attachments {
+                payload = payload.add_file(CreateAttachment::bytes(
+                    attachment.data.clone(),
+                    attachment.filename.clone(),
+                ));
+            }
+            payload
+        })
+        .await
     }
 
     fn service_name(&self) -> &'static str {
@@ -198,16 +208,53 @@ impl ChatService for DiscordBotService {
         target: &ChatTarget,
         message: &ChatMessage,
     ) -> Result<(), ChatError> {
-        let channel = self
-            .resolve_channel(target)
-            .ok_or_else(|| ChatError::Discord {
+        let channels = self.resolve_channels(target);
+        if channels.is_empty() {
+            return Err(ChatError::Discord {
                 message: "No Discord channel available for status upsert".to_string(),
-            })?;
+            });
+        }
         let embed = Self::build_embed(message);
+        let mut delivered = 0;
+        let mut last_error = None;
+        for channel in channels {
+            match self
+                .upsert_status_in(telescope, channel, embed.clone())
+                .await
+            {
+                Ok(()) => delivered += 1,
+                Err(e) => {
+                    eprintln!("Warning: status upsert in channel {channel} failed: {e}");
+                    last_error = Some(e);
+                }
+            }
+        }
+        match (delivered, last_error) {
+            (0, Some(e)) => Err(e),
+            _ => Ok(()),
+        }
+    }
+}
 
+impl DiscordBotService {
+    /// Edit-or-post the status message for one telescope in one channel.
+    /// State is keyed per (telescope, channel) so every destination keeps
+    /// its own pinned message; the legacy telescope-only key is honored
+    /// when it points at this channel.
+    async fn upsert_status_in(
+        &self,
+        telescope: &str,
+        channel: serenity::ChannelId,
+        embed: serenity::CreateEmbed,
+    ) -> Result<(), ChatError> {
+        let key = format!("{telescope}@{}", channel.get());
         let existing = {
             let state = self.status_state.lock().await;
-            state.get(telescope)
+            state.get(&key).or_else(|| {
+                state
+                    .get(telescope)
+                    .filter(|m| m.channel_id == channel.get())
+            })
         };
 
         // Try to edit if we have a known message in the same channel.
@@ -250,7 +297,7 @@ impl ChatService for DiscordBotService {
 
         let mut state = self.status_state.lock().await;
         state.set(
-            telescope,
+            &key,
             StatusMessage {
                 channel_id: channel.get(),
                 message_id: posted.id.get(),

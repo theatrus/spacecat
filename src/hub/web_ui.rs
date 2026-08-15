@@ -87,6 +87,11 @@ pub const INDEX_HTML: &str = r#"<!doctype html>
   }
   .chip input { display: none; }
   .chip.on { color: var(--text); border-color: var(--accent); background: #1b2740; }
+  .chip .rm-route {
+    background: none; border: none; padding: 0 0 0 .15rem; color: var(--muted);
+    cursor: pointer; font-size: .8rem;
+  }
+  .chip .rm-route:hover { color: var(--bad); }
 
   .newrow { display: flex; gap: .5rem; margin-top: .9rem; align-items: center; }
   .newrow input { max-width: 240px; }
@@ -228,28 +233,35 @@ const POLICY_OPTIONS = [
   ["disabled", "Disabled"],
 ];
 
-function channelSelect(options, current) {
-  // Discord-sourced picker. A routed channel that no longer appears in the
-  // listing (deleted, or the bot lost visibility) stays selectable so the
-  // form round-trips faithfully.
+function addChannelSelect(options, used) {
+  // Discord-sourced picker of this guild's channels not already routed.
+  const free = options.channels.filter((c) => !used.includes(c.id));
   if (!options.channels.length) {
     const why = options.bot_configured === false
       ? "hub has no bot token"
       : "none visible to the bot — check its channel permissions";
-    return '<select class="f-channel" disabled><option value="">no channels (' +
+    return '<select class="f-addchan" disabled><option value="">no channels (' +
       why + ")</option></select>";
   }
-  let html = '<select class="f-channel"><option value="">— no channel (not posting) —</option>';
-  let seen = false;
-  for (const c of options.channels) {
-    const sel = c.id === current ? " selected" : "";
-    if (sel) seen = true;
-    html += '<option value="' + esc(c.id) + '"' + sel + ">#" + esc(c.name) + "</option>";
+  if (!free.length) {
+    return '<select class="f-addchan" disabled><option value="">all channels routed</option></select>';
   }
-  if (current && !seen) {
-    html += '<option value="' + esc(current) + '" selected>unknown channel (' + esc(current) + ")</option>";
+  return '<select class="f-addchan">' + free.map((c) =>
+    '<option value="' + esc(c.id) + '">#' + esc(c.name) + "</option>").join("") + "</select>";
+}
+
+function destinationList(t) {
+  if (!t.channels.length) {
+    return '<span class="hint">No destinations yet — this telescope is not posting anywhere.</span>';
   }
-  return html + "</select>";
+  return '<div class="chips">' + t.channels.map((route) => {
+    const name = route.channel_name ? '#' + esc(route.channel_name)
+                                    : "channel " + esc(route.channel_id);
+    const where = route.external ? ' <span class="hint">(' + esc(route.guild_name || "another server") + ")</span>" : "";
+    return '<span class="chip on">' + name + where +
+      ' <button type="button" class="rm-route" data-route="' + route.route_id +
+      '" title="Remove">✕</button></span>';
+  }).join("") + "</div>";
 }
 
 function roleChips(options, selected) {
@@ -280,11 +292,18 @@ async function renderTelescopes(guildId, el) {
     const policySelect = '<select class="f-policy">' + POLICY_OPTIONS.map(([v, label]) =>
       '<option value="' + v + '"' + (t.write_policy === v ? " selected" : "") + ">" +
       label + "</option>").join("") + "</select>";
+    const used = t.channels.map((route) => route.channel_id);
     html +=
       '<div class="sub telescope" data-id="' + t.id + '">' +
       '<div class="head"><b>' + esc(t.name) + "</b>" + connected + '<span class="grow"></span></div>' +
-      '<div class="fields">' +
-      '<div class="field"><label>Posts to channel</label>' + channelSelect(options, t.discord_channel_id) + "</div>" +
+      '<div class="field"><label>Destinations — every channel this telescope posts to</label>' +
+      destinationList(t) +
+      '<div class="row" style="margin-top:.5rem">' +
+      addChannelSelect(options, used) +
+      '<button class="b-addchan">Add channel</button>' +
+      '<button class="subtle b-share">Share to another server…</button>' +
+      "</div></div>" +
+      '<div class="fields" style="margin-top:.8rem">' +
       '<div class="field"><label>Image cooldown (seconds)</label>' +
       '<input class="f-cooldown" type="number" min="0" max="86400" value="' + t.image_cooldown_seconds + '"></div>' +
       '<div class="field"><label>Who can send commands</label>' + policySelect + "</div>" +
@@ -301,13 +320,57 @@ async function renderTelescopes(guildId, el) {
       '<button class="subtle danger b-delete">Delete</button>' +
       "</div></div>";
   }
+  if (data.shared_in.length) {
+    html += '<div class="field" style="margin-top:.9rem"><label>Shared into this server</label>';
+    for (const share of data.shared_in) {
+      const name = share.channel_name ? '#' + esc(share.channel_name)
+                                      : "channel " + esc(share.channel_id);
+      html += '<div class="row" style="margin-top:.3rem">' +
+        "<b>" + esc(share.telescope_name) + "</b>" +
+        '<span class="hint">from ' + esc(share.owning_guild_name || "another server") +
+        " → " + name + "</span>" +
+        '<span class="grow"></span>' +
+        '<button class="subtle danger b-unsub" data-telescope="' + share.telescope_id +
+        '" data-route="' + share.route_id + '">Remove</button></div>';
+    }
+    html += "</div>";
+  }
   html +=
     '<div class="newrow">' +
     '<input class="new-name" placeholder="telescope name (e.g. c925)">' +
     '<button class="b-create">Add telescope</button>' +
     '<span class="hint">One per N.I.N.A. profile or relay agent.</span></div>' +
+    '<div class="newrow">' +
+    '<input class="share-code" placeholder="share code (cssh_…)">' +
+    addChannelSelect(options, []).replace("f-addchan", "sub-channel") +
+    '<button class="b-subscribe">Add shared telescope</button>' +
+    '<span class="hint">Subscribe a channel here to a telescope shared from another server.</span></div>' +
     '<div class="token-out"></div>';
   el.innerHTML = html;
+
+  el.querySelectorAll(".b-unsub").forEach((btn) => {
+    btn.onclick = async () => {
+      if (!confirm("Stop receiving this shared telescope's feed here?")) return;
+      try {
+        await api("/api/telescopes/" + btn.dataset.telescope + "/channels/" + btn.dataset.route,
+          { method: "DELETE" });
+        toast("Removed");
+        renderTelescopes(guildId, el);
+      } catch (e) { toast(e.message); }
+    };
+  });
+
+  el.querySelector(".b-subscribe").onclick = async () => {
+    const code = el.querySelector(".share-code").value.trim();
+    const channel = el.querySelector(".sub-channel").value;
+    if (!code || !channel) { toast("Enter a share code and pick a channel"); return; }
+    try {
+      const out = await api("/api/guilds/" + guildId + "/subscribe",
+        { method: "POST", body: JSON.stringify({ code, channel_id: channel }) });
+      toast("Subscribed to " + out.telescope_name);
+      renderTelescopes(guildId, el);
+    } catch (e) { toast(e.message); }
+  };
 
   el.querySelector(".b-create").onclick = async () => {
     const name = el.querySelector(".new-name").value.trim();
@@ -330,22 +393,53 @@ async function renderTelescopes(guildId, el) {
       box.onchange = () => box.closest(".chip").classList.toggle("on", box.checked);
     });
     row.querySelector(".b-save").onclick = async () => {
-      const channelBox = row.querySelector(".f-channel");
       const roles = [...row.querySelectorAll(".chip input:checked")].map((box) => box.value);
       const body = {
         image_cooldown_seconds: parseInt(row.querySelector(".f-cooldown").value, 10) || 0,
         write_policy: row.querySelector(".f-policy").value,
         allowed_role_ids: roles,
       };
-      // A disabled picker means the hub couldn't list channels; keep the
-      // existing routing rather than silently clearing it.
-      if (!channelBox.disabled) {
-        body.discord_channel_id = channelBox.value === "" ? null : channelBox.value;
-      }
       try {
         await api("/api/telescopes/" + id, { method: "PATCH", body: JSON.stringify(body) });
         toast("Saved");
         renderTelescopes(guildId, el);
+      } catch (e) { toast(e.message); }
+    };
+    row.querySelector(".b-addchan").onclick = async () => {
+      const box = row.querySelector(".f-addchan");
+      if (box.disabled || !box.value) return;
+      try {
+        await api("/api/telescopes/" + id + "/channels",
+          { method: "POST", body: JSON.stringify({ channel_id: box.value }) });
+        toast("Destination added");
+        renderTelescopes(guildId, el);
+      } catch (e) { toast(e.message); }
+    };
+    row.querySelectorAll(".rm-route").forEach((link) => {
+      link.onclick = async (ev) => {
+        ev.preventDefault();
+        try {
+          await api("/api/telescopes/" + id + "/channels/" + link.dataset.route,
+            { method: "DELETE" });
+          toast("Destination removed");
+          renderTelescopes(guildId, el);
+        } catch (e) { toast(e.message); }
+      };
+    });
+    row.querySelector(".b-share").onclick = async () => {
+      try {
+        const out = await api("/api/telescopes/" + id + "/share-code", { method: "POST" });
+        const box = el.querySelector(".token-out");
+        box.innerHTML =
+          '<div class="token-box">Share code (valid ' +
+          Math.round(out.expires_in_seconds / 86400) + " days, single use):<br><b>" +
+          esc(out.code) + '</b><br><button class="b-copy">Copy</button> ' +
+          '<span class="hint">Give this to a manager of the other server. They log in ' +
+          "here, open their server, and redeem it against one of their channels. " +
+          "Their server gets the feed and read commands; only your server can drive the scope.</span></div>";
+        box.querySelector(".b-copy").onclick = () => {
+          navigator.clipboard.writeText(out.code).then(() => toast("Copied"));
+        };
       } catch (e) { toast(e.message); }
     };
     row.querySelector(".b-delete").onclick = async () => {
@@ -413,10 +507,24 @@ mod tests {
     #[test]
     fn page_uses_pickers_not_id_inputs() {
         // Channels and roles are picked from Discord data, never typed.
-        assert!(INDEX_HTML.contains("f-channel"));
+        assert!(INDEX_HTML.contains("f-addchan"));
         assert!(INDEX_HTML.contains("chips"));
         assert!(!INDEX_HTML.contains("placeholder=\"channel id\""));
         assert!(!INDEX_HTML.contains("placeholder=\"role ids\""));
+    }
+
+    #[test]
+    fn page_has_multi_destination_flow() {
+        for needle in [
+            "Destinations",
+            "/channels",
+            "share-code",
+            "/subscribe",
+            "Shared into this server",
+            "rm-route",
+        ] {
+            assert!(INDEX_HTML.contains(needle), "missing {needle}");
+        }
     }
 
     #[test]
@@ -424,8 +532,6 @@ mod tests {
         // A hub without a bot token must say so, not just look broken.
         assert!(INDEX_HTML.contains("bot_configured"));
         assert!(INDEX_HTML.contains("without a Discord bot token"));
-        // And a disabled picker must not clear existing routing on save.
-        assert!(INDEX_HTML.contains("channelBox.disabled"));
     }
 
     #[test]

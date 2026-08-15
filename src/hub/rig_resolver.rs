@@ -177,14 +177,8 @@ mod tests {
         .unwrap();
         db.register_guild(100, "g", 1).unwrap();
         let telescope = db.create_telescope(100, "c925", 1).unwrap();
-        db.update_telescope(
-            telescope.id,
-            &TelescopeUpdate {
-                discord_channel_id: Some(Some(42)),
-                ..Default::default()
-            },
-        )
-        .unwrap();
+        db.add_channel_route(telescope.id, 100, 42, "obs", "g", 1)
+            .unwrap();
         let connections = Arc::new(RigConnections::default());
         let resolver = HubRigResolver::new(db.clone(), connections.clone());
         (db, connections, resolver, telescope.id)

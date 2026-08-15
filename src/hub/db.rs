@@ -153,6 +153,55 @@ const MIGRATIONS: &[&str] = &[
     CREATE INDEX idx_telescopes_guild ON telescopes(guild_id);
     CREATE UNIQUE INDEX idx_telescopes_channel_unique
         ON telescopes(discord_channel_id) WHERE discord_channel_id IS NOT NULL;",
+    // V8: one telescope, many destinations — including channels in other
+    // guilds (added by that guild's own manager via a share code). Routing
+    // moves from a column to the telescope_channels table; a channel still
+    // maps to exactly one telescope so slash commands stay unambiguous.
+    // telescope_shares holds single-use codes for cross-server subscribing.
+    "CREATE TABLE telescope_channels (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        telescope_id INTEGER NOT NULL REFERENCES telescopes(id) ON DELETE CASCADE,
+        guild_id INTEGER NOT NULL REFERENCES guilds(guild_id) ON DELETE CASCADE,
+        channel_id INTEGER NOT NULL UNIQUE,
+        channel_name TEXT NOT NULL DEFAULT '',
+        guild_name TEXT NOT NULL DEFAULT '',
+        created_by INTEGER NOT NULL,
+        created_at INTEGER NOT NULL
+    ) STRICT;
+    CREATE INDEX idx_telescope_channels_telescope
+        ON telescope_channels(telescope_id);
+    CREATE INDEX idx_telescope_channels_guild ON telescope_channels(guild_id);
+    INSERT INTO telescope_channels
+        (telescope_id, guild_id, channel_id, created_by, created_at)
+        SELECT id, guild_id, discord_channel_id, created_by, created_at
+        FROM telescopes WHERE discord_channel_id IS NOT NULL;
+    CREATE TABLE telescopes_v8 (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        guild_id INTEGER NOT NULL REFERENCES guilds(guild_id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        image_cooldown_seconds INTEGER NOT NULL DEFAULT 60,
+        write_policy TEXT NOT NULL DEFAULT 'admins'
+            CHECK (write_policy IN ('disabled', 'admins', 'roles')),
+        allowed_role_ids TEXT NOT NULL DEFAULT '[]',
+        created_by INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        UNIQUE (guild_id, name)
+    ) STRICT;
+    INSERT INTO telescopes_v8
+        SELECT id, guild_id, name, image_cooldown_seconds, write_policy,
+               allowed_role_ids, created_by, created_at
+        FROM telescopes;
+    DROP TABLE telescopes;
+    ALTER TABLE telescopes_v8 RENAME TO telescopes;
+    CREATE INDEX idx_telescopes_guild ON telescopes(guild_id);
+    CREATE TABLE telescope_shares (
+        code_hash TEXT PRIMARY KEY,
+        telescope_id INTEGER NOT NULL REFERENCES telescopes(id) ON DELETE CASCADE,
+        created_by INTEGER NOT NULL,
+        issued_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        consumed_at INTEGER
+    ) STRICT;",
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -350,10 +399,10 @@ mod tests {
     }
 
     #[test]
-    fn v7_rebuild_preserves_rows_and_changes_default() {
+    fn upgrade_from_v6_preserves_rows_and_migrates_routing() {
         // Build a V6-era database by hand, populate it, then run the full
         // migration chain over it. Foreign keys off, exactly as
-        // from_connection runs migrations — otherwise the rebuild's DROP
+        // from_connection runs migrations — otherwise the rebuilds' DROP
         // TABLE would cascade-delete the credential rows.
         let conn = Connection::open_in_memory().unwrap();
         conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
@@ -386,19 +435,28 @@ mod tests {
             MIGRATIONS.len()
         );
 
-        // Existing rows survive the rebuild with their data intact.
-        let (policy, channel, roles): (String, i64, String) = conn
+        // Existing rows survive the rebuilds with their data intact.
+        let (policy, roles): (String, String) = conn
             .query_row(
-                "SELECT write_policy, discord_channel_id, allowed_role_ids
-                 FROM telescopes WHERE name = 'c925'",
+                "SELECT write_policy, allowed_role_ids FROM telescopes WHERE name = 'c925'",
                 [],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .unwrap();
-        assert_eq!(
-            (policy.as_str(), channel, roles.as_str()),
-            ("roles", 42, "[7]")
-        );
+        assert_eq!((policy.as_str(), roles.as_str()), ("roles", "[7]"));
+
+        // V8 moved the routed channel into telescope_channels.
+        let (route_guild, route_channel): (i64, i64) = conn
+            .query_row(
+                "SELECT tc.guild_id, tc.channel_id FROM telescope_channels tc
+                 JOIN telescopes t ON t.id = tc.telescope_id
+                 WHERE t.name = 'c925'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((route_guild, route_channel), (100, 42));
+
         // The credential still points at the rebuilt row.
         let credentials: i64 = conn
             .query_row(
@@ -410,7 +468,7 @@ mod tests {
             .unwrap();
         assert_eq!(credentials, 1);
 
-        // New rows default to the admins policy.
+        // New rows default to the admins policy (V7).
         conn.execute(
             "INSERT INTO telescopes (guild_id, name, created_by, created_at)
              VALUES (100, 'esprit', 1, 0)",
@@ -425,9 +483,12 @@ mod tests {
             )
             .unwrap();
         assert_eq!(default_policy, "admins");
-        // The rebuilt unique channel index still enforces.
+
+        // A channel routes to exactly one telescope, still enforced (V8).
         let clash = conn.execute(
-            "UPDATE telescopes SET discord_channel_id = 42 WHERE name = 'esprit'",
+            "INSERT INTO telescope_channels
+                 (telescope_id, guild_id, channel_id, created_by, created_at)
+             VALUES (2, 100, 42, 1, 0)",
             [],
         );
         assert!(clash.is_err());
