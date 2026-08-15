@@ -35,10 +35,20 @@ One local runtime can therefore deliver to Discord and Matrix simultaneously.
 
 Local delivery configuration includes the runtime executable path, whether the
 plugin should start it with N.I.N.A., and whether a plugin-owned process should
-stop with N.I.N.A. These settings define lifecycle ownership without committing
-secrets to command-line arguments or a generated configuration file. A runtime
-controller receives the validated in-memory configuration and is the boundary for
-the future process/named-pipe implementation.
+stop with N.I.N.A. Advanced API polling also carries its explicit endpoint and a
+bounded polling interval; these source settings are not mixed into Discord or
+Matrix delivery. Native Direct uses the same runtime controller but replaces the
+HTTP polling source with the stable node-scoped Direct pipe.
+
+For a plugin-owned process, the controller creates a random, current-user-only
+bootstrap pipe before launching `chatstronomy plugin-runtime`. The command line
+contains only that non-secret pipe name and a log path. The validated source and
+delivery payload, including credentials, crosses the pipe once and is converted
+directly to the Rust runtime's in-memory configuration. The pipe then remains open
+for graceful shutdown. No credential-bearing command argument or temporary JSON
+file is created. If the user elects to leave the runtime running after N.I.N.A.
+exits, the process redirects output to its profile log and detaches from the
+control pipe safely.
 
 The hosted options store the HTTPS service URL and an opaque credential reference.
 Credential acquisition, refresh, revocation, and secret resolution belong to the
@@ -88,9 +98,11 @@ pipe. When Chatstronomy runs centrally, each plugin connects outward to its TLS
 WebSocket endpoint. The remote N.I.N.A. computers do not run Discord or Matrix
 bots and do not need an inbound listener or Advanced API.
 
-The Windows Chatstronomy executable may still be included in the plugin ZIP for the
-all-in-one local option. It remains possible to install and run the Rust
-application independently for Advanced API and non-Windows deployments.
+The Windows Chatstronomy rig-only executable is included under `runtime/` in the
+plugin ZIP for the all-in-one local option. It excludes the hosted web stack but
+includes Advanced API polling, Discord webhook/bot, Matrix, and the secure plugin
+runtime command. It remains possible to install and run the Rust application
+independently for Advanced API and non-Windows deployments.
 
 ### Hosted Chatstronomy service
 
@@ -112,12 +124,16 @@ Local is the simple all-in-one path for a single imaging computer:
 2. Leave **Connection mode** set to **Local**.
 3. Select Discord webhook, Discord app / bot, or Matrix-only delivery. Matrix can
    also be enabled alongside either Discord choice.
-4. The plugin ensures the bundled Chatstronomy runtime is running and connects to
-   it through the node-scoped Windows named pipe.
+4. In Advanced API polling mode, leave the endpoint at
+   `http://127.0.0.1:1888/` or enter the configured API address and choose the
+   polling interval.
+5. The plugin starts the bundled Chatstronomy runtime, transfers the in-memory
+   configuration over its bootstrap pipe, and supervises the owned process.
 
-Local requires no URL, pairing code, open port, or Advanced API installation.
-Chat credentials remain on that computer in Windows Credential Manager rather
-than normal profile JSON.
+Native Direct local mode requires no URL, pairing code, open port, or Advanced API
+installation. The initial working compatibility path continues to poll the
+separately installed Advanced API plugin. Chat credentials remain on that computer
+in Windows Credential Manager rather than normal profile JSON.
 
 ### Remote
 

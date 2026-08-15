@@ -13,7 +13,9 @@ how observatory data reaches Chatstronomy:
   approved commands through those mediators.
 - **Advanced API** — supervise/configure the Rust agent while it continues to
   use the separately installed Advanced API plugin. The N.I.N.A. plugin is not
-  required for existing headless Advanced API deployments.
+  required for existing headless Advanced API deployments. A plugin-owned local
+  runtime receives the API endpoint and polling interval as an explicit source
+  configuration.
 
 Both source modes feed the same source-neutral Rust runtime. The delivery mode
 decides where chat is owned:
@@ -51,6 +53,21 @@ Direct connection mode remains explicit:
 Remote mode never silently falls back to Local, preventing duplicate
 notifications or an unexpected second bot.
 
+## Local runtime handoff
+
+When **Start Chatstronomy with N.I.N.A.** is enabled, the plugin launches the
+bundled rig-only Windows runtime and transfers the validated source and delivery
+configuration over a random current-user-only named pipe. The process command
+line contains only the pipe name and a non-secret log path; webhook URLs, bot
+tokens, and Matrix passwords are never placed in arguments or a temporary JSON
+file. The same pipe carries graceful shutdown, while the opt-out setting allows
+the runtime to detach and continue independently.
+
+The working source in this runtime slice is `advanced_api_polling`, with a URL
+and 1–300 second interval. The source is tagged independently in the bootstrap
+protocol so native Direct can replace HTTP polling without changing the process
+or delivery lifecycle.
+
 ## Build
 
 The initial project targets N.I.N.A. 3.2 and .NET 8:
@@ -62,9 +79,9 @@ dotnet run --project nina-plugin/Chatstronomy.NINA.Tests/Chatstronomy.NINA.Tests
 
 ## Package and registry manifest
 
-The package script builds the plugin, archives only the Chatstronomy assembly, and
-generates a N.I.N.A.-compatible beta manifest with the archive's SHA-256
-checksum:
+The package script builds the plugin and the rig-only Rust runtime, places the
+runtime under `runtime/chatstronomy.exe`, and generates a N.I.N.A.-compatible beta
+manifest with the archive's SHA-256 checksum:
 
 ```powershell
 ./nina-plugin/build-package.ps1 -Version 0.1.0.0
@@ -93,11 +110,9 @@ Start menu shortcut, and Add/Remove Programs entry all share the same logo
 artwork. Windows surfaces use the multi-resolution
 `assets/branding/chatstronomy.ico` derivative.
 
-The project now exports the N.I.N.A. plugin manifest, its options UI, validated
-delivery/runtime configuration records, Windows-protected local secret storage,
-and the shared multi-system identity handshake. Local process supervision is
-represented by an explicit runtime-controller boundary so its implementation can
-receive credentials over the secure local integration rather than command-line
-arguments or temporary JSON. Native event collection, named-pipe/WebSocket
-transports, hosted credential acquisition, and runtime supervision remain follow-up
-implementation stages.
+The project exports the N.I.N.A. plugin manifest, options UI, validated
+source/delivery configuration, Windows-protected local secret storage, supervised
+process controller, secure bootstrap pipe, bundled runtime, and shared
+multi-system identity handshake. Native event collection, the stable Direct data
+pipe, the plugin's remote WebSocket client, and hosted credential acquisition
+remain follow-up implementation stages.

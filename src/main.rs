@@ -119,6 +119,16 @@ enum Commands {
         #[arg(long)]
         init: bool,
     },
+    /// Run a plugin-owned local process configured over a secure named pipe
+    #[cfg(windows)]
+    PluginRuntime {
+        /// Random current-user-only bootstrap pipe created by the N.I.N.A. plugin
+        #[arg(long)]
+        bootstrap_pipe: String,
+        /// Non-secret runtime log destination
+        #[arg(long)]
+        log_file: String,
+    },
     /// Windows service management commands
     #[cfg(windows)]
     WindowsService {
@@ -147,6 +157,22 @@ enum WindowsServiceAction {
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
+
+    #[cfg(windows)]
+    if let Commands::PluginRuntime {
+        bootstrap_pipe,
+        log_file,
+    } = &cli.command
+    {
+        if let Err(error) =
+            chatstronomy::plugin_runtime::run_from_named_pipe(bootstrap_pipe, log_file).await
+        {
+            eprintln!("Plugin runtime failed: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
     println!(
         "{} {}",
         chatstronomy::version::WORDMARK,
@@ -250,6 +276,8 @@ async fn main() {
                 std::process::exit(1);
             }
         }
+        #[cfg(windows)]
+        Commands::PluginRuntime { .. } => unreachable!("plugin runtime handled before CLI banner"),
         #[cfg(windows)]
         Commands::WindowsService { action } => {
             if let Err(e) = cmd_windows_service(action, config_path).await {

@@ -195,7 +195,7 @@
                         <TextBlock FontSize="16" FontWeight="SemiBold" Text="Local Chatstronomy runtime" />
                         <TextBlock
                             Margin="0,3,0,10"
-                            Text="The plugin can own a bundled or separately installed Chatstronomy process. Credentials are handed to the runtime through the secure local integration, never command-line arguments."
+                            Text="The plugin can own a bundled or separately installed Chatstronomy process. Credentials are handed over a current-user-only named pipe, never command-line arguments or a temporary configuration file."
                             TextWrapping="Wrap" />
                         <Grid Margin="0,0,0,5">
                             <Grid.ColumnDefinitions>
@@ -220,7 +220,7 @@
                                 IsEnabled="{Binding StartLocalRuntime}"
                                 IsChecked="{Binding StopLocalRuntimeWithNina}" />
                         </Grid>
-                        <Grid>
+                        <Grid Margin="0,0,0,8">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="180" />
                                 <ColumnDefinition Width="*" />
@@ -230,6 +230,44 @@
                                 Grid.Column="1"
                                 Text="{Binding LocalRuntimePath, UpdateSourceTrigger=LostFocus}" />
                         </Grid>
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="180" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock VerticalAlignment="Center" Text="Advanced API URL" />
+                            <TextBox
+                                Grid.Column="1"
+                                Text="{Binding AdvancedApiBaseUrl, UpdateSourceTrigger=LostFocus}" />
+                        </Grid>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="180" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock VerticalAlignment="Center" Text="Polling interval (seconds)" />
+                            <TextBox
+                                Grid.Column="1"
+                                Text="{Binding PollingIntervalSeconds, UpdateSourceTrigger=LostFocus}" />
+                        </Grid>
+                        <TextBlock
+                            Margin="180,4,0,0"
+                            Text="Advanced API polling remains supported as an explicit source mode. The native Direct source will use the same supervised runtime without this HTTP endpoint."
+                            TextWrapping="Wrap" />
+                        <StackPanel
+                            Margin="0,12,0,0"
+                            HorizontalAlignment="Right"
+                            Orientation="Horizontal">
+                            <Button
+                                MinWidth="110"
+                                Margin="0,0,8,0"
+                                Command="{Binding StartRuntimeCommand}"
+                                Content="Start / restart" />
+                            <Button
+                                MinWidth="80"
+                                Command="{Binding StopRuntimeCommand}"
+                                Content="Stop" />
+                        </StackPanel>
                     </StackPanel>
                 </Border>
 

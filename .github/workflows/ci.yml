@@ -114,14 +114,24 @@ jobs:
         with:
           dotnet-version: 8.0.x
 
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build bundled plugin runtime
+        run: cargo build --release --no-default-features
+
       - name: Test plugin configuration
-        run: dotnet run --project nina-plugin/Chatstronomy.NINA.Tests/Chatstronomy.NINA.Tests.csproj --configuration Release
+        shell: pwsh
+        run: |
+          $env:CHATSTRONOMY_RUNTIME_EXE = "$PWD/target/release/chatstronomy.exe"
+          dotnet run --project nina-plugin/Chatstronomy.NINA.Tests/Chatstronomy.NINA.Tests.csproj --configuration Release
 
       - name: Build and package plugin
         shell: pwsh
         run: >-
           ./nina-plugin/build-package.ps1
           -Version 0.1.0.0
+          -RuntimePath target/release/chatstronomy.exe
           -InstallerUrl https://example.invalid/Chatstronomy.NINA.0.1.0.0.zip
           -FeaturedImageUrl https://example.invalid/chatstronomy-featured.png
 

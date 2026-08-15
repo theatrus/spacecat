@@ -24,8 +24,16 @@ internal sealed record MatrixDeliveryConfiguration(
     string Password,
     string DefaultRoomId);
 
+internal abstract record RuntimeSourceConfiguration;
+
+internal sealed record AdvancedApiPollingSourceConfiguration(
+    Uri BaseUrl,
+    uint PollIntervalSeconds)
+    : RuntimeSourceConfiguration;
+
 internal sealed record LocalRuntimeConfiguration(
     string ExecutablePath,
+    RuntimeSourceConfiguration Source,
     bool StartWithNina,
     bool StopWithNina);
 
@@ -106,8 +114,23 @@ internal static class ChatstronomyConfigurationValidator
         return uri;
     }
 
+    public static Uri RequireAdvancedApiUrl(string value)
+    {
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri)
+            || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
+            || string.IsNullOrWhiteSpace(uri.Host))
+        {
+            throw new InvalidOperationException(
+                "N.I.N.A. Advanced API URL must be an absolute http:// or https:// URL.");
+        }
+
+        return uri;
+    }
+
     public static LocalRuntimeConfiguration BuildLocalRuntime(
         string executablePath,
+        string advancedApiBaseUrl,
+        string pollingIntervalSeconds,
         bool startWithNina,
         bool stopWithNina)
     {
@@ -127,8 +150,18 @@ internal static class ChatstronomyConfigurationValidator
         // Only a process started by this plugin is eligible for teardown. This
         // prevents "Stop with N.I.N.A." from terminating a separately managed
         // Chatstronomy instance.
+        if (!uint.TryParse(pollingIntervalSeconds, out var interval)
+            || interval is < 1 or > 300)
+        {
+            throw new InvalidOperationException(
+                "Polling interval must be a whole number from 1 to 300 seconds.");
+        }
+
         return new LocalRuntimeConfiguration(
             path,
+            new AdvancedApiPollingSourceConfiguration(
+                RequireAdvancedApiUrl(advancedApiBaseUrl),
+                interval),
             startWithNina,
             startWithNina && stopWithNina);
     }

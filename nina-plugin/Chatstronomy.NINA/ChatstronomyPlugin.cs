@@ -1,12 +1,15 @@
 using System.ComponentModel;
 using System.ComponentModel.Composition;
 using System.Runtime.CompilerServices;
+using System.Windows.Input;
 using NINA.Plugin;
 using NINA.Plugin.Interfaces;
 using NINA.Profile.Interfaces;
 using Chatstronomy.NINA.Configuration;
 using Chatstronomy.NINA.Protocol;
+using Chatstronomy.NINA.Runtime;
 using Chatstronomy.NINA.Settings;
+using Chatstronomy.NINA.UI;
 
 namespace Chatstronomy.NINA;
 
@@ -23,6 +26,9 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
 {
     private readonly IProfileService profileService;
     private readonly ChatstronomySettings settings;
+    private readonly IChatstronomyRuntimeController runtimeController;
+    private readonly AsyncCommand startRuntimeCommand;
+    private readonly AsyncCommand stopRuntimeCommand;
     private readonly Guid nodeId = NodeIdentityStore.LoadOrCreate();
     private readonly Guid sessionId = Guid.NewGuid();
     private DirectConnectionSettings connectionSettings = DirectConnectionSettings.Local;
@@ -32,6 +38,13 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
     {
         this.profileService = profileService;
         settings = new ChatstronomySettings(profileService);
+        runtimeController = new ChatstronomyRuntimeController();
+        startRuntimeCommand = new AsyncCommand(
+            RestartLocalRuntimeAsync,
+            () => UsesLocalRuntime && IsConfigurationValid);
+        stopRuntimeCommand = new AsyncCommand(
+            StopLocalRuntimeAsync,
+            () => runtimeController.IsRunning);
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -227,6 +240,28 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
         }
     }
 
+    public string AdvancedApiBaseUrl
+    {
+        get => settings.AdvancedApiBaseUrl;
+        set
+        {
+            settings.AdvancedApiBaseUrl = value;
+            RaisePropertyChanged();
+            RefreshStatus();
+        }
+    }
+
+    public string PollingIntervalSeconds
+    {
+        get => settings.PollingIntervalSeconds;
+        set
+        {
+            settings.PollingIntervalSeconds = value;
+            RaisePropertyChanged();
+            RefreshStatus();
+        }
+    }
+
     public bool StartLocalRuntime
     {
         get => settings.StartLocalRuntime;
@@ -248,6 +283,10 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
             RefreshStatus();
         }
     }
+
+    public ICommand StartRuntimeCommand => startRuntimeCommand;
+
+    public ICommand StopRuntimeCommand => stopRuntimeCommand;
 
     public bool IsConfigurationValid
     {
@@ -274,9 +313,11 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
                 _ = BuildConfiguration();
                 return UseHostedService
                     ? "Ready to connect to Chatstronomy.com."
-                    : StartLocalRuntime
-                        ? "Configuration is ready to start the local Chatstronomy runtime."
-                        : "Configuration is ready; Chatstronomy must already be running locally.";
+                    : runtimeController.IsRunning
+                        ? runtimeController.StatusMessage
+                        : StartLocalRuntime
+                            ? $"Configuration is ready. {runtimeController.StatusMessage}"
+                            : "Configuration is ready; Chatstronomy must already be running locally.";
             }
             catch (InvalidOperationException exception)
             {
@@ -285,16 +326,30 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
         }
     }
 
-    public override Task Initialize()
+    public override async Task Initialize()
     {
         profileService.ProfileChanged += ProfileServiceProfileChanged;
-        return base.Initialize();
+        runtimeController.StateChanged += RuntimeControllerStateChanged;
+        await base.Initialize();
+        await StartConfiguredRuntimeAsync(CancellationToken.None);
     }
 
-    public override Task Teardown()
+    public override async Task Teardown()
     {
         profileService.ProfileChanged -= ProfileServiceProfileChanged;
-        return base.Teardown();
+        runtimeController.StateChanged -= RuntimeControllerStateChanged;
+        if (runtimeController.IsRunning)
+        {
+            if (StopLocalRuntimeWithNina)
+            {
+                await runtimeController.StopAsync(CancellationToken.None);
+            }
+            else
+            {
+                await runtimeController.DetachAsync(CancellationToken.None);
+            }
+        }
+        await base.Teardown();
     }
 
     internal ChatstronomyConfiguration BuildConfiguration()
@@ -325,6 +380,8 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
         var localRuntime = UsesLocalRuntime
             ? ChatstronomyConfigurationValidator.BuildLocalRuntime(
                 LocalRuntimePath,
+                AdvancedApiBaseUrl,
+                PollingIntervalSeconds,
                 StartLocalRuntime,
                 StopLocalRuntimeWithNina)
             : null;
@@ -389,8 +446,100 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
         RefreshAllProperties();
     }
 
-    private void ProfileServiceProfileChanged(object? sender, EventArgs args) =>
-        RefreshAllProperties();
+    private async void ProfileServiceProfileChanged(object? sender, EventArgs args)
+    {
+        try
+        {
+            if (runtimeController.IsRunning)
+            {
+                await runtimeController.StopAsync(CancellationToken.None);
+            }
+            RefreshAllProperties();
+            await StartConfiguredRuntimeAsync(CancellationToken.None);
+        }
+        catch
+        {
+            RefreshStatus();
+        }
+    }
+
+    private async Task StartConfiguredRuntimeAsync(CancellationToken cancellationToken)
+    {
+        if (!UsesLocalRuntime || !StartLocalRuntime)
+        {
+            RefreshStatus();
+            return;
+        }
+
+        try
+        {
+            var configuration = BuildConfiguration();
+            var profile = profileService.ActiveProfile;
+            await runtimeController.StartAsync(
+                configuration,
+                new LocalRuntimeIdentity(nodeId, profile.Id, profile.Name),
+                cancellationToken);
+        }
+        catch (InvalidOperationException)
+        {
+            // Incomplete settings are expected while the user is configuring
+            // the plugin. ConfigurationStatus displays the validation error.
+        }
+        catch
+        {
+            // Runtime controller failures are retained in StatusMessage and
+            // surfaced through ConfigurationStatus without failing N.I.N.A.
+        }
+        RefreshStatus();
+    }
+
+    private async Task RestartLocalRuntimeAsync()
+    {
+        if (runtimeController.IsRunning)
+        {
+            await runtimeController.StopAsync(CancellationToken.None);
+        }
+
+        try
+        {
+            var configuration = BuildConfiguration();
+            var profile = profileService.ActiveProfile;
+            await runtimeController.StartAsync(
+                configuration,
+                new LocalRuntimeIdentity(nodeId, profile.Id, profile.Name),
+                CancellationToken.None);
+        }
+        catch
+        {
+            // RuntimeController retains a user-facing status message.
+        }
+        RefreshStatus();
+    }
+
+    private async Task StopLocalRuntimeAsync()
+    {
+        try
+        {
+            await runtimeController.StopAsync(CancellationToken.None);
+        }
+        catch
+        {
+            // RuntimeController retains a user-facing status message when the
+            // controlled process cannot be stopped cleanly.
+        }
+        RefreshStatus();
+    }
+
+    private void RuntimeControllerStateChanged(object? sender, EventArgs args)
+    {
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher is not null && !dispatcher.CheckAccess())
+        {
+            dispatcher.BeginInvoke(new Action(RefreshStatus));
+            return;
+        }
+        RefreshStatus();
+    }
 
     private void RefreshAllProperties()
     {
@@ -415,6 +564,8 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
             nameof(HostedCredentialReference),
             nameof(HostedCredentialStatus),
             nameof(LocalRuntimePath),
+            nameof(AdvancedApiBaseUrl),
+            nameof(PollingIntervalSeconds),
             nameof(StartLocalRuntime),
             nameof(StopLocalRuntimeWithNina),
             nameof(IsConfigurationValid),
@@ -429,6 +580,8 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
     {
         RaisePropertyChanged(nameof(IsConfigurationValid));
         RaisePropertyChanged(nameof(ConfigurationStatus));
+        startRuntimeCommand.RaiseCanExecuteChanged();
+        stopRuntimeCommand.RaiseCanExecuteChanged();
     }
 
     private void RaisePropertyChanged([CallerMemberName] string? propertyName = null) =>

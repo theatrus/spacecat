@@ -11,5 +11,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Chatstronomy.NINA\Chatstronomy.NINA.csproj" />
+    <!-- Match the version carried by NINA.Plugin so the standalone harness
+         exercises the same JSON runtime N.I.N.A. loads in production. -->
+    <PackageReference Include="System.Text.Json" Version="9.0.5" />
   </ItemGroup>
 </Project>
