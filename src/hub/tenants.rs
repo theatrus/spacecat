@@ -14,6 +14,9 @@ pub const PAIRING_TOKEN_TTL_SECONDS: i64 = 3600;
 /// Prefix that makes a leaked pairing token recognizable in scans.
 pub const PAIRING_TOKEN_PREFIX: &str = "cspt_";
 
+/// Prefix for durable rig credentials minted by the pairing exchange.
+pub const RIG_CREDENTIAL_PREFIX: &str = "csrc_";
+
 #[derive(Debug, Clone)]
 pub struct GuildRow {
     pub guild_id: i64,
@@ -48,6 +51,25 @@ pub fn generate_pairing_token() -> String {
         Uuid::new_v4().simple(),
         Uuid::new_v4().simple()
     )
+}
+
+/// Generate a fresh rig credential. Sent to the rig once at pairing; only
+/// its hash is stored.
+pub fn generate_rig_credential() -> String {
+    format!(
+        "{RIG_CREDENTIAL_PREFIX}{}{}",
+        Uuid::new_v4().simple(),
+        Uuid::new_v4().simple()
+    )
+}
+
+/// A rig credential row as needed by the connection handshake.
+#[derive(Debug, Clone)]
+pub struct RigCredentialRow {
+    pub id: i64,
+    pub telescope_id: i64,
+    pub node_id: String,
+    pub profile_id: String,
 }
 
 /// Hash a token for storage or lookup.
@@ -272,6 +294,86 @@ impl Db {
             )
         })
     }
+
+    /// Mint and store a rig credential bound to a node and profile. Returns
+    /// the plaintext credential — the only time it exists on the hub.
+    pub fn create_rig_credential(
+        &self,
+        telescope_id: i64,
+        node_id: &str,
+        profile_id: &str,
+    ) -> Result<String, DbError> {
+        let credential = generate_rig_credential();
+        let now = unix_now();
+        self.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO rig_credentials
+                     (telescope_id, credential_hash, node_id, profile_id,
+                      paired_at, last_seen_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+                rusqlite::params![
+                    telescope_id,
+                    hash_token(&credential),
+                    node_id,
+                    profile_id,
+                    now
+                ],
+            )
+            .map(|_| ())
+        })?;
+        Ok(credential)
+    }
+
+    /// Look up an unrevoked rig credential by plaintext and stamp its last
+    /// use.
+    pub fn lookup_rig_credential(
+        &self,
+        credential: &str,
+    ) -> Result<Option<RigCredentialRow>, DbError> {
+        let hash = hash_token(credential);
+        let now = unix_now();
+        self.with_conn(|conn| {
+            let row: Option<RigCredentialRow> = conn
+                .query_row(
+                    "SELECT id, telescope_id, node_id, profile_id
+                     FROM rig_credentials
+                     WHERE credential_hash = ?1 AND revoked_at IS NULL",
+                    rusqlite::params![hash],
+                    |r| {
+                        Ok(RigCredentialRow {
+                            id: r.get(0)?,
+                            telescope_id: r.get(1)?,
+                            node_id: r.get(2)?,
+                            profile_id: r.get(3)?,
+                        })
+                    },
+                )
+                .map(Some)
+                .or_else(|e| match e {
+                    rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                    other => Err(other),
+                })?;
+            if let Some(found) = &row {
+                conn.execute(
+                    "UPDATE rig_credentials SET last_seen_at = ?1 WHERE id = ?2",
+                    rusqlite::params![now, found.id],
+                )?;
+            }
+            Ok(row)
+        })
+    }
+
+    /// Revoke every credential for a telescope. Live connections are handled
+    /// by the caller.
+    pub fn revoke_rig_credentials(&self, telescope_id: i64) -> Result<usize, DbError> {
+        self.with_conn(|conn| {
+            conn.execute(
+                "UPDATE rig_credentials SET revoked_at = ?1
+                 WHERE telescope_id = ?2 AND revoked_at IS NULL",
+                rusqlite::params![unix_now(), telescope_id],
+            )
+        })
+    }
 }
 
 #[cfg(test)]
@@ -419,6 +521,26 @@ mod tests {
         let live = db.issue_pairing_token(t.id, 1).unwrap();
         assert_eq!(db.revoke_pairing_tokens(t.id).unwrap(), 1);
         assert_eq!(db.consume_pairing_token(&live).unwrap(), None);
+    }
+
+    #[test]
+    fn rig_credential_lifecycle() {
+        let db = db_with_user();
+        db.register_guild(100, "g", 1).unwrap();
+        let t = db.create_telescope(100, "c925", 1).unwrap();
+        let credential = db
+            .create_rig_credential(t.id, "node-1", "profile-1")
+            .unwrap();
+        assert!(credential.starts_with(RIG_CREDENTIAL_PREFIX));
+
+        let row = db.lookup_rig_credential(&credential).unwrap().unwrap();
+        assert_eq!(row.telescope_id, t.id);
+        assert_eq!(row.node_id, "node-1");
+        assert_eq!(row.profile_id, "profile-1");
+        assert!(db.lookup_rig_credential("csrc_wrong").unwrap().is_none());
+
+        assert_eq!(db.revoke_rig_credentials(t.id).unwrap(), 1);
+        assert!(db.lookup_rig_credential(&credential).unwrap().is_none());
     }
 
     #[test]

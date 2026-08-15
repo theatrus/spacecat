@@ -33,6 +33,9 @@ pub struct TelescopeConfig {
     /// forever.
     #[serde(default)]
     pub reconnect: ReconnectConfig,
+    /// Optional relay to a central Chatstronomy hub (`chatstronomy relay`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay: Option<crate::relay::RelayConfig>,
 }
 
 /// Exponential-backoff schedule for baseline reconnect attempts. The first
@@ -158,6 +161,7 @@ impl Default for TelescopeConfig {
             chat: TelescopeChatOverrides::default(),
             image_cooldown_seconds: default_image_cooldown_seconds(),
             reconnect: ReconnectConfig::default(),
+            relay: None,
         }
     }
 }
@@ -245,6 +249,7 @@ impl From<ConfigEnvelope> for Config {
                         chat: TelescopeChatOverrides::default(),
                         image_cooldown_seconds,
                         reconnect: ReconnectConfig::default(),
+                        relay: None,
                     }],
                 }
             }
@@ -457,6 +462,10 @@ impl TelescopeConfig {
                 "discord_channel_id override set but shared chat.discord_bot is not enabled"
                     .to_string(),
             ));
+        }
+
+        if let Some(relay) = &self.relay {
+            relay.validate().map_err(ctx)?;
         }
 
         Ok(())

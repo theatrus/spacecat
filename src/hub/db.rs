@@ -97,6 +97,20 @@ const MIGRATIONS: &[&str] = &[
         consumed_at INTEGER
     ) STRICT;
     CREATE INDEX idx_pairing_tokens_telescope ON pairing_tokens(telescope_id);",
+    // V4: durable rig credentials minted by the pairing exchange. Only the
+    // SHA-256 of a credential is stored; the node/profile binding pins a
+    // credential to the installation that paired it.
+    "CREATE TABLE rig_credentials (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        telescope_id INTEGER NOT NULL REFERENCES telescopes(id) ON DELETE CASCADE,
+        credential_hash TEXT NOT NULL UNIQUE,
+        node_id TEXT NOT NULL,
+        profile_id TEXT NOT NULL,
+        paired_at INTEGER NOT NULL,
+        last_seen_at INTEGER NOT NULL,
+        revoked_at INTEGER
+    ) STRICT;
+    CREATE INDEX idx_rig_credentials_telescope ON rig_credentials(telescope_id);",
 ];
 
 #[derive(Debug, thiserror::Error)]

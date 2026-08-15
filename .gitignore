@@ -5,6 +5,7 @@ chatstronomy-state.json
 hub.json
 hub.*.json
 chatstronomy-hub.db*
+chatstronomy-relay-*.json
 *.log
 /installer/output
 /artifacts

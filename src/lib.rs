@@ -18,6 +18,7 @@ pub mod hub;
 pub mod images;
 pub mod mount;
 pub mod poller;
+pub mod relay;
 pub mod rotator;
 pub mod sequence;
 pub mod serde_helpers;

@@ -11,6 +11,8 @@
 pub mod auth;
 pub mod config;
 pub mod db;
+pub mod direct_server;
+pub mod direct_source;
 pub mod discord_api;
 pub mod guild_check;
 pub mod server;
