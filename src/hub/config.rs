@@ -37,8 +37,11 @@ pub struct HubConfig {
 
 /// Credentials of the central Discord application. All empty until the
 /// operator registers the app with Discord.
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct HubDiscordConfig {
+    /// Base URL for Discord's site and API. Only tests change this.
+    #[serde(default = "default_discord_base_url")]
+    pub base_url: String,
     /// OAuth2 client ID of the Discord application.
     #[serde(default)]
     pub client_id: String,
@@ -50,10 +53,22 @@ pub struct HubDiscordConfig {
     pub bot_token: String,
 }
 
+impl Default for HubDiscordConfig {
+    fn default() -> Self {
+        Self {
+            base_url: default_discord_base_url(),
+            client_id: String::new(),
+            client_secret: String::new(),
+            bot_token: String::new(),
+        }
+    }
+}
+
 // Hand-written so secrets never land in logs or panic messages.
 impl std::fmt::Debug for HubDiscordConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HubDiscordConfig")
+            .field("base_url", &self.base_url)
             .field("client_id", &self.client_id)
             .field("client_secret", &redact(&self.client_secret))
             .field("bot_token", &redact(&self.bot_token))
@@ -96,6 +111,10 @@ fn redact(value: &str) -> &'static str {
     } else {
         "<redacted>"
     }
+}
+
+fn default_discord_base_url() -> String {
+    "https://discord.com".to_string()
 }
 
 fn default_bind_address() -> String {
