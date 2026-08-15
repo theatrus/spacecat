@@ -15,6 +15,8 @@ pub mod direct_server;
 pub mod direct_source;
 pub mod discord_api;
 pub mod guild_check;
+pub mod rig_resolver;
 pub mod server;
 pub mod store;
 pub mod tenants;
+pub mod updaters;

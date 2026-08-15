@@ -174,6 +174,49 @@ impl Db {
         })
     }
 
+    /// Telescope routed to a Discord channel, if any. Channel IDs are
+    /// globally unique on Discord, so no guild scope is needed.
+    pub fn telescope_by_channel(&self, channel_id: i64) -> Result<Option<TelescopeRow>, DbError> {
+        self.with_conn(|conn| {
+            conn.query_row(
+                &format!(
+                    "SELECT {TELESCOPE_COLUMNS} FROM telescopes
+                     WHERE discord_channel_id = ?1"
+                ),
+                rusqlite::params![channel_id],
+                telescope_from_row,
+            )
+            .map(Some)
+            .or_else(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                other => Err(other),
+            })
+        })
+    }
+
+    /// Telescope by name within one guild. Names are only unique per guild.
+    pub fn telescope_by_guild_and_name(
+        &self,
+        guild_id: i64,
+        name: &str,
+    ) -> Result<Option<TelescopeRow>, DbError> {
+        self.with_conn(|conn| {
+            conn.query_row(
+                &format!(
+                    "SELECT {TELESCOPE_COLUMNS} FROM telescopes
+                     WHERE guild_id = ?1 AND name = ?2"
+                ),
+                rusqlite::params![guild_id, name],
+                telescope_from_row,
+            )
+            .map(Some)
+            .or_else(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                other => Err(other),
+            })
+        })
+    }
+
     pub fn guild_telescopes(&self, guild_id: i64) -> Result<Vec<TelescopeRow>, DbError> {
         self.with_conn(|conn| {
             let mut stmt = conn.prepare(&format!(

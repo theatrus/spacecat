@@ -1,11 +1,13 @@
 mod discord_bot;
 mod discord_service;
 mod matrix_service;
+mod rig_resolver;
 mod status_state;
 
 pub use discord_bot::{DiscordBotService, run_bot};
 pub use discord_service::DiscordChatService;
 pub use matrix_service::MatrixChatService;
+pub use rig_resolver::{CommandContext, RigResolver, StaticRigResolver};
 pub use status_state::{StatusMessage, StatusState};
 
 use crate::error::ChatError;
