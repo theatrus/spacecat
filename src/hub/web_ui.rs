@@ -44,7 +44,10 @@ pub const INDEX_HTML: &str = r#"<!doctype html>
     background: var(--panel2); border: 1px solid var(--border);
     border-radius: var(--radius); padding: .9rem 1rem; margin-top: .9rem;
   }
-  .head { display: flex; align-items: center; gap: .55rem; min-height: 1.8rem; }
+  .head {
+    display: flex; align-items: center; gap: .55rem; min-height: 1.8rem;
+    flex-wrap: wrap; row-gap: .45rem;
+  }
   .head h2 { margin: 0; font-size: 1.05rem; }
   .head b { font-size: 1rem; }
   .head .badges { margin-left: auto; display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; }
@@ -110,6 +113,31 @@ pub const INDEX_HTML: &str = r#"<!doctype html>
   }
   .token-box .b-copy { margin-top: .4rem; }
   .hint { color: var(--muted); font-size: .8rem; }
+  .next {
+    display: flex; gap: .55rem; align-items: center; margin-top: .8rem;
+    border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+    border-radius: 8px; padding: .5rem .8rem; font-size: .85rem;
+  }
+  .next .step { color: var(--accent); font-weight: 600; white-space: nowrap; }
+  .footer-links {
+    display: flex; gap: 1rem; justify-content: flex-end; margin-top: .7rem;
+  }
+  .footer-links a { color: var(--muted); font-size: .78rem; }
+  .footer-links a:hover { color: var(--bad); text-decoration: none; }
+  details.redeem { margin-top: .9rem; }
+  details.redeem summary {
+    cursor: pointer; color: var(--muted); font-size: .82rem; list-style: none;
+  }
+  details.redeem summary::before { content: "▸ "; }
+  details.redeem[open] summary::before { content: "▾ "; }
+  details.redeem summary:hover { color: var(--accent); }
+  details.redeem .controls { margin-top: .5rem; }
+  .steps {
+    display: flex; gap: .4rem .9rem; flex-wrap: wrap; margin-top: .8rem;
+    color: var(--muted); font-size: .85rem;
+  }
+  .steps b { color: var(--accent); font-weight: 600; }
   .error { color: var(--bad); margin: .5rem 0; }
   .banner {
     border: 1px solid var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent);
@@ -221,6 +249,25 @@ function attachTargets(t) {
   return GUILDS.filter((g) => g.registered && !attached.has(g.id));
 }
 
+function nextStep(t) {
+  // One contextual cue per telescope: the single most useful next action.
+  const hasChannels = t.attachments.some((a) => a.channels.length);
+  if (!t.attachments.length) {
+    return '<div class="next"><span class="step">Next</span>' +
+      "Attach this telescope to a server below, then pick its channels.</div>";
+  }
+  if (!hasChannels) {
+    return '<div class="next"><span class="step">Next</span>' +
+      "Add channels on the server card below so the feed has somewhere to post.</div>";
+  }
+  if (!t.connected) {
+    return '<div class="next"><span class="step">Next</span>' +
+      "Connect your rig: get a pairing token and paste it into the N.I.N.A. plugin " +
+      "or relay config.</div>";
+  }
+  return "";
+}
+
 function rigBadge(connected) {
   return connected
     ? '<span class="badge good">rig online</span>'
@@ -233,14 +280,16 @@ function renderMyTelescopes(telescopes) {
   let html = '<div class="head"><h2>My telescopes</h2>' +
     '<div class="badges"><span class="hint">yours across every server</span></div></div>';
   if (!telescopes.length) {
-    html += '<p class="hint" style="margin:.8rem 0 0">Add a telescope, attach it to a ' +
-      "server, then connect your rig with a pairing token.</p>";
+    html += '<div class="steps"><span><b>1</b> Add a telescope</span>' +
+      "<span><b>2</b> Attach it to a server</span>" +
+      "<span><b>3</b> Pick its channels</span>" +
+      "<span><b>4</b> Connect your rig</span></div>";
   }
   for (const t of telescopes) {
     const servers = t.attachments.length
       ? '<div class="chips">' + t.attachments.map((a) =>
           '<span class="chip on">' + esc(a.guild_name || a.guild_id) +
-          (a.can_command ? "" : ' <span class="hint">feed</span>') + "</span>").join("") +
+          (a.can_command ? "" : ' <span class="badge">feed only</span>') + "</span>").join("") +
         "</div>"
       : '<span class="hint">Not attached to any server yet.</span>';
     const targets = attachTargets(t);
@@ -253,15 +302,17 @@ function renderMyTelescopes(telescopes) {
       '<div class="sub telescope" data-id="' + t.id + '">' +
       '<div class="head"><b>' + esc(t.name) + '</b>' +
       '<div class="badges">' + rigBadge(t.connected) +
-      '<button class="subtle b-token">Connect rig…</button>' +
-      '<button class="subtle b-share">Share…</button>' +
-      '<button class="subtle danger b-revoke">Reset access</button>' +
-      '<button class="subtle danger b-delete">Delete</button></div></div>' +
+      '<button class="' + (t.connected ? "subtle " : "") + 'b-token">Connect rig…</button>' +
+      '<button class="subtle b-share">Share…</button></div></div>' +
+      nextStep(t) +
       '<div class="section"><label>Servers</label>' + servers + attachControls + "</div>" +
       '<div class="section"><label>Image cooldown</label>' +
       '<div class="controls"><input class="num f-cooldown" type="number" min="0" max="86400" value="' +
-      t.image_cooldown_seconds + '"><span class="hint">seconds between image posts — applies on change</span>' +
-      "</div></div></div>";
+      t.image_cooldown_seconds + '"><span class="hint">Seconds between image posts — applies on change.</span>' +
+      "</div></div>" +
+      '<div class="footer-links">' +
+      '<a href="javascript:;" class="b-revoke">Reset rig access</a>' +
+      '<a href="javascript:;" class="b-delete">Delete telescope</a></div></div>';
   }
   html +=
     '<div class="controls" style="margin-top:.9rem">' +
@@ -456,7 +507,7 @@ async function renderAttachments(g, el) {
         POLICY_OPTIONS.map(([v, label]) =>
           '<option value="' + v + '"' + (a.write_policy === v ? " selected" : "") + ">" +
           label + "</option>").join("") +
-        '</select><span class="hint">applies on change</span></div>' +
+        '</select><span class="hint">Applies on change.</span></div>' +
         '<div class="roles-field" style="margin-top:.5rem' +
         (a.write_policy === "roles" ? "" : ";display:none") + '">' +
         roleChips(options, a.allowed_role_ids) + "</div></div>"
@@ -479,11 +530,12 @@ async function renderAttachments(g, el) {
       "yours from “My telescopes”, or redeem a share code below.</p>";
   }
   html +=
-    '<div class="controls" style="margin-top:.9rem">' +
+    '<details class="redeem"><summary>Have a share code from another server’s ' +
+    "telescope owner? Redeem it here</summary>" +
+    '<div class="controls">' +
     '<input class="name share-code" placeholder="share code (cssh_…)">' +
     channelPicker(options, usedChannels, "sub-channel") +
-    '<button class="b-subscribe">Subscribe</button>' +
-    '<span class="hint">redeem a code from another server’s telescope owner</span></div>';
+    '<button class="b-subscribe">Subscribe</button></div></details>';
   el.innerHTML = html;
 
   el.querySelector(".b-subscribe").onclick = async () => {
