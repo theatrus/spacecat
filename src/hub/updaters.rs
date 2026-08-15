@@ -24,6 +24,11 @@ const UPDATER_POLL_INTERVAL: Duration = Duration::from_secs(5);
 
 struct RunningUpdater {
     session_id: Uuid,
+    /// The config the updater was built with. A change in the database
+    /// (channel rerouted, cooldown adjusted) restarts the updater, which
+    /// otherwise freezes its config at construction.
+    channel_id: i64,
+    image_cooldown_seconds: i64,
     handle: tokio::task::JoinHandle<()>,
 }
 
@@ -56,12 +61,20 @@ impl UpdaterManager {
             return (0, 0);
         };
 
-        // Stop updaters whose connection is gone or replaced.
+        // Stop updaters whose connection is gone or replaced, or whose
+        // database config no longer matches what they were built with.
         running.retain(|telescope_id, updater| {
-            let keep = self
+            let connection_current = self
                 .connections
                 .get(*telescope_id)
                 .is_some_and(|c| c.session_id == updater.session_id);
+            let config_current = matches!(
+                self.db.get_telescope(*telescope_id),
+                Ok(Some(row))
+                    if row.discord_channel_id == Some(updater.channel_id)
+                        && row.image_cooldown_seconds == updater.image_cooldown_seconds
+            );
+            let keep = connection_current && config_current;
             if !keep {
                 updater.handle.abort();
                 stopped += 1;
@@ -104,7 +117,15 @@ impl UpdaterManager {
             let handle = tokio::spawn(async move {
                 updater.start_polling(UPDATER_POLL_INTERVAL).await;
             });
-            running.insert(telescope_id, RunningUpdater { session_id, handle });
+            running.insert(
+                telescope_id,
+                RunningUpdater {
+                    session_id,
+                    channel_id,
+                    image_cooldown_seconds: telescope.image_cooldown_seconds,
+                    handle,
+                },
+            );
             started += 1;
             println!(
                 "Started chat updater for telescope {telescope_id} ({})",
@@ -192,6 +213,44 @@ mod tests {
         // Connection drops.
         let session = connections.get(id).unwrap().session_id;
         connections.remove_if_current(id, session);
+        assert_eq!(manager.reconcile_once(), (0, 1));
+        assert_eq!(manager.running_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn config_change_restarts_updater() {
+        let (db, connections, manager, id) = setup();
+        db.update_telescope(
+            id,
+            &TelescopeUpdate {
+                discord_channel_id: Some(Some(42)),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        connect(&connections, id);
+        assert_eq!(manager.reconcile_once(), (1, 0));
+
+        // Rerouting the channel restarts the updater with the new config.
+        db.update_telescope(
+            id,
+            &TelescopeUpdate {
+                discord_channel_id: Some(Some(43)),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(manager.reconcile_once(), (1, 1));
+
+        // Clearing the channel stops it without a replacement.
+        db.update_telescope(
+            id,
+            &TelescopeUpdate {
+                discord_channel_id: Some(None),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_eq!(manager.reconcile_once(), (0, 1));
         assert_eq!(manager.running_count(), 0);
     }

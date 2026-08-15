@@ -3,6 +3,7 @@
 
 use super::auth::OAUTH_STATE_MAX_AGE_SECONDS;
 use super::db::{Db, DbError, unix_now};
+use rusqlite::OptionalExtension;
 use uuid::Uuid;
 
 /// A user's guild membership as captured at OAuth time.
@@ -62,11 +63,7 @@ impl Db {
                     rusqlite::params![nonce],
                     |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
                 )
-                .map(Some)
-                .or_else(|e| match e {
-                    rusqlite::Error::QueryReturnedNoRows => Ok(None),
-                    other => Err(other),
-                })?;
+                .optional()?;
             let Some((verifier, next_path, issued_at, consumed_at)) = row else {
                 return Ok(None);
             };
@@ -122,11 +119,7 @@ impl Db {
                     })
                 },
             )
-            .map(Some)
-            .or_else(|e| match e {
-                rusqlite::Error::QueryReturnedNoRows => Ok(None),
-                other => Err(other),
-            })
+            .optional()
         })
     }
 
@@ -236,11 +229,7 @@ impl Db {
                         })
                     },
                 )
-                .map(Some)
-                .or_else(|e| match e {
-                    rusqlite::Error::QueryReturnedNoRows => Ok(None),
-                    other => Err(other),
-                })?;
+                .optional()?;
             match row {
                 Some(s) if s.expires_at <= now => {
                     conn.execute(

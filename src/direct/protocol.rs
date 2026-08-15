@@ -98,10 +98,51 @@ pub struct QueryRequest {
     pub kind: QueryKind,
 }
 
+/// Grace the executing side adds to `expires_at`, absorbing clock skew
+/// between the hub and the rig. A rig whose clock runs a little ahead must
+/// not reject every query as stale; multi-minute staleness is still caught.
+pub const EXPIRY_CLOCK_SKEW_GRACE_SECONDS: i64 = 120;
+
+/// Current unix time in seconds. Both sides of the expiry contract use this
+/// one definition. Returns 0 when the system clock is before the epoch,
+/// which reads as "nothing is expired".
+pub fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// The only NINA endpoints a rig executes for [`QueryKind::Command`]. This
+/// is the rig-side backstop: even a compromised or buggy hub cannot reach
+/// arbitrary NINA endpoints on the owner's machine.
+pub const ALLOWED_COMMAND_ENDPOINTS: &[&str] = &[
+    "/equipment/mount/unpark",
+    "/equipment/mount/park",
+    "/equipment/mount/home",
+    "/equipment/filterwheel/change-filter",
+    "/equipment/filterwheel/info",
+    "/equipment/guider/start",
+    "/equipment/guider/stop",
+    "/equipment/camera/cool",
+    "/equipment/camera/warm",
+    "/equipment/camera/abort-exposure",
+    "/equipment/focuser/auto-focus",
+    "/sequence/start",
+    "/sequence/stop",
+];
+
+pub fn command_endpoint_allowed(endpoint: &str) -> bool {
+    ALLOWED_COMMAND_ENDPOINTS.contains(&endpoint)
+}
+
 impl QueryRequest {
-    /// True when the query must be rejected rather than executed.
+    /// True when the query must be rejected rather than executed. `now` is
+    /// the executing side's clock; the skew grace keeps a slightly-fast rig
+    /// clock from rejecting everything.
     pub fn expired_at(&self, now: i64) -> bool {
-        self.expires_at.is_some_and(|deadline| now > deadline)
+        self.expires_at
+            .is_some_and(|deadline| now > deadline + EXPIRY_CLOCK_SKEW_GRACE_SECONDS)
     }
 }
 
@@ -160,9 +201,14 @@ pub enum DirectMessage {
     HeartbeatAck {
         seq: u64,
     },
-    /// Fatal protocol or authentication error; the sender closes after this.
+    /// Protocol or authentication error; the sender closes after this.
+    /// `retryable` distinguishes transient conditions (rate limit, replaced
+    /// connection) from ones where reconnecting can never help (bad
+    /// credential). Absent on old hubs, which reads as fatal.
     Error {
         message: String,
+        #[serde(default)]
+        retryable: bool,
     },
 }
 
@@ -273,8 +319,33 @@ mod tests {
             expires_at: Some(100),
             kind: QueryKind::EventHistory,
         };
+        // Within the deadline plus skew grace: executes.
         assert!(!with_deadline.expired_at(100));
-        assert!(with_deadline.expired_at(101));
+        assert!(!with_deadline.expired_at(100 + EXPIRY_CLOCK_SKEW_GRACE_SECONDS));
+        // Past deadline plus grace: rejected.
+        assert!(with_deadline.expired_at(101 + EXPIRY_CLOCK_SKEW_GRACE_SECONDS));
+    }
+
+    #[test]
+    fn error_retryable_defaults_to_fatal() {
+        // A frame from an older hub without the field parses as fatal.
+        let json = r#"{"type":"error","payload":{"message":"nope"}}"#;
+        let message: DirectMessage = serde_json::from_str(json).unwrap();
+        let DirectMessage::Error { retryable, .. } = message else {
+            panic!("expected Error");
+        };
+        assert!(!retryable);
+    }
+
+    #[test]
+    fn command_allowlist_covers_bot_commands_only() {
+        assert!(command_endpoint_allowed("/equipment/mount/park"));
+        assert!(command_endpoint_allowed("/sequence/stop"));
+        assert!(!command_endpoint_allowed(
+            "/equipment/mount/../../v3/anything"
+        ));
+        assert!(!command_endpoint_allowed("/profile/switch"));
+        assert!(!command_endpoint_allowed(""));
     }
 
     #[test]

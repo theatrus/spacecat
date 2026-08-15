@@ -65,6 +65,7 @@
                     <PasswordBox
                         Grid.Column="1"
                         MinWidth="420"
+                        ui:PasswordBoxBinding.Attach="True"
                         ui:PasswordBoxBinding.Password="{Binding DiscordWebhookUrl, Mode=TwoWay, UpdateSourceTrigger=LostFocus}" />
                 </Grid>
 
@@ -84,6 +85,7 @@
                     <PasswordBox
                         Grid.Column="1"
                         Margin="0,4"
+                        ui:PasswordBoxBinding.Attach="True"
                         ui:PasswordBoxBinding.Password="{Binding DiscordBotToken, Mode=TwoWay, UpdateSourceTrigger=LostFocus}" />
                     <TextBlock Grid.Row="1" Margin="0,4,12,4" VerticalAlignment="Center" Text="Application ID (optional)" />
                     <TextBox
@@ -174,6 +176,7 @@
                                 Grid.Row="2"
                                 Grid.Column="1"
                                 Margin="0,4"
+                                ui:PasswordBoxBinding.Attach="True"
                                 ui:PasswordBoxBinding.Password="{Binding MatrixPassword, Mode=TwoWay, UpdateSourceTrigger=LostFocus}" />
                             <TextBlock Grid.Row="3" Margin="0,4,12,4" VerticalAlignment="Center" Text="Default room ID" />
                             <TextBox

@@ -11,9 +11,9 @@
 //! libsqlite3-sys line as matrix-sdk).
 
 use rusqlite::Connection;
+use rusqlite::OptionalExtension;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Ordered schema migrations. Entry at index `i` brings the schema to
 /// `user_version = i + 1`. Append only — never edit or reorder a shipped
@@ -121,6 +121,11 @@ const MIGRATIONS: &[&str] = &[
         detail TEXT NOT NULL DEFAULT ''
     ) STRICT;
     CREATE INDEX idx_audit_guild ON audit_log(guild_id, at);",
+    // V6: a Discord channel routes to at most one telescope, across all
+    // guilds. Channel routing is the command/notification identity, so two
+    // claims on one channel would cross tenants.
+    "CREATE UNIQUE INDEX idx_telescopes_channel_unique
+        ON telescopes(discord_channel_id) WHERE discord_channel_id IS NOT NULL;",
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -131,13 +136,9 @@ pub enum DbError {
     Poisoned,
 }
 
-/// Current unix time in seconds, for `*_at` columns.
-pub fn unix_now() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
-}
+/// Current unix time in seconds, for `*_at` columns. One clock definition
+/// for the whole crate (the Direct expiry contract uses the same one).
+pub use crate::direct::protocol::unix_now;
 
 #[derive(Clone)]
 pub struct Db {
@@ -197,11 +198,7 @@ impl Db {
                 rusqlite::params![key],
                 |r| r.get(0),
             )
-            .map(Some)
-            .or_else(|e| match e {
-                rusqlite::Error::QueryReturnedNoRows => Ok(None),
-                other => Err(other),
-            })
+            .optional()
         })
     }
 }

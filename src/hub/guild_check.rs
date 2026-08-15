@@ -17,12 +17,13 @@ pub const POSITIVE_CACHE_TTL: Duration = Duration::from_secs(60);
 pub trait GuildChecker: Send + Sync {
     /// Is the bot installed in this guild?
     async fn bot_in_guild(&self, guild_id: u64) -> bool;
-    /// Is this user currently a member of this guild?
-    async fn user_in_guild(&self, guild_id: u64, user_id: u64) -> bool;
     /// Does this user currently hold guild management rights (owner,
     /// ADMINISTRATOR, or MANAGE_GUILD via any role)? Unlike the OAuth
     /// snapshot, this reflects demotions immediately.
     async fn user_can_manage(&self, guild_id: u64, user_id: u64) -> bool;
+    /// Does this channel belong to this guild? Guards channel routing so a
+    /// tenant can never claim another guild's channel.
+    async fn channel_in_guild(&self, channel_id: u64, guild_id: u64) -> bool;
 }
 
 /// Production checker using the bot token over Discord's REST API. No
@@ -49,18 +50,20 @@ impl GuildChecker for SerenityGuildChecker {
             .is_ok()
     }
 
-    async fn user_in_guild(&self, guild_id: u64, user_id: u64) -> bool {
-        self.http
-            .get_member(
-                serenity::model::id::GuildId::new(guild_id),
-                serenity::model::id::UserId::new(user_id),
-            )
+    async fn channel_in_guild(&self, channel_id: u64, guild_id: u64) -> bool {
+        match self
+            .http
+            .get_channel(serenity::model::id::ChannelId::new(channel_id))
             .await
-            .is_ok()
+        {
+            Ok(serenity::model::channel::Channel::Guild(channel)) => {
+                channel.guild_id.get() == guild_id
+            }
+            _ => false,
+        }
     }
 
     async fn user_can_manage(&self, guild_id: u64, user_id: u64) -> bool {
-        use serenity::model::Permissions;
         use serenity::model::id::{GuildId, UserId};
 
         let guild = match self.http.get_guild(GuildId::new(guild_id)).await {
@@ -78,7 +81,8 @@ impl GuildChecker for SerenityGuildChecker {
             Ok(member) => member,
             Err(_) => return false,
         };
-        let manage = Permissions::ADMINISTRATOR | Permissions::MANAGE_GUILD;
+        // Same policy mask as the OAuth-snapshot check.
+        let manage = super::auth::serenity_manage_mask();
         // The @everyone role (id == guild id) applies to every member.
         let everyone = guild
             .roles
@@ -97,8 +101,8 @@ impl GuildChecker for SerenityGuildChecker {
 #[derive(Hash, PartialEq, Eq)]
 enum CacheKey {
     Bot(u64),
-    Member(u64, u64),
     Manage(u64, u64),
+    Channel(u64, u64),
 }
 
 /// Wraps any checker with a positive-only TTL cache.
@@ -152,24 +156,24 @@ impl<C: GuildChecker> GuildChecker for CachedGuildChecker<C> {
         ok
     }
 
-    async fn user_in_guild(&self, guild_id: u64, user_id: u64) -> bool {
-        let key = CacheKey::Member(guild_id, user_id);
-        if self.cached(&key) {
-            return true;
-        }
-        let ok = self.inner.user_in_guild(guild_id, user_id).await;
-        if ok {
-            self.remember(key);
-        }
-        ok
-    }
-
     async fn user_can_manage(&self, guild_id: u64, user_id: u64) -> bool {
         let key = CacheKey::Manage(guild_id, user_id);
         if self.cached(&key) {
             return true;
         }
         let ok = self.inner.user_can_manage(guild_id, user_id).await;
+        if ok {
+            self.remember(key);
+        }
+        ok
+    }
+
+    async fn channel_in_guild(&self, channel_id: u64, guild_id: u64) -> bool {
+        let key = CacheKey::Channel(channel_id, guild_id);
+        if self.cached(&key) {
+            return true;
+        }
+        let ok = self.inner.channel_in_guild(channel_id, guild_id).await;
         if ok {
             self.remember(key);
         }
@@ -193,11 +197,11 @@ mod tests {
             self.calls.fetch_add(1, Ordering::SeqCst);
             self.answer
         }
-        async fn user_in_guild(&self, _guild_id: u64, _user_id: u64) -> bool {
+        async fn user_can_manage(&self, _guild_id: u64, _user_id: u64) -> bool {
             self.calls.fetch_add(1, Ordering::SeqCst);
             self.answer
         }
-        async fn user_can_manage(&self, _guild_id: u64, _user_id: u64) -> bool {
+        async fn channel_in_guild(&self, _channel_id: u64, _guild_id: u64) -> bool {
             self.calls.fetch_add(1, Ordering::SeqCst);
             self.answer
         }
@@ -209,12 +213,14 @@ mod tests {
             calls: AtomicUsize::new(0),
             answer: true,
         });
-        assert!(checker.user_in_guild(1, 2).await);
-        assert!(checker.user_in_guild(1, 2).await);
+        assert!(checker.user_can_manage(1, 2).await);
+        assert!(checker.user_can_manage(1, 2).await);
         assert_eq!(checker.inner.calls.load(Ordering::SeqCst), 1);
         // A different key misses the cache.
         assert!(checker.bot_in_guild(1).await);
         assert_eq!(checker.inner.calls.load(Ordering::SeqCst), 2);
+        assert!(checker.channel_in_guild(5, 1).await);
+        assert_eq!(checker.inner.calls.load(Ordering::SeqCst), 3);
     }
 
     #[tokio::test]
@@ -223,8 +229,8 @@ mod tests {
             calls: AtomicUsize::new(0),
             answer: false,
         });
-        assert!(!checker.user_in_guild(1, 2).await);
-        assert!(!checker.user_in_guild(1, 2).await);
+        assert!(!checker.user_can_manage(1, 2).await);
+        assert!(!checker.user_can_manage(1, 2).await);
         assert_eq!(checker.inner.calls.load(Ordering::SeqCst), 2);
     }
 
@@ -237,8 +243,8 @@ mod tests {
             },
             Duration::from_millis(0),
         );
-        assert!(checker.user_in_guild(1, 2).await);
-        assert!(checker.user_in_guild(1, 2).await);
+        assert!(checker.user_can_manage(1, 2).await);
+        assert!(checker.user_can_manage(1, 2).await);
         assert_eq!(checker.inner.calls.load(Ordering::SeqCst), 2);
     }
 }

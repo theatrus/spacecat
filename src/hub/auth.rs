@@ -19,9 +19,33 @@ pub const SESSION_COOKIE: &str = "chatstronomy_session";
 /// Maximum age of an unconsumed OAuth state row, in seconds.
 pub const OAUTH_STATE_MAX_AGE_SECONDS: i64 = 15 * 60;
 
-/// Discord permission bits that grant hub management of a guild.
-pub const PERMISSION_ADMINISTRATOR: i64 = 1 << 3;
-pub const PERMISSION_MANAGE_GUILD: i64 = 1 << 5;
+/// Discord permission bits that grant hub management of a guild, derived
+/// from serenity so the OAuth-snapshot check and the live REST check can
+/// never disagree on the policy.
+pub const PERMISSION_ADMINISTRATOR: i64 =
+    poise::serenity_prelude::Permissions::ADMINISTRATOR.bits() as i64;
+pub const PERMISSION_MANAGE_GUILD: i64 =
+    poise::serenity_prelude::Permissions::MANAGE_GUILD.bits() as i64;
+
+/// The same policy as a serenity mask, for the live guild check.
+pub fn serenity_manage_mask() -> poise::serenity_prelude::Permissions {
+    poise::serenity_prelude::Permissions::ADMINISTRATOR
+        | poise::serenity_prelude::Permissions::MANAGE_GUILD
+}
+
+/// A fresh high-entropy secret: 64 hex chars from two UUIDv4s (~244 bits of
+/// randomness). Used for PKCE verifiers, pairing tokens, and rig
+/// credentials.
+pub fn random_secret() -> String {
+    format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
+}
+
+/// SHA-256 of the input, base64url without padding. The one digest used for
+/// PKCE challenges and for hashing stored tokens/credentials — changing it
+/// invalidates every stored hash, so don't.
+pub fn sha256_b64url(input: &str) -> String {
+    URL_SAFE_NO_PAD.encode(Sha256::digest(input.as_bytes()))
+}
 
 fn sign(signing_key: &str, session_id: &str) -> String {
     let mut mac = HmacSha256::new_from_slice(signing_key.as_bytes())
@@ -54,16 +78,15 @@ pub fn cookie_from_header(header: &str, name: &str) -> Option<String> {
     })
 }
 
-/// A fresh high-entropy PKCE code verifier.
+/// A fresh high-entropy PKCE code verifier (RFC 7636 minimum comfortably
+/// exceeded).
 pub fn pkce_verifier() -> String {
-    // Two UUIDv4s give 244 bits of randomness; the RFC 7636 minimum is 256
-    // bits of charset space over 43 chars, which 64 hex chars exceed.
-    format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
+    random_secret()
 }
 
 /// The S256 code challenge for a verifier.
 pub fn pkce_challenge(verifier: &str) -> String {
-    URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
+    sha256_b64url(verifier)
 }
 
 /// Clamp a post-login redirect target to a safe local path. Anything odd
