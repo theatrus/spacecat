@@ -1,21 +1,21 @@
 [Unit]
-Description=SpaceCat astronomical observation chat updater
-Documentation=https://github.com/theatrus/spacecat
+Description=Chatstronomy astronomical observation chat updater
+Documentation=https://github.com/theatrus/chatstronomy
 After=network-online.target
 Wants=network-online.target
 # Don't start the daemon until an operator has provided a config.
-ConditionFileNotEmpty=/etc/spacecat/config.json
+ConditionFileNotEmpty=/etc/chatstronomy/config.json
 
 [Service]
 Type=exec
-User=spacecat
-Group=spacecat
-EnvironmentFile=/etc/spacecat/spacecat.conf
+User=chatstronomy
+Group=chatstronomy
+EnvironmentFile=/etc/chatstronomy/chatstronomy.conf
 # chat-updater polls every configured telescope and fans notifications out to
 # the configured chat services. Poll interval + any extra flags come from the
 # EnvironmentFile above.
-ExecStart=/usr/bin/spacecat --config /etc/spacecat/config.json \
-    chat-updater --interval ${SPACECAT_INTERVAL} $SPACECAT_EXTRA_ARGS
+ExecStart=/usr/bin/chatstronomy --config /etc/chatstronomy/config.json \
+    chat-updater --interval ${CHATSTRONOMY_INTERVAL} $CHATSTRONOMY_EXTRA_ARGS
 Restart=on-failure
 RestartSec=5
 
@@ -24,7 +24,7 @@ RestartSec=5
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
-ReadOnlyPaths=/etc/spacecat
+ReadOnlyPaths=/etc/chatstronomy
 PrivateTmp=yes
 PrivateDevices=yes
 ProtectControlGroups=yes
@@ -49,7 +49,7 @@ RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 # Logging.
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=spacecat
+SyslogIdentifier=chatstronomy
 
 [Install]
 WantedBy=multi-user.target

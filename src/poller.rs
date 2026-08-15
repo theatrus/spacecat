@@ -1,4 +1,4 @@
-use crate::api::SpaceCatApiClient;
+use crate::api::ChatstronomyApiClient;
 use crate::events::Event;
 use std::collections::HashSet;
 use std::time::Duration;
@@ -6,7 +6,7 @@ use tokio::time::{Instant, sleep};
 
 #[derive(Debug)]
 pub struct EventPoller {
-    client: SpaceCatApiClient,
+    client: ChatstronomyApiClient,
     seen_events: HashSet<String>,
     poll_interval: Duration,
     last_poll_time: Option<Instant>,
@@ -21,7 +21,7 @@ pub struct PollResult {
 
 impl EventPoller {
     /// Create a new event poller with the given client and poll interval
-    pub fn new(client: SpaceCatApiClient, poll_interval: Duration) -> Self {
+    pub fn new(client: ChatstronomyApiClient, poll_interval: Duration) -> Self {
         Self {
             client,
             seen_events: HashSet::new(),
@@ -123,13 +123,13 @@ impl PollResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::SpaceCatApiClient;
+    use crate::api::ChatstronomyApiClient;
     use crate::config::ApiConfig;
 
     #[tokio::test]
     async fn test_event_key_creation() {
         let config = ApiConfig::default();
-        let client = SpaceCatApiClient::new(config).unwrap();
+        let client = ChatstronomyApiClient::new(config).unwrap();
         let poller = EventPoller::new(client, Duration::from_secs(5));
 
         let event = Event {

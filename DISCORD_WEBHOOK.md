@@ -1,6 +1,6 @@
 # Discord Webhook Integration
 
-SpaceCat includes Discord webhook support for real-time notifications of astronomical events and captured images.
+Chatstronomy includes Discord webhook support for real-time notifications of astronomical events and captured images.
 
 ## Features
 
@@ -18,7 +18,7 @@ SpaceCat includes Discord webhook support for real-time notifications of astrono
    - Click "New Webhook"
    - Copy the webhook URL
 
-2. **Configure SpaceCat**:
+2. **Configure Chatstronomy**:
    Add the webhook configuration to your `config.json` file:
    ```json
    {
@@ -30,7 +30,7 @@ SpaceCat includes Discord webhook support for real-time notifications of astrono
      "logging": {
        "level": "info",
        "enable_file_logging": false,
-       "log_file": "spacecat.log"
+       "log_file": "chatstronomy.log"
      },
      "discord": {
        "webhook_url": "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN",
@@ -87,13 +87,13 @@ Each image notification includes:
 - Number of stars detected and HFR (Half Flux Radius)
 - Image statistics (mean, median, standard deviation)
 - Telescope information
-- **Thumbnail attachment**: Automatically downloads and attaches the actual thumbnail image from the SpaceCat API
+- **Thumbnail attachment**: Automatically downloads and attaches the actual thumbnail image from the Chatstronomy API
 
 ## API Usage
 
 ### Simple Message
 ```rust
-use spacecat::discord::DiscordWebhook;
+use chatstronomy::discord::DiscordWebhook;
 
 let webhook = DiscordWebhook::new(webhook_url)?;
 webhook.execute_simple("Observatory is online! 🔭").await?;
@@ -101,7 +101,7 @@ webhook.execute_simple("Observatory is online! 🔭").await?;
 
 ### Rich Embed
 ```rust
-use spacecat::discord::{DiscordWebhook, Embed, colors};
+use chatstronomy::discord::{DiscordWebhook, Embed, colors};
 
 let embed = Embed::new()
     .title("Observation Complete")
@@ -110,7 +110,7 @@ let embed = Embed::new()
     .field("Total Images", "120", true)
     .field("Total Time", "6 hours", true)
     .field("Filters", "L, R, G, B, Ha", false)
-    .footer("SpaceCat Observatory", None)
+    .footer("Chatstronomy Observatory", None)
     .timestamp(&chrono::Utc::now().to_rfc3339());
 
 webhook.execute_with_embed(None, embed).await?;
@@ -118,8 +118,8 @@ webhook.execute_with_embed(None, embed).await?;
 
 ### Custom Integration
 ```rust
-use spacecat::discord::DiscordWebhook;
-use spacecat::discord_updater::DiscordUpdater;
+use chatstronomy::discord::DiscordWebhook;
+use chatstronomy::discord_updater::DiscordUpdater;
 
 let mut poller = DiscordUpdater::new(client);
 poller = poller.with_discord_webhook(&webhook_url)?;
@@ -156,7 +156,7 @@ Common errors:
 
 ## Best Practices
 
-1. **Rate Limiting**: Discord webhooks have rate limits. SpaceCat automatically handles this gracefully.
+1. **Rate Limiting**: Discord webhooks have rate limits. Chatstronomy automatically handles this gracefully.
 2. **Message Size**: Keep embed descriptions under 2048 characters and field values under 1024 characters.
 3. **Testing**: Test your webhook URL with the example script before using in production.
 4. **Privacy**: Never commit `config.json` with real webhook URLs to version control. Use `config.example.json` as a template.

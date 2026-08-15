@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
-# build-in-podman.sh - Build the SpaceCat RPM in clean Fedora containers.
+# build-in-podman.sh - Build the Chatstronomy RPM in clean Fedora containers.
 #
 # Mirrors .github/workflows/rpm.yml locally: for each requested Fedora release
 # it spins up a fedora:<ver> container, installs the toolchain, runs
 # scripts/make-rpm-sources.sh (cargo vendor), builds the RPM with rpmbuild,
-# smoke-tests it (rpm -i + `spacecat --help`), and copies the resulting RPMs +
+# smoke-tests it (rpm -i + `chatstronomy --help`), and copies the resulting RPMs +
 # SRPM out to the host.
 #
 # Usage:
@@ -52,22 +52,22 @@ rpmdev-setuptree
 git config --global --add safe.directory /src
 cd /src
 ./scripts/make-rpm-sources.sh
-cp packaging/rpm/spacecat.spec ~/rpmbuild/SPECS/
+cp packaging/rpm/chatstronomy.spec ~/rpmbuild/SPECS/
 # Pull the rest of the BuildRequires straight from the spec (rust, gcc-c++,
 # cmake, systemd-rpm-macros, ...) so the list stays in sync.
-dnf -y builddep ~/rpmbuild/SPECS/spacecat.spec
+dnf -y builddep ~/rpmbuild/SPECS/chatstronomy.spec
 # tee to the bind-mounted /out so the rpmbuild log survives even if the
 # container's piped stdout is truncated/buffered on failure.
-rpmbuild -ba ~/rpmbuild/SPECS/spacecat.spec 2>&1 | tee /out/rpmbuild.log
+rpmbuild -ba ~/rpmbuild/SPECS/chatstronomy.spec 2>&1 | tee /out/rpmbuild.log
 mkdir -p /out
 find ~/rpmbuild/RPMS ~/rpmbuild/SRPMS -name '*.rpm' -exec cp {} /out/ \;
 # Smoke test: install the binary RPM (dnf resolves Requires, incl. systemd)
 # and confirm the binary, unit, and config landed.
-dnf -y install /out/spacecat-[0-9]*.x86_64.rpm
-spacecat --help | head -5
-test -f /usr/lib/systemd/system/spacecat.service
-test -f /etc/spacecat/config.json
-systemd-analyze verify /usr/lib/systemd/system/spacecat.service || true
+dnf -y install /out/chatstronomy-[0-9]*.x86_64.rpm
+chatstronomy --help | head -5
+test -f /usr/lib/systemd/system/chatstronomy.service
+test -f /etc/chatstronomy/config.json
+systemd-analyze verify /usr/lib/systemd/system/chatstronomy.service || true
 echo "BUILD_OK"
 EOS
 

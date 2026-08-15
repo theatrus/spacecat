@@ -10,7 +10,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   # Embedded in the binary by build.rs
-  SPACECAT_GIT_SHA: ${{ github.sha }}
+  CHATSTRONOMY_GIT_SHA: ${{ github.sha }}
 
 jobs:
   create-release:
@@ -29,29 +29,29 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ github.ref_name }}
-          name: SpaceCat ${{ github.ref_name }}
+          name: Chatstronomy ${{ github.ref_name }}
           body: |
-            ## SpaceCat Release ${{ github.ref_name }}
+            ## Chatstronomy Release ${{ github.ref_name }}
             
             ### Downloads
-            - **Linux x86_64**: spacecat-linux-x86_64
-            - **Linux aarch64**: spacecat-linux-aarch64  
-            - **Windows x64**: spacecat-windows-x64.exe (native build)
-            - **Windows Installer**: SpaceCat-${{ github.ref_name }}-x64.msi (includes service support)
-            - **RPM Package**: spacecat-*.rpm (Fedora/RHEL/CentOS with systemd service)
+            - **Linux x86_64**: chatstronomy-linux-x86_64
+            - **Linux aarch64**: chatstronomy-linux-aarch64
+            - **Windows x64**: chatstronomy-windows-x64.exe (native build)
+            - **Windows Installer**: Chatstronomy-${{ github.ref_name }}-x64.msi (includes service support)
+            - **RPM Package**: chatstronomy-*.rpm (Fedora/RHEL/CentOS with systemd service)
 
             ### RPM Installation (Fedora/RHEL/CentOS)
             
             ```bash
             # Download and install the RPM
-            wget https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/spacecat-*.rpm
-            sudo dnf install ./spacecat-*.rpm
+            wget https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/chatstronomy-*.rpm
+            sudo dnf install ./chatstronomy-*.rpm
             
             # Configure the service
-            sudo vim /etc/spacecat/config.json
+            sudo vim /etc/chatstronomy/config.json
             
             # Enable and start the service
-            sudo systemctl enable --now spacecat.service
+            sudo systemctl enable --now chatstronomy.service
             ```
             
             See [CLAUDE.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/CLAUDE.md) for detailed documentation.
@@ -87,10 +87,10 @@ jobs:
         run: cargo build --release --verbose
 
       - name: Strip binary
-        run: strip target/release/spacecat
+        run: strip target/release/chatstronomy
 
       - name: Prepare release asset
-        run: cp target/release/spacecat spacecat-linux-x86_64
+        run: cp target/release/chatstronomy chatstronomy-linux-x86_64
           
       - name: Upload release asset
         uses: softprops/action-gh-release@v3
@@ -98,12 +98,12 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ github.ref_name }}
-          files: ./spacecat-linux-x86_64
+          files: ./chatstronomy-linux-x86_64
 
       - name: Get file info
         run: |
-          ls -la spacecat-linux-x86_64
-          file spacecat-linux-x86_64
+          ls -la chatstronomy-linux-x86_64
+          file chatstronomy-linux-x86_64
 
   build-linux-arm64:
     name: Build Linux ARM64
@@ -133,10 +133,10 @@ jobs:
         run: cargo build --release --verbose
 
       - name: Strip binary
-        run: strip target/release/spacecat
+        run: strip target/release/chatstronomy
 
       - name: Prepare release asset
-        run: cp target/release/spacecat spacecat-linux-aarch64
+        run: cp target/release/chatstronomy chatstronomy-linux-aarch64
           
       - name: Upload release asset
         uses: softprops/action-gh-release@v3
@@ -144,12 +144,12 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ github.ref_name }}
-          files: ./spacecat-linux-aarch64
+          files: ./chatstronomy-linux-aarch64
 
       - name: Get file info
         run: |
-          ls -la spacecat-linux-aarch64
-          file spacecat-linux-aarch64
+          ls -la chatstronomy-linux-aarch64
+          file chatstronomy-linux-aarch64
 
   test:
     name: Test Suite
@@ -215,7 +215,7 @@ jobs:
           RUST_BACKTRACE: 1
 
       - name: Prepare Windows binary
-        run: cp target/release/spacecat.exe spacecat-windows-x64.exe
+        run: cp target/release/chatstronomy.exe chatstronomy-windows-x64.exe
 
       - name: Upload Windows binary to release
         uses: softprops/action-gh-release@v3
@@ -223,7 +223,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ github.ref_name }}
-          files: ./spacecat-windows-x64.exe
+          files: ./chatstronomy-windows-x64.exe
 
       - name: Install WiX Toolset
         run: |
@@ -254,7 +254,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ github.ref_name }}
-          files: ./installer/output/SpaceCat-${{ steps.get_version.outputs.version }}-x64.msi
+          files: ./installer/output/Chatstronomy-${{ steps.get_version.outputs.version }}-x64.msi
 
       - name: Upload MSI as artifact
         uses: actions/upload-artifact@v7
@@ -302,7 +302,7 @@ jobs:
         run: |
           VERSION="${{ steps.version.outputs.VERSION }}"
           TEMP_DIR=$(mktemp -d)
-          SOURCE_DIR="$TEMP_DIR/spacecat-$VERSION"
+          SOURCE_DIR="$TEMP_DIR/chatstronomy-$VERSION"
           
           mkdir -p "$SOURCE_DIR"
           cp -r . "$SOURCE_DIR/"
@@ -314,19 +314,19 @@ jobs:
           rm -f "$SOURCE_DIR"/*.jpg "$SOURCE_DIR"/*.png
           
           cd "$TEMP_DIR"
-          tar -czf ~/rpmbuild/SOURCES/spacecat-$VERSION.tar.gz spacecat-$VERSION
+          tar -czf ~/rpmbuild/SOURCES/chatstronomy-$VERSION.tar.gz chatstronomy-$VERSION
           
           # Clean up
           rm -rf "$TEMP_DIR"
 
       - name: Copy spec file
         run: |
-          cp packaging/rpm/spacecat.spec ~/rpmbuild/SPECS/
+          cp packaging/rpm/chatstronomy.spec ~/rpmbuild/SPECS/
 
       - name: Build RPM
         run: |
           cd ~/rpmbuild
-          rpmbuild -ba SPECS/spacecat.spec
+          rpmbuild -ba SPECS/chatstronomy.spec
 
       - name: List built packages
         run: |
@@ -337,7 +337,7 @@ jobs:
       - name: Get RPM file info
         id: rpm_info
         run: |
-          RPM_FILE=$(find ~/rpmbuild/RPMS -name "spacecat-*.rpm" -type f | head -n1)
+          RPM_FILE=$(find ~/rpmbuild/RPMS -name "chatstronomy-*.rpm" -type f | head -n1)
           if [ -n "$RPM_FILE" ]; then
             echo "RPM_FILE=$RPM_FILE" >> $GITHUB_OUTPUT
             echo "RPM_NAME=$(basename $RPM_FILE)" >> $GITHUB_OUTPUT
@@ -356,7 +356,7 @@ jobs:
       - name: Get SRPM file info
         id: srpm_info
         run: |
-          SRPM_FILE=$(find ~/rpmbuild/SRPMS -name "spacecat-*.src.rpm" -type f | head -n1)
+          SRPM_FILE=$(find ~/rpmbuild/SRPMS -name "chatstronomy-*.src.rpm" -type f | head -n1)
           if [ -n "$SRPM_FILE" ]; then
             echo "SRPM_FILE=$SRPM_FILE" >> $GITHUB_OUTPUT
             echo "SRPM_NAME=$(basename $SRPM_FILE)" >> $GITHUB_OUTPUT

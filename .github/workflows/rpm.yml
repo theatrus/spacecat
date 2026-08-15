@@ -13,7 +13,7 @@ permissions:
 env:
   # Embedded in the binary by build.rs; the RPM builds from a source
   # tarball with no .git directory, so git can't provide it there.
-  SPACECAT_GIT_SHA: ${{ github.sha }}
+  CHATSTRONOMY_GIT_SHA: ${{ github.sha }}
 
 jobs:
   build:
@@ -50,9 +50,9 @@ jobs:
 
       - name: Build RPM
         run: |
-          cp packaging/rpm/spacecat.spec ~/rpmbuild/SPECS/
-          dnf -y builddep ~/rpmbuild/SPECS/spacecat.spec
-          rpmbuild -ba ~/rpmbuild/SPECS/spacecat.spec
+          cp packaging/rpm/chatstronomy.spec ~/rpmbuild/SPECS/
+          dnf -y builddep ~/rpmbuild/SPECS/chatstronomy.spec
+          rpmbuild -ba ~/rpmbuild/SPECS/chatstronomy.spec
 
       - name: Collect artifacts
         run: |
@@ -63,14 +63,14 @@ jobs:
       - name: Smoke-test the built binary
         run: |
           # dnf resolves Requires (incl. systemd pulled in by the unit/sysusers).
-          dnf -y install out/spacecat-[0-9]*.x86_64.rpm
-          spacecat --help
-          test -f /usr/lib/systemd/system/spacecat.service
-          test -f /etc/spacecat/config.json
+          dnf -y install out/chatstronomy-[0-9]*.x86_64.rpm
+          chatstronomy --help
+          test -f /usr/lib/systemd/system/chatstronomy.service
+          test -f /etc/chatstronomy/config.json
 
       - uses: actions/upload-artifact@v7
         with:
-          name: spacecat-fedora-${{ matrix.fedora }}-rpms
+          name: chatstronomy-fedora-${{ matrix.fedora }}-rpms
           path: out/*.rpm
 
       - name: Attach RPMs to the GitHub release
@@ -81,7 +81,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v3
         with:
-          files: out/spacecat-[0-9]*.x86_64.rpm
+          files: out/chatstronomy-[0-9]*.x86_64.rpm
           fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,6 +1,6 @@
-# SpaceCat Windows Service
+# Chatstronomy Windows Service
 
-SpaceCat can run as a Windows service for automated, production deployments. This allows SpaceCat to start automatically with Windows and run in the background without requiring a user to be logged in.
+Chatstronomy can run as a Windows service for automated, production deployments. This allows Chatstronomy to start automatically with Windows and run in the background without requiring a user to be logged in.
 
 ## Features
 
@@ -14,18 +14,18 @@ SpaceCat can run as a Windows service for automated, production deployments. Thi
 ## Prerequisites
 
 - Windows 10/11 or Windows Server 2016+
-- SpaceCat Windows build (service support is automatically included)
+- Chatstronomy Windows build (service support is automatically included)
 - Administrator privileges for installation/uninstallation
 
 ## Installation
 
-### Step 1: Download SpaceCat
+### Step 1: Download Chatstronomy
 
-Download the Windows release from the [GitHub releases page](https://github.com/theatrus/spacecat/releases/latest):
+Download the Windows release from the [GitHub releases page](https://github.com/theatrus/chatstronomy/releases/latest):
 
 ```powershell
 # Download using PowerShell
-Invoke-WebRequest -Uri "https://github.com/theatrus/spacecat/releases/latest/download/spacecat-windows-x64.exe" -OutFile "spacecat.exe"
+Invoke-WebRequest -Uri "https://github.com/theatrus/chatstronomy/releases/latest/download/chatstronomy-windows-x64.exe" -OutFile "chatstronomy.exe"
 ```
 
 ### Step 2: Install as Service
@@ -34,11 +34,11 @@ Run PowerShell or Command Prompt **as Administrator**:
 
 ```powershell
 # Install the service
-.\spacecat.exe windows-service install
+.\chatstronomy.exe windows-service install
 ```
 
 This will:
-- Register SpaceCat as a Windows service named "SpaceCat"
+- Register Chatstronomy as a Windows service named "Chatstronomy"
 - Set it to start automatically on system boot
 - Create the service configuration directory
 
@@ -48,7 +48,7 @@ Edit the service configuration file:
 
 ```powershell
 # Open configuration in notepad
-notepad "C:\ProgramData\SpaceCat\config.json"
+notepad "C:\ProgramData\Chatstronomy\config.json"
 ```
 
 Example configuration:
@@ -75,7 +75,7 @@ Example configuration:
 
 ```powershell
 # Start the service
-.\spacecat.exe windows-service start
+.\chatstronomy.exe windows-service start
 
 # Or use Windows Services management
 services.msc
@@ -87,28 +87,28 @@ services.msc
 
 ```powershell
 # Check service status
-.\spacecat.exe windows-service status
+.\chatstronomy.exe windows-service status
 
 # Start the service
-.\spacecat.exe windows-service start
+.\chatstronomy.exe windows-service start
 
 # Stop the service
-.\spacecat.exe windows-service stop
+.\chatstronomy.exe windows-service stop
 
 # Uninstall the service
-.\spacecat.exe windows-service uninstall
+.\chatstronomy.exe windows-service uninstall
 ```
 
 ### Windows Services Management
 
 1. Open **Services** (`services.msc`)
-2. Find "SpaceCat" in the list
+2. Find "Chatstronomy" in the list
 3. Right-click to Start, Stop, or configure properties
 
 ### Service Configuration
 
-- **Service Name**: SpaceCat
-- **Display Name**: SpaceCat Discord Updater
+- **Service Name**: Chatstronomy
+- **Display Name**: Chatstronomy Discord Updater
 - **Start Type**: Automatic
 - **Log On As**: Local System (default)
 
@@ -118,7 +118,7 @@ services.msc
 
 The service reads configuration from:
 ```
-C:\ProgramData\SpaceCat\config.json
+C:\ProgramData\Chatstronomy\config.json
 ```
 
 This location is automatically created when the service is installed.
@@ -129,8 +129,8 @@ After modifying the configuration:
 
 ```powershell
 # Restart the service to apply changes
-.\spacecat.exe windows-service stop
-.\spacecat.exe windows-service start
+.\chatstronomy.exe windows-service stop
+.\chatstronomy.exe windows-service start
 ```
 
 ## Logging
@@ -141,13 +141,13 @@ The service logs to the Windows Event Log:
 
 1. Open **Event Viewer** (`eventvwr.msc`)
 2. Navigate to **Windows Logs** > **Application**
-3. Look for events from source "SpaceCat"
+3. Look for events from source "Chatstronomy"
 
 ### Viewing Logs
 
 ```powershell
 # View recent service events
-Get-EventLog -LogName Application -Source "SpaceCat" -Newest 20
+Get-EventLog -LogName Application -Source "Chatstronomy" -Newest 20
 ```
 
 ## Troubleshooting
@@ -156,13 +156,13 @@ Get-EventLog -LogName Application -Source "SpaceCat" -Newest 20
 
 1. **Check configuration file exists**:
    ```powershell
-   Test-Path "C:\ProgramData\SpaceCat\config.json"
+   Test-Path "C:\ProgramData\Chatstronomy\config.json"
    ```
 
 2. **Validate configuration**:
    ```powershell
    # Test configuration by running manually
-   .\spacecat.exe discord-updater --interval 5
+   .\chatstronomy.exe discord-updater --interval 5
    ```
 
 3. **Check Windows Event Log** for error messages
@@ -181,11 +181,11 @@ Get-EventLog -LogName Application -Source "SpaceCat" -Newest 20
 
 ### Manual Testing
 
-Run SpaceCat manually to test configuration:
+Run Chatstronomy manually to test configuration:
 
 ```powershell
 # Test outside of service
-.\spacecat.exe discord-updater --interval 5
+.\chatstronomy.exe discord-updater --interval 5
 ```
 
 ## Uninstallation
@@ -194,20 +194,20 @@ Run SpaceCat manually to test configuration:
 
 ```powershell
 # Stop the service first
-.\spacecat.exe windows-service stop
+.\chatstronomy.exe windows-service stop
 
 # Uninstall the service
-.\spacecat.exe windows-service uninstall
+.\chatstronomy.exe windows-service uninstall
 ```
 
 ### Clean Up Files
 
 ```powershell
 # Remove configuration (optional)
-Remove-Item -Recurse "C:\ProgramData\SpaceCat"
+Remove-Item -Recurse "C:\ProgramData\Chatstronomy"
 
 # Remove executable
-Remove-Item "spacecat.exe"
+Remove-Item "chatstronomy.exe"
 ```
 
 ## Security Considerations
@@ -257,7 +257,7 @@ Configure automatic recovery in Services management console:
 
 For issues with Windows service functionality:
 
-1. Check the [GitHub Issues](https://github.com/theatrus/spacecat/issues)
+1. Check the [GitHub Issues](https://github.com/theatrus/chatstronomy/issues)
 2. Review Windows Event Log for specific errors
 3. Test manual execution before reporting service-specific issues
 4. Include relevant Event Log entries when reporting issues

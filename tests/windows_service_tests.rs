@@ -4,7 +4,7 @@
 mod tests {
     // Import Windows service functions if available (Windows only)
     #[cfg(windows)]
-    use spacecat::windows_service::*;
+    use chatstronomy::windows_service::*;
 
     #[cfg(windows)]
     #[test]

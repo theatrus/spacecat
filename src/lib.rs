@@ -6,6 +6,7 @@ pub mod charts;
 pub mod chat;
 pub mod chat_updater;
 pub mod config;
+pub mod direct;
 pub mod discord;
 pub mod error;
 pub mod events;
@@ -19,6 +20,7 @@ pub mod rotator;
 pub mod sequence;
 pub mod serde_helpers;
 pub mod service_wrapper;
+pub mod source;
 pub mod version;
 #[cfg(windows)]
 pub mod windows_service;

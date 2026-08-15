@@ -60,7 +60,7 @@ The Poise `Data` struct carries:
 
 ```rust
 pub struct BotData {
-    pub api_clients: HashMap<String, SpaceCatApiClient>,  // telescope -> client
+    pub api_clients: HashMap<String, ChatstronomyApiClient>,  // telescope -> client
     pub channel_to_telescope: HashMap<ChannelId, String>,
     pub write_acl: HashSet<UserId>,                       // Phase 3
     pub status_state: Arc<Mutex<StatusState>>,            // Phase 2
@@ -80,7 +80,7 @@ message bodies.
       "enabled": true,
       "token": "BOT_TOKEN_HERE",
       "default_channel_id": "111111111111111111",  // optional fallback
-      "state_file": "./spacecat-state.json",       // CWD by default
+      "state_file": "./chatstronomy-state.json",       // CWD by default
       "write_acl": ["123456789012345678"]          // Phase 3
     },
     "discord": { "enabled": true, "default_webhook_url": "..." },  // unchanged
@@ -149,7 +149,7 @@ change for existing webhook-only telescopes.
 
 Each bot-routed telescope gets a pinned embed in its channel, edited in
 place on every poll cycle. Posted on first run; the message ID is
-persisted to `./spacecat-state.json` (CWD by default; configurable via
+persisted to `./chatstronomy-state.json` (CWD by default; configurable via
 `chat.discord_bot.state_file`).
 
 State file schema:
@@ -230,7 +230,7 @@ Pure cosmetics; no functional change.
 async fn resolve_telescope<'a>(
     ctx: Context<'a>,
     override_name: Option<String>,
-) -> Result<&'a SpaceCatApiClient, Error> {
+) -> Result<&'a ChatstronomyApiClient, Error> {
     let data = ctx.data();
     if let Some(name) = override_name {
         return data
@@ -259,7 +259,7 @@ while per-telescope channels Just Work without specifying which one.
   ignored for that telescope.
 - **ACL granularity (Phase 3):** Discord user IDs to start. Role-based
   ACLs can be added later if needed.
-- **State file path:** CWD, default `./spacecat-state.json`.
+- **State file path:** CWD, default `./chatstronomy-state.json`.
 - **Live status:** Phase 2 (supplements the event stream, doesn't replace it).
 
 ## Open implementation questions (to resolve when coding starts)

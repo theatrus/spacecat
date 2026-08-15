@@ -1,7 +1,10 @@
 /target
 config.json
 config.*.json
-spacecat-state.json
+chatstronomy-state.json
 *.log
 /installer/output
+/artifacts
+/nina-plugin/**/bin/
+/nina-plugin/**/obj/
 .vscode/

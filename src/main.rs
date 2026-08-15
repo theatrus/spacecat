@@ -1,10 +1,9 @@
 use base64::Engine;
-use clap::{Parser, Subcommand};
-use spacecat::{
-    api::SpaceCatApiClient,
+use chatstronomy::{
+    api::ChatstronomyApiClient,
     autofocus::AutofocusResponse,
     config::Config,
-    error::SpaceCatError,
+    error::ChatstronomyError,
     events::{EventDetails, EventHistoryResponse, event_types},
     images::ImageHistoryResponse,
     mount::MountInfoResponse,
@@ -14,19 +13,20 @@ use spacecat::{
     },
     service_wrapper::ServiceWrapper,
 };
+use clap::{Parser, Subcommand};
 
 #[cfg(windows)]
-use spacecat::windows_service;
+use chatstronomy::windows_service;
 
 use std::time::Duration;
 
 #[derive(Parser)]
-#[command(name = "spacecat")]
+#[command(name = "chatstronomy")]
 #[command(
-    about = "space | cat — pipes your telescope to chat",
+    about = "Chatstronomy — pipe your observatory into chat",
     long_about = None
 )]
-#[command(version = spacecat::version::VERSION_STRING)]
+#[command(version = chatstronomy::version::VERSION_STRING)]
 struct Cli {
     /// Path to configuration file
     #[arg(long, default_value = "config.json", global = true)]
@@ -136,8 +136,8 @@ async fn main() {
     let cli = Cli::parse();
     println!(
         "{} {}",
-        spacecat::version::WORDMARK,
-        spacecat::version::VERSION_STRING
+        chatstronomy::version::WORDMARK,
+        chatstronomy::version::VERSION_STRING
     );
 
     let config_path = &cli.config;
@@ -239,11 +239,11 @@ async fn main() {
 fn pick_client(
     config_path: &str,
     telescope: Option<&str>,
-) -> Result<SpaceCatApiClient, Box<dyn std::error::Error>> {
+) -> Result<ChatstronomyApiClient, Box<dyn std::error::Error>> {
     let config = Config::load_or_default_from(config_path);
     config.validate()?;
     let t = config.pick_telescope(telescope)?;
-    SpaceCatApiClient::new(t.api.clone()).map_err(|e| e.into())
+    ChatstronomyApiClient::new(t.api.clone()).map_err(|e| e.into())
 }
 
 /// Build a client and verify the API is reachable. Used by every read-only
@@ -251,7 +251,7 @@ fn pick_client(
 async fn checked_client(
     config_path: &str,
     telescope: Option<&str>,
-) -> Result<SpaceCatApiClient, Box<dyn std::error::Error>> {
+) -> Result<ChatstronomyApiClient, Box<dyn std::error::Error>> {
     let client = pick_client(config_path, telescope)?;
     if let Err(e) = client.get_version().await {
         return Err(format!("Could not get API version: {e}").into());
@@ -576,13 +576,13 @@ async fn cmd_poll(
     Ok(())
 }
 
-async fn cmd_chat_updater(interval: u64, config_path: &str) -> Result<(), SpaceCatError> {
+async fn cmd_chat_updater(interval: u64, config_path: &str) -> Result<(), ChatstronomyError> {
     let config = Config::load_or_default_from(config_path);
-    let service_wrapper = ServiceWrapper::new(config).map_err(SpaceCatError::Service)?;
+    let service_wrapper = ServiceWrapper::new(config).map_err(ChatstronomyError::Service)?;
     service_wrapper
         .run_cli(interval)
         .await
-        .map_err(SpaceCatError::Service)
+        .map_err(ChatstronomyError::Service)
 }
 
 async fn cmd_last_autofocus(
@@ -599,7 +599,7 @@ async fn cmd_last_autofocus(
     println!("Successfully loaded autofocus data from API");
     display_autofocus_data(&autofocus);
     if let Some(path) = graph {
-        let png = spacecat::charts::render_autofocus_graph_png(&autofocus.response)
+        let png = chatstronomy::charts::render_autofocus_graph_png(&autofocus.response)
             .map_err(|e| format!("Failed to render autofocus graph: {e}"))?;
         std::fs::write(path, &png)?;
         println!("Autofocus graph written to {path}");
@@ -629,7 +629,7 @@ async fn cmd_guider_graph(
     if let Some(rms) = history.rms_summary() {
         println!("RMS: {rms}");
     }
-    let png = spacecat::charts::render_guider_graph_png(history)
+    let png = chatstronomy::charts::render_guider_graph_png(history)
         .map_err(|e| format!("Failed to render guide graph: {e}"))?;
     std::fs::write(output, &png)?;
     println!("Guide graph written to {output}");

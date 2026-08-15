@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # make-rpm-sources.sh - Produce the source tarballs consumed by
-# packaging/rpm/spacecat.spec.
+# packaging/rpm/chatstronomy.spec.
 #
 # The Fedora spec builds fully offline (mock/COPR friendly), so the one step
 # that needs the network -- fetching the Cargo dependency tree -- happens here,
@@ -12,8 +12,8 @@
 #      every crate locally.
 #
 # Outputs two sources into --outdir (default: ~/rpmbuild/SOURCES):
-#   spacecat-<version>.tar.gz         (Source0: the source tree)
-#   spacecat-<version>-vendor.tar.xz  (Source1: vendored crates -> ./vendor)
+#   chatstronomy-<version>.tar.gz         (Source0: the source tree)
+#   chatstronomy-<version>-vendor.tar.xz  (Source1: vendored crates -> ./vendor)
 #
 # Usage:
 #   scripts/make-rpm-sources.sh [--ref <git-ref>] [--outdir <dir>] [--version <v>]
@@ -47,7 +47,7 @@ if [[ -z "$VERSION" ]]; then
     exit 1
 fi
 
-NAME="spacecat"
+NAME="chatstronomy"
 PREFIX="${NAME}-${VERSION}"
 
 for tool in git cargo tar xz; do

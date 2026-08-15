@@ -6,8 +6,9 @@ output/
 *.cab
 
 # Temporary files from build
-spacecat.exe
+chatstronomy.exe
 README.md
+README.install.md
 config.example.json
 LICENSE.rtf
 
@@ -16,7 +17,7 @@ LICENSE.rtf
 *.tmp
 
 # Keep the source files
-!spacecat.wxs
+!chatstronomy.wxs
 !build-msi.ps1
 !build-msi.bat
 !README.md

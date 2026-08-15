@@ -13,8 +13,8 @@
 
 use super::status_state::{StatusMessage, StatusState};
 use super::{ChatAttachment, ChatMessage, ChatService, ChatTarget, DiscordBotConfig};
-use crate::api::SpaceCatApiClient;
 use crate::error::ChatError;
+use crate::source::SharedRigSource;
 use async_trait::async_trait;
 use poise::serenity_prelude::{self as serenity, CreateAttachment, CreateMessage};
 use std::collections::HashMap;
@@ -25,8 +25,8 @@ use tokio::sync::Mutex;
 /// Per-bot state carried by the Poise framework. Each slash command has
 /// `ctx.data()` access to this.
 pub struct BotData {
-    /// One API client per telescope, keyed by telescope name.
-    pub api_clients: HashMap<String, SpaceCatApiClient>,
+    /// One source-neutral rig connection per telescope, keyed by name.
+    pub rig_sources: HashMap<String, SharedRigSource>,
     /// Discord channel ID -> telescope name. Slash commands invoked in a
     /// mapped channel default to that telescope.
     pub channel_to_telescope: HashMap<u64, String>,
@@ -36,7 +36,7 @@ pub struct BotData {
 
 impl BotData {
     fn known_names(&self) -> Vec<&str> {
-        let mut v: Vec<&str> = self.api_clients.keys().map(|s| s.as_str()).collect();
+        let mut v: Vec<&str> = self.rig_sources.keys().map(|s| s.as_str()).collect();
         v.sort();
         v
     }
@@ -44,14 +44,14 @@ impl BotData {
     /// Resolve a telescope from an explicit override or the channel a
     /// command was invoked in. Returns a user-facing error string if the
     /// channel isn't mapped and no override was provided.
-    fn resolve_client(
+    fn resolve_source(
         &self,
         override_name: Option<&str>,
         channel_id: u64,
-    ) -> Result<(String, SpaceCatApiClient), String> {
+    ) -> Result<(String, SharedRigSource), String> {
         if let Some(name) = override_name {
             return self
-                .api_clients
+                .rig_sources
                 .get(name)
                 .cloned()
                 .map(|c| (name.to_string(), c))
@@ -64,10 +64,10 @@ impl BotData {
         }
         if let Some(name) = self.channel_to_telescope.get(&channel_id) {
             let client = self
-                .api_clients
+                .rig_sources
                 .get(name)
                 .cloned()
-                .expect("channel_to_telescope -> api_clients invariant");
+                .expect("channel_to_telescope -> rig_sources invariant");
             return Ok((name.clone(), client));
         }
         Err(format!(
@@ -322,7 +322,7 @@ impl ChatService for DiscordBotService {
 /// alive for the life of the process.
 pub async fn run_bot(
     bot_config: &DiscordBotConfig,
-    api_clients: HashMap<String, SpaceCatApiClient>,
+    rig_sources: HashMap<String, SharedRigSource>,
     channel_to_telescope: HashMap<u64, String>,
 ) -> Result<(DiscordBotService, tokio::task::JoinHandle<()>), ChatError> {
     let write_acl: std::collections::HashSet<u64> = bot_config.write_acl.iter().copied().collect();
@@ -355,7 +355,7 @@ pub async fn run_bot(
                     .await
                     .map_err(|e| -> BotError { Box::new(e) })?;
                 Ok(BotData {
-                    api_clients,
+                    rig_sources,
                     channel_to_telescope,
                     write_acl,
                 })
@@ -394,7 +394,7 @@ pub async fn run_bot(
 
 // ---------- Slash commands (Phase 1, read-only) ----------
 
-/// SpaceCat telescope monitoring commands.
+/// Chatstronomy telescope monitoring commands.
 #[poise::command(
     slash_command,
     subcommands(
@@ -423,13 +423,13 @@ pub async fn run_bot(
         "start_sequence",
     )
 )]
-async fn spacecat(_ctx: Context<'_>) -> Result<(), BotError> {
+async fn chatstronomy(_ctx: Context<'_>) -> Result<(), BotError> {
     // Parent never runs directly when subcommands are defined.
     Ok(())
 }
 
 fn phase1_commands() -> Vec<poise::Command<BotData, BotError>> {
-    vec![spacecat()]
+    vec![chatstronomy()]
 }
 
 /// Shorthand for "resolve telescope, send an ephemeral error to the user if
@@ -437,10 +437,10 @@ fn phase1_commands() -> Vec<poise::Command<BotData, BotError>> {
 async fn resolve_or_reply<'a>(
     ctx: Context<'a>,
     telescope: Option<String>,
-) -> Result<(String, SpaceCatApiClient), BotError> {
+) -> Result<(String, SharedRigSource), BotError> {
     match ctx
         .data()
-        .resolve_client(telescope.as_deref(), ctx.channel_id().get())
+        .resolve_source(telescope.as_deref(), ctx.channel_id().get())
     {
         Ok(v) => Ok(v),
         Err(msg) => {
@@ -845,10 +845,10 @@ async fn confirm_destructive(ctx: Context<'_>, action: &str) -> Result<bool, Bot
     let prompt =
         format!("⚠️ Confirm **{action}**?\nThis is a destructive operation — you have 30 seconds.");
     let row = serenity::CreateActionRow::Buttons(vec![
-        serenity::CreateButton::new("spacecat-confirm")
+        serenity::CreateButton::new("chatstronomy-confirm")
             .label("Confirm")
             .style(serenity::ButtonStyle::Danger),
-        serenity::CreateButton::new("spacecat-cancel")
+        serenity::CreateButton::new("chatstronomy-cancel")
             .label("Cancel")
             .style(serenity::ButtonStyle::Secondary),
     ]);
@@ -869,8 +869,8 @@ async fn confirm_destructive(ctx: Context<'_>, action: &str) -> Result<bool, Bot
         .await;
 
     let (confirmed, response_text) = match interaction.as_ref().map(|i| i.data.custom_id.as_str()) {
-        Some("spacecat-confirm") => (true, "✅ Confirmed, running command…"),
-        Some("spacecat-cancel") => (false, "❎ Cancelled."),
+        Some("chatstronomy-confirm") => (true, "✅ Confirmed, running command…"),
+        Some("chatstronomy-cancel") => (false, "❎ Cancelled."),
         _ => (false, "⏱️ Timed out — no action taken."),
     };
 
@@ -905,7 +905,7 @@ async fn confirm_destructive(ctx: Context<'_>, action: &str) -> Result<bool, Bot
 async fn run_command(
     ctx: Context<'_>,
     telescope: &str,
-    client: &SpaceCatApiClient,
+    client: &SharedRigSource,
     label: &str,
     endpoint: &str,
     params: &[(&str, &str)],

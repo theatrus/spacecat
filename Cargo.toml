@@ -1,12 +1,12 @@
 [package]
-name = "spacecat"
+name = "chatstronomy"
 version = "0.3.0"
 edition = "2024"
 license = "Apache-2.0"
-authors = ["SpaceCat Contributors"]
-description = "SpaceCat - Astronomical Observation System for telescope automation and monitoring"
-repository = "https://github.com/theatrus/spacecat"
-keywords = ["astronomy", "telescope", "automation", "spacecat"]
+authors = ["Yann Ramin"]
+description = "Chatstronomy - pipe N.I.N.A. observatory status and commands into Discord and Matrix"
+repository = "https://github.com/theatrus/chatstronomy"
+keywords = ["astronomy", "telescope", "automation", "chatstronomy"]
 categories = ["science", "api-bindings"]
 
 [dependencies]
@@ -22,6 +22,7 @@ url = "2.5"
 async-trait = "0.1"
 mime = "0.3"
 thiserror = "2.0"
+uuid = { version = "1", features = ["serde", "v4"] }
 # Guiding graph rendering. Minimal feature set: PNG bitmap output with the
 # pure-Rust ab_glyph text path so no system font libraries are needed on
 # Windows/ARM release builds (the font itself is embedded from assets/).
@@ -42,3 +43,6 @@ libsqlite3-sys = { version = "0", features = ["bundled"] }
 [target.'cfg(windows)'.dependencies]
 windows-service = "0.8"
 winapi = { version = "0.3", features = ["winsvc", "winuser", "winerror"] }
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"

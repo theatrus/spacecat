@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 #[derive(Debug, Clone)]
-pub struct SpaceCatApiClient {
+pub struct ChatstronomyApiClient {
     client: Client,
     base_url: String,
     retry_attempts: u32,
@@ -61,7 +61,7 @@ impl From<serde_json::Error> for ApiError {
     }
 }
 
-impl SpaceCatApiClient {
+impl ChatstronomyApiClient {
     /// Create a new API client with the given configuration
     pub fn new(config: ApiConfig) -> Result<Self, ApiError> {
         let client = Client::builder()

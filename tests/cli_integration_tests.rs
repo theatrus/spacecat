@@ -13,7 +13,7 @@ mod tests {
 
         assert!(output.status.success());
         let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(stdout.contains("space | cat"));
+        assert!(stdout.contains("Chatstronomy"));
         assert!(stdout.contains("chat-updater"));
     }
 

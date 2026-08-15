@@ -1,4 +1,3 @@
-use crate::api::SpaceCatApiClient;
 use crate::autofocus::AutofocusResponse;
 use crate::chat::{ChatAttachment, ChatField, ChatMessage, ChatServiceManager, ChatTarget};
 use crate::discord::colors;
@@ -8,6 +7,7 @@ use crate::sequence::{
     SequenceResponse, extract_current_target, extract_meridian_flip_time,
     meridian_flip_time_formatted_with_clock,
 };
+use crate::source::SharedRigSource;
 use chrono::{DateTime, FixedOffset, Utc};
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -155,7 +155,7 @@ impl UpdaterState {
 /// service manager and a `ChatTarget` describing where this telescope's posts
 /// should be routed (Discord webhook override, Matrix room override).
 pub struct ChatUpdater {
-    client: SpaceCatApiClient,
+    source: SharedRigSource,
     state: UpdaterState,
     chat_manager: Arc<ChatServiceManager>,
     chat_target: ChatTarget,
@@ -171,13 +171,13 @@ pub struct ChatUpdater {
 
 impl ChatUpdater {
     pub fn new(
-        client: SpaceCatApiClient,
+        source: SharedRigSource,
         telescope_name: String,
         chat_target: ChatTarget,
         chat_manager: Arc<ChatServiceManager>,
     ) -> Self {
         Self {
-            client,
+            source,
             state: UpdaterState::new(),
             chat_manager,
             chat_target,
@@ -394,7 +394,7 @@ impl ChatUpdater {
         }
 
         // Fresh mount snapshot — small payload, very useful at a glance.
-        if let Ok(mount_info) = self.client.get_mount_info().await
+        if let Ok(mount_info) = self.source.get_mount_info().await
             && mount_info.is_connected()
         {
             let (ra, dec) = mount_info.get_coordinates();
@@ -414,11 +414,11 @@ impl ChatUpdater {
         println!("[{n}] Fetching initial baseline...");
 
         // Load events and find latest TS-TARGETSTART
-        let events = self.client.get_event_history().await?;
+        let events = self.source.get_event_history().await?;
         self.process_baseline_events(&events.response);
 
         // Load sequence to get meridian flip time and potential sequence target
-        match self.client.get_sequence().await {
+        match self.source.get_sequence().await {
             Ok(sequence) => {
                 self.state.meridian_flip_time = extract_meridian_flip_time(&sequence);
 
@@ -443,7 +443,7 @@ impl ChatUpdater {
         }
 
         // Load images
-        let images = self.client.get_all_image_history().await?;
+        let images = self.source.get_all_image_history().await?;
         for image in &images.response {
             self.state
                 .images_seen
@@ -579,7 +579,7 @@ impl ChatUpdater {
     /// so the poll loop can detect a mid-run disconnect without a separate
     /// health probe.
     pub async fn poll_events(&mut self) -> bool {
-        match self.client.get_event_history().await {
+        match self.source.get_event_history().await {
             Ok(events) => {
                 for event in events.response {
                     if !self.should_process_event(&event) {
@@ -652,7 +652,7 @@ impl ChatUpdater {
             };
 
         if new.is_unknown() {
-            match self.client.get_filterwheel_info().await {
+            match self.source.get_filterwheel_info().await {
                 Ok(info) => {
                     if let Some(selected) = info.response.selected_filter {
                         new = selected;
@@ -770,7 +770,7 @@ impl ChatUpdater {
         println!("[AUTOFOCUS FINISHED] {}", event.time);
         println!("Fetching autofocus results...");
 
-        match self.client.get_last_autofocus().await {
+        match self.source.get_last_autofocus().await {
             Ok(autofocus_data) => {
                 self.display_autofocus_results(&autofocus_data);
 
@@ -792,7 +792,7 @@ impl ChatUpdater {
         if self.chat_manager.service_count() == 0 {
             return;
         }
-        let info = self.client.get_guider_info().await.ok();
+        let info = self.source.get_guider_info().await.ok();
         self.send_guider_event_notification(event, info.as_ref())
             .await;
     }
@@ -812,7 +812,7 @@ impl ChatUpdater {
         if self.chat_manager.service_count() == 0 {
             return;
         }
-        let info = self.client.get_rotator_info().await.ok();
+        let info = self.source.get_rotator_info().await.ok();
         self.send_rotator_synced_notification(event, info.as_ref())
             .await;
     }
@@ -824,7 +824,7 @@ impl ChatUpdater {
         if self.chat_manager.service_count() == 0 {
             return;
         }
-        let info = self.client.get_focuser_info().await.ok();
+        let info = self.source.get_focuser_info().await.ok();
         self.send_focuser_user_focused_notification(event, info.as_ref())
             .await;
     }
@@ -837,7 +837,7 @@ impl ChatUpdater {
 
     /// Returns whether the API responded (see [`Self::poll_events`]).
     pub async fn poll_sequence(&mut self) -> bool {
-        match self.client.get_sequence().await {
+        match self.source.get_sequence().await {
             Ok(sequence) => {
                 let new_sequence_target = extract_current_target(&sequence);
                 let new_meridian_flip_time = extract_meridian_flip_time(&sequence);
@@ -895,7 +895,7 @@ impl ChatUpdater {
 
     /// Returns whether the API responded (see [`Self::poll_events`]).
     pub async fn poll_images(&mut self) -> bool {
-        match self.client.get_all_image_history().await {
+        match self.source.get_all_image_history().await {
             Ok(images) => {
                 for (index, image) in images.response.iter().enumerate() {
                     if !self.state.has_seen_image(image) {
@@ -994,7 +994,7 @@ impl ChatUpdater {
     // Chat notification methods
     async fn send_welcome_message(&self) {
         let mut message =
-            ChatMessage::new(&self.titled("🚀 space | cat — observatory monitor started"))
+            ChatMessage::new(&self.titled("🚀 Chatstronomy — observatory monitor started"))
                 .color(colors::GREEN);
 
         // Inferred NINA state from event history
@@ -1553,7 +1553,7 @@ impl ChatUpdater {
             .send_message_with_image(
                 &message,
                 &self.chat_target,
-                &self.client,
+                &self.source,
                 index as u32,
                 extra_attachments,
             )
@@ -1564,7 +1564,7 @@ impl ChatUpdater {
     /// failure (guider disconnected, empty history, render error) is
     /// non-fatal — the image notification just goes out without a graph.
     async fn render_guiding_graph_attachment(&self, index: usize) -> Vec<ChatAttachment> {
-        let graph = match self.client.get_guider_graph().await {
+        let graph = match self.source.get_guider_graph().await {
             Ok(graph) => graph,
             Err(e) => {
                 eprintln!("Guiding graph unavailable: {e}");
@@ -1602,7 +1602,7 @@ impl ChatUpdater {
 
     /// Add mount information to a message
     async fn add_mount_info(&self, message: &mut ChatMessage) {
-        if let Ok(mount_info) = self.client.get_mount_info().await
+        if let Ok(mount_info) = self.source.get_mount_info().await
             && mount_info.is_connected()
         {
             let (ra, dec) = mount_info.get_coordinates();
