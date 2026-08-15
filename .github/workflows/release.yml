@@ -188,6 +188,21 @@ jobs:
     name: Build Windows Binary and MSI Installer
     needs: create-release
     runs-on: windows-latest
+    # The Entra federated credential is bound to
+    # `repo:theatrus/chatstronomy:environment:release`, so this job must run in
+    # that environment or the OIDC token subject will not match and azure/login
+    # fails. Classic federated credentials require an exact subject match.
+    environment: release
+    env:
+      # Signing is reserved for a pushed tag or a deliberate manual run, so
+      # ordinary builds validate packaging without consuming signing quota. The
+      # variable check keeps forks building (unsigned) rather than failing:
+      # a fork has neither the variables nor the federated credential.
+      SIGN_WINDOWS: >-
+        ${{ ((github.event_name == 'push' && github.ref_type == 'tag')
+        || github.event_name == 'workflow_dispatch')
+        && vars.AZURE_CLIENT_ID != ''
+        && 'true' || 'false' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -213,6 +228,38 @@ jobs:
         run: cargo build --release --verbose
         env:
           RUST_BACKTRACE: 1
+
+      # Signed HERE, before anything copies it. target/release/chatstronomy.exe
+      # is the single source for three artifacts: the standalone download, the
+      # payload the MSI packages, and the runtime the N.I.N.A. plugin bundles.
+      # Signing it once at the source is what keeps all three identical --
+      # signing each copy separately invites one of them being missed.
+      #
+      # azure/login sits immediately before the signing step, never earlier: the
+      # OIDC token it exchanges is a client assertion valid for five minutes,
+      # and the cargo build above takes longer than that. A login placed before
+      # the build leaves the CLI holding a dead assertion and signing fails with
+      # AADSTS700024, which reads like a misconfiguration but is only elapsed
+      # time.
+      - name: Authenticate to Azure (for binary signing)
+        if: env.SIGN_WINDOWS == 'true'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign the Windows binary
+        if: env.SIGN_WINDOWS == 'true'
+        uses: azure/trusted-signing-action@v0
+        with:
+          endpoint: ${{ vars.SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ vars.SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.SIGNING_PROFILE }}
+          files: ${{ github.workspace }}\target\release\chatstronomy.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
 
       - name: Prepare Windows binary
         run: cp target/release/chatstronomy.exe chatstronomy-windows-x64.exe
@@ -247,6 +294,56 @@ jobs:
         run: |
           Set-Location installer
           .\build-msi.ps1 -Version $env:VERSION -SkipBuild
+
+      # A second login: MSI packaging sits between this and the one above, and
+      # five minutes is not much of a budget.
+      - name: Authenticate to Azure (for MSI signing)
+        if: env.SIGN_WINDOWS == 'true'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign the MSI
+        if: env.SIGN_WINDOWS == 'true'
+        uses: azure/trusted-signing-action@v0
+        with:
+          endpoint: ${{ vars.SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ vars.SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.SIGNING_PROFILE }}
+          files: ${{ github.workspace }}\installer\output\Chatstronomy-${{ steps.get_version.outputs.version }}-x64.msi
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      # Checks the payload, not just the wrapper. A signed installer carrying an
+      # unsigned program is the failure mode worth catching here: it verifies
+      # perfectly at download and then shows Unknown Publisher on first run.
+      # `msiexec /a` does an administrative extract, which restores real
+      # filenames -- unpacking with 7z gives mangled ones and the check silently
+      # matches nothing.
+      - name: Verify the MSI and the program inside it
+        if: env.SIGN_WINDOWS == 'true'
+        shell: pwsh
+        run: |
+          $msi = "$env:GITHUB_WORKSPACE\installer\output\Chatstronomy-$env:VERSION-x64.msi"
+          $sig = Get-AuthenticodeSignature -LiteralPath $msi
+          if ($sig.Status -ne 'Valid') { throw "MSI signature is $($sig.Status)" }
+          Write-Output "MSI: $($sig.SignerCertificate.Subject)"
+
+          $extract = Join-Path $env:RUNNER_TEMP 'msi-extract'
+          New-Item -ItemType Directory -Force -Path $extract | Out-Null
+          $p = Start-Process msiexec -ArgumentList @('/a', "`"$msi`"", '/qn', "TARGETDIR=`"$extract`"") -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "msiexec /a failed with $($p.ExitCode)" }
+
+          $inner = Get-ChildItem -LiteralPath $extract -Recurse -Filter 'chatstronomy.exe'
+          if ($inner.Count -lt 1) { throw 'no chatstronomy.exe found inside the MSI' }
+          foreach ($f in $inner) {
+            $s = Get-AuthenticodeSignature -LiteralPath $f.FullName
+            if ($s.Status -ne 'Valid') { throw "$($f.Name) inside the MSI is $($s.Status)" }
+            Write-Output "payload OK: $($f.Name) -> $($s.SignerCertificate.Subject)"
+          }
 
       - name: Upload MSI to release
         uses: softprops/action-gh-release@v3

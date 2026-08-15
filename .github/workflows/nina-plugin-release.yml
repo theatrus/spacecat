@@ -22,6 +22,15 @@ jobs:
   package:
     name: Package plugin
     runs-on: windows-latest
+    # Bound to the same federated credential subject as the main release job:
+    # repo:theatrus/chatstronomy:environment:release.
+    environment: release
+    env:
+      SIGN_WINDOWS: >-
+        ${{ ((github.event_name == 'push' && github.ref_type == 'tag')
+        || github.event_name == 'workflow_dispatch')
+        && vars.AZURE_CLIENT_ID != ''
+        && 'true' || 'false' }}
     timeout-minutes: 20
     steps:
       - name: Check out source
@@ -50,14 +59,80 @@ jobs:
           "NINA_PLUGIN_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
-      - name: Build archive and manifest
+      # Staged, not archived: the zip's SHA-256 goes into the manifest N.I.N.A.
+      # verifies, so signing has to happen before the archive is created. Sign
+      # the contents afterwards and the published checksum no longer matches.
+      - name: Stage the plugin package
         shell: pwsh
         run: |
           $archiveName = "Chatstronomy.NINA.$env:NINA_PLUGIN_VERSION.zip"
           $installerUrl = "https://github.com/${{ github.repository }}/releases/download/nina-v$env:NINA_PLUGIN_VERSION/$archiveName"
+          "PLUGIN_INSTALLER_URL=$installerUrl" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8NoBOM
           ./nina-plugin/build-package.ps1 `
             -Version $env:NINA_PLUGIN_VERSION `
-            -InstallerUrl $installerUrl
+            -InstallerUrl $installerUrl `
+            -StageOnly
+
+      # Immediately before signing: the OIDC assertion lives five minutes and
+      # the dotnet and cargo builds above take longer.
+      - name: Authenticate to Azure
+        if: env.SIGN_WINDOWS == 'true'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Resolve the plugin files to sign
+        if: env.SIGN_WINDOWS == 'true'
+        shell: pwsh
+        run: |
+          # Named explicitly rather than swept with a recurse: the staged
+          # directory also carries N.I.N.A.'s own reference assemblies, and
+          # signing those would replace their publisher identity with ours.
+          $pkg = Join-Path $env:GITHUB_WORKSPACE 'artifacts\nina-plugin\package\Chatstronomy'
+          $names = @('Chatstronomy.dll', 'runtime\chatstronomy.exe')
+          $paths = foreach ($n in $names) {
+            $path = Join-Path $pkg $n
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              throw "Expected to sign $path but staging did not produce it"
+            }
+            (Resolve-Path -LiteralPath $path).Path
+          }
+          $paths | ForEach-Object { Write-Output "will sign: $_" }
+          Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8NoBOM -Value (
+            @('SIGN_FILES<<SIGN_FILES_EOF') + $paths + @('SIGN_FILES_EOF'))
+
+      - name: Sign the plugin and its bundled runtime
+        if: env.SIGN_WINDOWS == 'true'
+        uses: azure/trusted-signing-action@v0
+        with:
+          endpoint: ${{ vars.SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ vars.SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.SIGNING_PROFILE }}
+          files: ${{ env.SIGN_FILES }}
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Verify the staged files before archiving
+        if: env.SIGN_WINDOWS == 'true'
+        shell: pwsh
+        run: |
+          $pkg = Join-Path $env:GITHUB_WORKSPACE 'artifacts\nina-plugin\package\Chatstronomy'
+          foreach ($n in @('Chatstronomy.dll', 'runtime\chatstronomy.exe')) {
+            $s = Get-AuthenticodeSignature -LiteralPath (Join-Path $pkg $n)
+            if ($s.Status -ne 'Valid') { throw "$n is $($s.Status)" }
+            Write-Output "OK: $n -> $($s.SignerCertificate.Subject)"
+          }
+
+      - name: Archive the plugin and write the manifest
+        shell: pwsh
+        run: |
+          ./nina-plugin/build-package.ps1 `
+            -Version $env:NINA_PLUGIN_VERSION `
+            -InstallerUrl $env:PLUGIN_INSTALLER_URL `
+            -PackageOnly
 
       - name: Upload release candidate
         uses: actions/upload-artifact@v7
