@@ -6,6 +6,17 @@ on:
   push:
     tags:
       - 'v*.*.*'
+  # A dry run that builds and SIGNS the Windows artifacts without cutting a
+  # release. Signing is the part that cannot be reasoned about from the file --
+  # the federated credential subject, the environment binding and the five
+  # minute OIDC assertion only prove themselves by running -- and a tag is a
+  # poor place to discover any of them is wrong.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to stamp the artifacts with (no leading v)
+        required: true
+        default: 0.0.0
 
 env:
   CARGO_TERM_COLOR: always
@@ -15,6 +26,8 @@ env:
 jobs:
   create-release:
     name: Create Release
+    # Never on a dispatch: it would publish a release named after a branch.
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     outputs:
       release_id: ${{ steps.create_release.outputs.id }}
@@ -187,6 +200,9 @@ jobs:
   build-windows:
     name: Build Windows Binary and MSI Installer
     needs: create-release
+    # A skipped `needs` skips the dependent job, so say plainly that a dispatch
+    # should still run: build and sign, just do not publish.
+    if: always() && (needs.create-release.result == 'success' || github.event_name == 'workflow_dispatch')
     runs-on: windows-latest
     # The Entra federated credential is bound to
     # `repo:theatrus/chatstronomy:environment:release`, so this job must run in
@@ -265,6 +281,7 @@ jobs:
         run: cp target/release/chatstronomy.exe chatstronomy-windows-x64.exe
 
       - name: Upload Windows binary to release
+        if: github.event_name == 'push'
         uses: softprops/action-gh-release@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -283,10 +300,20 @@ jobs:
           $env:PATH += ";${env:ProgramFiles(x86)}\WiX Toolset v3.14\bin"
           echo "${env:ProgramFiles(x86)}\WiX Toolset v3.14\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
-      - name: Extract version from tag
+      - name: Resolve version
         id: get_version
         run: |
-          $version = "${{ github.ref_name }}".TrimStart('v')
+          # On a dispatch there is no tag: github.ref_name is the branch, and
+          # TrimStart('v') on a branch name yields nonsense that only shows up
+          # later as a misnamed MSI.
+          $version = if ('${{ github.event_name }}' -eq 'push') {
+            "${{ github.ref_name }}".TrimStart('v')
+          } else {
+            "${{ inputs.version }}"
+          }
+          if ($version -notmatch '^\d+\.\d+\.\d+$') {
+            throw "Expected a three-part version. Got: $version"
+          }
           echo "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           echo "version=$version" >> $GITHUB_OUTPUT
 
@@ -346,12 +373,25 @@ jobs:
           }
 
       - name: Upload MSI to release
+        if: github.event_name == 'push'
         uses: softprops/action-gh-release@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ github.ref_name }}
           files: ./installer/output/Chatstronomy-${{ steps.get_version.outputs.version }}-x64.msi
+
+      # A dispatch produces no release, so keep the signed artifacts where they
+      # can be downloaded and inspected -- otherwise the dry run proves the
+      # build succeeded and leaves nothing to verify by hand.
+      - name: Upload signed artifacts for inspection
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v7
+        with:
+          name: signed-windows-${{ steps.get_version.outputs.version }}
+          path: |
+            chatstronomy-windows-x64.exe
+            installer/output/*.msi
 
       - name: Upload MSI as artifact
         uses: actions/upload-artifact@v7
