@@ -382,15 +382,29 @@ fn phase1_commands() -> Vec<poise::Command<BotData, BotError>> {
 /// Facts about this invocation for the resolver: where it happened and who
 /// invoked it, including the member's roles when in a guild.
 async fn command_context(ctx: Context<'_>) -> CommandContext {
-    let role_ids = match ctx.author_member().await {
-        Some(member) => member.roles.iter().map(|r| r.get()).collect(),
-        None => Vec::new(),
+    let (role_ids, member_manages) = match ctx.author_member().await {
+        Some(member) => {
+            // Slash-command interactions carry the member's computed
+            // permissions from Discord itself.
+            let manages = member.permissions.is_some_and(|permissions| {
+                permissions.administrator() || permissions.manage_guild()
+            });
+            (member.roles.iter().map(|r| r.get()).collect(), manages)
+        }
+        None => (Vec::new(), false),
     };
+    // Guild owners manage regardless of roles. The cache holds the guild
+    // thanks to the GUILDS intent; the ref must drop before any await.
+    let is_owner = ctx
+        .guild()
+        .map(|guild| guild.owner_id == ctx.author().id)
+        .unwrap_or(false);
     CommandContext {
         guild_id: ctx.guild_id().map(|g| g.get()),
         channel_id: ctx.channel_id().get(),
         user_id: ctx.author().id.get(),
         role_ids,
+        manages_guild: member_manages || is_owner,
     }
 }
 

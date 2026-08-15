@@ -460,7 +460,8 @@ mod tests {
         let db = db_with_user();
         db.register_guild(100, "g", 1).unwrap();
         let t = db.create_telescope(100, "c925", 1).unwrap();
-        assert_eq!(t.write_policy, "disabled");
+        // Managers control new scopes by default.
+        assert_eq!(t.write_policy, "admins");
         assert_eq!(t.image_cooldown_seconds, 60);
         assert_eq!(t.discord_channel_id, None);
 

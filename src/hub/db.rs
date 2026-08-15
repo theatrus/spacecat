@@ -126,6 +126,33 @@ const MIGRATIONS: &[&str] = &[
     // claims on one channel would cross tenants.
     "CREATE UNIQUE INDEX idx_telescopes_channel_unique
         ON telescopes(discord_channel_id) WHERE discord_channel_id IS NOT NULL;",
+    // V7: write_policy gains 'admins' (guild owner/managers may run write
+    // commands) and it becomes the default, so the integration's owner
+    // controls their scopes from Discord without any allowlist setup.
+    // SQLite cannot alter a CHECK, so the table is rebuilt; migrations run
+    // with foreign keys off and an integrity check afterwards.
+    "CREATE TABLE telescopes_v7 (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        guild_id INTEGER NOT NULL REFERENCES guilds(guild_id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        discord_channel_id INTEGER,
+        image_cooldown_seconds INTEGER NOT NULL DEFAULT 60,
+        write_policy TEXT NOT NULL DEFAULT 'admins'
+            CHECK (write_policy IN ('disabled', 'admins', 'roles')),
+        allowed_role_ids TEXT NOT NULL DEFAULT '[]',
+        created_by INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        UNIQUE (guild_id, name)
+    ) STRICT;
+    INSERT INTO telescopes_v7
+        SELECT id, guild_id, name, discord_channel_id, image_cooldown_seconds,
+               write_policy, allowed_role_ids, created_by, created_at
+        FROM telescopes;
+    DROP TABLE telescopes;
+    ALTER TABLE telescopes_v7 RENAME TO telescopes;
+    CREATE INDEX idx_telescopes_guild ON telescopes(guild_id);
+    CREATE UNIQUE INDEX idx_telescopes_channel_unique
+        ON telescopes(discord_channel_id) WHERE discord_channel_id IS NOT NULL;",
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -134,6 +161,8 @@ pub enum DbError {
     Sqlite(#[from] rusqlite::Error),
     #[error("database mutex poisoned")]
     Poisoned,
+    #[error("database integrity error: {0}")]
+    Integrity(String),
 }
 
 /// Current unix time in seconds, for `*_at` columns. One clock definition
@@ -159,9 +188,23 @@ impl Db {
         // `PRAGMA journal_mode` returns a row (the resulting mode), so it
         // goes through query_row instead of pragma_update.
         conn.query_row("PRAGMA journal_mode = WAL", [], |_| Ok(()))?;
-        conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
+        // Migrations run with foreign keys off so table rebuilds (drop +
+        // rename) don't trip enforcement mid-surgery; the integrity check
+        // below catches anything a migration actually broke.
+        conn.pragma_update(None, "foreign_keys", "OFF")?;
         migrate(&conn)?;
+        conn.pragma_update(None, "foreign_keys", "ON")?;
+        let violation: Option<String> = conn
+            .query_row("PRAGMA foreign_key_check", [], |row| {
+                row.get::<_, String>(0)
+            })
+            .optional()?;
+        if let Some(table) = violation {
+            return Err(DbError::Integrity(format!(
+                "foreign key violation in table '{table}' after migration"
+            )));
+        }
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
         })
@@ -304,6 +347,90 @@ mod tests {
 
         drop(db);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn v7_rebuild_preserves_rows_and_changes_default() {
+        // Build a V6-era database by hand, populate it, then run the full
+        // migration chain over it. Foreign keys off, exactly as
+        // from_connection runs migrations — otherwise the rebuild's DROP
+        // TABLE would cascade-delete the credential rows.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
+        for (i, sql) in MIGRATIONS.iter().take(6).enumerate() {
+            conn.execute_batch(&format!(
+                "BEGIN;\n{sql}\nPRAGMA user_version = {};\nCOMMIT;",
+                i + 1
+            ))
+            .unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO users (discord_user_id, username, created_at, last_auth_at)
+                 VALUES (1, 'admin', 0, 0);
+             INSERT INTO guilds (guild_id, name, registered_by, created_at, updated_at)
+                 VALUES (100, 'g', 1, 0, 0);
+             INSERT INTO telescopes
+                 (guild_id, name, discord_channel_id, write_policy, allowed_role_ids,
+                  created_by, created_at)
+                 VALUES (100, 'c925', 42, 'roles', '[7]', 1, 0);
+             INSERT INTO rig_credentials
+                 (telescope_id, credential_hash, node_id, profile_id, paired_at, last_seen_at)
+                 VALUES (1, 'hash', 'n', 'p', 0, 0);",
+        )
+        .unwrap();
+
+        migrate(&conn).unwrap();
+        assert_eq!(
+            conn.query_row("PRAGMA user_version", [], |r| r.get::<_, usize>(0))
+                .unwrap(),
+            MIGRATIONS.len()
+        );
+
+        // Existing rows survive the rebuild with their data intact.
+        let (policy, channel, roles): (String, i64, String) = conn
+            .query_row(
+                "SELECT write_policy, discord_channel_id, allowed_role_ids
+                 FROM telescopes WHERE name = 'c925'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (policy.as_str(), channel, roles.as_str()),
+            ("roles", 42, "[7]")
+        );
+        // The credential still points at the rebuilt row.
+        let credentials: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM rig_credentials rc
+                 JOIN telescopes t ON t.id = rc.telescope_id",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(credentials, 1);
+
+        // New rows default to the admins policy.
+        conn.execute(
+            "INSERT INTO telescopes (guild_id, name, created_by, created_at)
+             VALUES (100, 'esprit', 1, 0)",
+            [],
+        )
+        .unwrap();
+        let default_policy: String = conn
+            .query_row(
+                "SELECT write_policy FROM telescopes WHERE name = 'esprit'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(default_policy, "admins");
+        // The rebuilt unique channel index still enforces.
+        let clash = conn.execute(
+            "UPDATE telescopes SET discord_channel_id = 42 WHERE name = 'esprit'",
+            [],
+        );
+        assert!(clash.is_err());
     }
 
     #[test]

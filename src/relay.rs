@@ -299,7 +299,7 @@ where
     S::Error: Into<tokio_tungstenite::tungstenite::Error>,
 {
     let json = serde_json::to_string(message).map_err(|e| RelayError::State(e.to_string()))?;
-    sink.send(Message::Text(json))
+    sink.send(Message::Text(json.into()))
         .await
         .map_err(|e| RelayError::Connect(Box::new(e.into())))
 }

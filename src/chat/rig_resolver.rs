@@ -17,6 +17,10 @@ pub struct CommandContext {
     pub user_id: u64,
     /// The invoking member's role IDs (empty in DMs).
     pub role_ids: Vec<u64>,
+    /// True when the invoker manages this guild right now: its owner, or a
+    /// member whose interaction permissions carry ADMINISTRATOR or
+    /// MANAGE_GUILD. Computed from Discord's own data at command time.
+    pub manages_guild: bool,
 }
 
 pub trait RigResolver: Send + Sync {
@@ -141,6 +145,7 @@ mod tests {
             channel_id,
             user_id,
             role_ids: Vec::new(),
+            manages_guild: false,
         }
     }
 
