@@ -8,6 +8,9 @@
 //!
 //! See `docs/HOSTED_SERVICE.md` for the full design.
 
+pub mod auth;
 pub mod config;
 pub mod db;
+pub mod discord_api;
 pub mod server;
+pub mod store;

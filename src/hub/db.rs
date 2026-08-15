@@ -25,6 +25,45 @@ const MIGRATIONS: &[&str] = &[
         value TEXT NOT NULL,
         updated_at INTEGER NOT NULL
     ) STRICT;",
+    // V2: Discord login. Users, their guild snapshot from OAuth, server-side
+    // sessions, and single-use OAuth state rows. Snowflakes are stored as
+    // INTEGER (u64 bit-cast to i64) and serialized to JSON as strings.
+    "CREATE TABLE users (
+        discord_user_id INTEGER PRIMARY KEY,
+        username TEXT NOT NULL,
+        email TEXT,
+        email_verified INTEGER NOT NULL DEFAULT 0,
+        avatar_url TEXT,
+        created_at INTEGER NOT NULL,
+        last_auth_at INTEGER NOT NULL
+    ) STRICT;
+    CREATE TABLE user_guilds (
+        discord_user_id INTEGER NOT NULL
+            REFERENCES users(discord_user_id) ON DELETE CASCADE,
+        guild_id INTEGER NOT NULL,
+        guild_name TEXT NOT NULL,
+        permissions INTEGER NOT NULL,
+        is_owner INTEGER NOT NULL DEFAULT 0,
+        last_seen_at INTEGER NOT NULL,
+        PRIMARY KEY (discord_user_id, guild_id)
+    ) STRICT;
+    CREATE INDEX idx_user_guilds_guild ON user_guilds(guild_id);
+    CREATE TABLE sessions (
+        session_id TEXT PRIMARY KEY,
+        csrf_token TEXT NOT NULL,
+        discord_user_id INTEGER NOT NULL
+            REFERENCES users(discord_user_id) ON DELETE CASCADE,
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL
+    ) STRICT;
+    CREATE INDEX idx_sessions_user ON sessions(discord_user_id);
+    CREATE TABLE oauth_states (
+        nonce TEXT PRIMARY KEY,
+        pkce_verifier TEXT NOT NULL,
+        next_path TEXT NOT NULL,
+        issued_at INTEGER NOT NULL,
+        consumed_at INTEGER
+    ) STRICT;",
 ];
 
 #[derive(Debug, thiserror::Error)]

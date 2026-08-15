@@ -13,13 +13,13 @@ categories = ["science", "api-bindings"]
 default = ["hub"]
 # The centralized hub service: axum web app + SQLite persistence. Rig-only
 # builds can disable this to drop the web stack.
-hub = ["dep:axum", "dep:rusqlite"]
+hub = ["dep:axum", "dep:rusqlite", "dep:hmac", "dep:sha2", "dep:subtle"]
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1", features = ["full"] }
-reqwest = { version = "0.13", features = ["json", "multipart", "query"] }
+reqwest = { version = "0.13", features = ["json", "multipart", "query", "form", "cookies"] }
 base64 = "0.23"
 clap = { version = "4", features = ["derive"] }
 chrono = { version = "0.4", features = ["serde"] }
@@ -49,6 +49,9 @@ libsqlite3-sys = { version = "0", features = ["bundled"] }
 # native sqlite3 links entry exists in the graph.
 axum = { version = "0.8", optional = true }
 rusqlite = { version = "0.37", optional = true }
+hmac = { version = "0.12", optional = true }
+sha2 = { version = "0.10", optional = true }
+subtle = { version = "2", optional = true }
 
 # Windows service dependencies (Windows only)
 [target.'cfg(windows)'.dependencies]
