@@ -41,6 +41,36 @@ The initial project targets N.I.N.A. 3.2 and .NET 8:
 dotnet build nina-plugin/SpaceCat.NINA/SpaceCat.NINA.csproj
 ```
 
+## Package and registry manifest
+
+The package script builds the plugin, archives only the SpaceCat assembly, and
+generates a N.I.N.A.-compatible beta manifest with the archive's SHA-256
+checksum:
+
+```powershell
+./nina-plugin/build-package.ps1 -Version 0.1.0.0
+```
+
+For a local registry test, override the installer URL with the address that
+serves the generated archive:
+
+```powershell
+./nina-plugin/build-package.ps1 `
+  -Version 0.1.0.0 `
+  -InstallerUrl http://127.0.0.1:8765/packages/SpaceCat.NINA.0.1.0.0.zip `
+  -FeaturedImageUrl http://127.0.0.1:8765/images/spacecat-nina-plugin-featured.png
+```
+
+The generated manifest can be added alongside existing entries in a N.I.N.A.
+registry; it does not replace or require changes to other plugins. Tagged
+`nina-vX.Y.Z.B` builds publish the archive and manifest as a separate beta
+GitHub release from the main SpaceCat agent releases.
+
+The plugin manifest uses
+`assets/branding/spacecat-nina-plugin-featured.png`; the main Windows binary,
+Start menu shortcut, and Add/Remove Programs entry use the multi-resolution
+`assets/branding/spacecat.ico` app icon.
+
 The project currently exports the N.I.N.A. plugin manifest and the shared
 multi-system identity handshake. Native event collection, named-pipe/WebSocket
 transports, pairing, and the options UI are the next implementation stages.

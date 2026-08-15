@@ -8,6 +8,7 @@ output/
 # Temporary files from build
 spacecat.exe
 README.md
+README.install.md
 config.example.json
 LICENSE.rtf
 

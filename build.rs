@@ -10,6 +10,18 @@
 
 use std::process::Command;
 
+#[cfg(windows)]
+fn embed_windows_resources() {
+    let mut resource = winresource::WindowsResource::new();
+    resource.set_icon("assets/branding/spacecat.ico");
+    resource
+        .compile()
+        .expect("failed to embed the SpaceCat Windows icon");
+}
+
+#[cfg(not(windows))]
+fn embed_windows_resources() {}
+
 fn git_sha() -> Option<String> {
     let sha = Command::new("git")
         .args(["rev-parse", "--short=12", "HEAD"])
@@ -32,6 +44,8 @@ fn git_sha() -> Option<String> {
 }
 
 fn main() {
+    embed_windows_resources();
+
     let sha = std::env::var("SPACECAT_GIT_SHA")
         .ok()
         .filter(|s| !s.is_empty())
@@ -48,6 +62,7 @@ fn main() {
 
     println!("cargo:rustc-env=SPACECAT_GIT_SHA={sha}");
     println!("cargo:rerun-if-env-changed=SPACECAT_GIT_SHA");
+    println!("cargo:rerun-if-changed=assets/branding/spacecat.ico");
     // Re-run when HEAD moves so the SHA stays current across commits and
     // branch switches.
     println!("cargo:rerun-if-changed=.git/HEAD");

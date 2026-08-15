@@ -1,12 +1,21 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <TargetFramework>net8.0-windows7.0</TargetFramework>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
-    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <RootNamespace>SpaceCat.NINA</RootNamespace>
-    <AssemblyName>SpaceCat.NINA</AssemblyName>
+    <AssemblyName>SpaceCat</AssemblyName>
+    <OutputType>Library</OutputType>
+    <Version>0.1.0.0</Version>
+    <AssemblyVersion>$(Version)</AssemblyVersion>
+    <FileVersion>$(Version)</FileVersion>
+    <Title>SpaceCat</Title>
+    <Description>Connect N.I.N.A. to SpaceCat using Direct or Advanced API mode</Description>
+    <Company>Yann Ramin</Company>
+    <Product>SpaceCat N.I.N.A. Plugin</Product>
+    <Copyright>Copyright (c) 2026 Yann Ramin</Copyright>
   </PropertyGroup>
 
   <ItemGroup>

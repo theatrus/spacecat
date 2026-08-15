@@ -1,0 +1,77 @@
+name: N.I.N.A. Plugin Release
+
+on:
+  push:
+    tags:
+      - "nina-v*.*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Four-part N.I.N.A. plugin version
+        required: true
+        default: 0.1.0.0
+
+permissions:
+  contents: write
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_NOLOGO: true
+
+jobs:
+  package:
+    name: Package plugin
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Resolve and validate version
+        id: version
+        shell: pwsh
+        run: |
+          $version = if ('${{ github.event_name }}' -eq 'push') {
+            '${{ github.ref_name }}'.Substring('nina-v'.Length)
+          } else {
+            '${{ inputs.version }}'
+          }
+          if ($version -notmatch '^\d+\.\d+\.\d+\.\d+$') {
+            throw "N.I.N.A. plugin versions must contain four numeric parts. Got: $version"
+          }
+          "NINA_PLUGIN_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Build archive and manifest
+        shell: pwsh
+        run: |
+          $archiveName = "SpaceCat.NINA.$env:NINA_PLUGIN_VERSION.zip"
+          $installerUrl = "https://github.com/${{ github.repository }}/releases/download/nina-v$env:NINA_PLUGIN_VERSION/$archiveName"
+          ./nina-plugin/build-package.ps1 `
+            -Version $env:NINA_PLUGIN_VERSION `
+            -InstallerUrl $installerUrl
+
+      - name: Upload release candidate
+        uses: actions/upload-artifact@v7
+        with:
+          name: nina-plugin-${{ steps.version.outputs.version }}
+          path: |
+            artifacts/nina-plugin/SpaceCat.NINA.${{ steps.version.outputs.version }}.zip
+            artifacts/nina-plugin/SpaceCat.NINA.${{ steps.version.outputs.version }}.manifest.json
+
+      - name: Publish N.I.N.A. plugin release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: SpaceCat N.I.N.A. Plugin ${{ steps.version.outputs.version }}
+          prerelease: true
+          generate_release_notes: true
+          files: |
+            artifacts/nina-plugin/SpaceCat.NINA.${{ steps.version.outputs.version }}.zip
+            artifacts/nina-plugin/SpaceCat.NINA.${{ steps.version.outputs.version }}.manifest.json

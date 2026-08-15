@@ -4,6 +4,7 @@ config.*.json
 spacecat-state.json
 *.log
 /installer/output
+/artifacts
 /nina-plugin/**/bin/
 /nina-plugin/**/obj/
 .vscode/

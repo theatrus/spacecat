@@ -74,7 +74,7 @@ if (-not (Test-Path $ConfigExample)) {
 
 # Copy README to installer directory
 $ReadmeSrc = Join-Path $ProjectRoot "README.md"
-$ReadmeDst = Join-Path $InstallerDir "README.md"
+$ReadmeDst = Join-Path $InstallerDir "README.install.md"
 if (Test-Path $ReadmeSrc) {
     Copy-Item $ReadmeSrc $ReadmeDst -Force
 } else {
@@ -141,7 +141,7 @@ if ($shouldUpdateLicense) {
 \f0\fs20
 Apache License 2.0\par
 \par
-Copyright 2025 SpaceCat Contributors\par
+Copyright 2026 Yann Ramin\par
 \par
 Licensed under the Apache License, Version 2.0 (the "License");\par
 you may not use this file except in compliance with the License.\par
@@ -200,6 +200,7 @@ $WixObj = Join-Path $OutputDir "spacecat.wixobj"
 
 & $Candle `
     -dSourceDir="$InstallerDir" `
+    -dIconDir="$ProjectRoot\assets\branding" `
     -dVersion="$Version" `
     -out "$WixObj" `
     "$InstallerDir\spacecat.wxs" `

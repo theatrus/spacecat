@@ -4,7 +4,7 @@
            Name="SpaceCat" 
            Language="1033" 
            Version="0.3.0.0" 
-           Manufacturer="SpaceCat Team" 
+           Manufacturer="Yann Ramin"
            UpgradeCode="7E8F5D42-3A1B-4C8E-B9F2-1A2B3C4D5E6F">
     
     <Package InstallerVersion="200" 
@@ -31,7 +31,7 @@
                         Name="SpaceCat" 
                         Description="SpaceCat Astronomical Observation System"
                         WorkingDirectory="INSTALLFOLDER"
-                        Icon="SpaceCatIcon.exe"
+                        Icon="SpaceCatIcon.ico"
                         Advertise="yes" />
             </File>
             
@@ -56,7 +56,7 @@
           <!-- README and documentation -->
           <Component Id="Documentation" Guid="C3D4E5F6-7A8B-9C0D-1E2F-A3B4C5D6E7F8" Win64="yes">
             <File Id="ReadmeFile" 
-                  Source="$(var.SourceDir)\README.md" 
+                  Source="$(var.SourceDir)\README.install.md"
                   Name="README.md" 
                   KeyPath="yes" />
           </Component>
@@ -179,13 +179,13 @@
     <WixVariable Id="WixUILicenseRtf" Value="$(var.SourceDir)\LICENSE.rtf" />
     
     <!-- Icon for Add/Remove Programs -->
-    <Icon Id="SpaceCatIcon.exe" SourceFile="$(var.SourceDir)\spacecat.exe" />
-    <Property Id="ARPPRODUCTICON" Value="SpaceCatIcon.exe" />
+    <Icon Id="SpaceCatIcon.ico" SourceFile="$(var.IconDir)\spacecat.ico" />
+    <Property Id="ARPPRODUCTICON" Value="SpaceCatIcon.ico" />
     
     <!-- Properties for Add/Remove Programs -->
-    <Property Id="ARPURLINFOABOUT" Value="https://github.com/yourusername/spacecat" />
-    <Property Id="ARPURLUPDATEINFO" Value="https://github.com/yourusername/spacecat/releases" />
-    <Property Id="ARPHELPLINK" Value="https://github.com/yourusername/spacecat/wiki" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/theatrus/spacecat" />
+    <Property Id="ARPURLUPDATEINFO" Value="https://github.com/theatrus/spacecat/releases" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/theatrus/spacecat/issues" />
     
   </Product>
 </Wix>

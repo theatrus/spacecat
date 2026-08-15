@@ -114,8 +114,13 @@ jobs:
         with:
           dotnet-version: 8.0.x
 
-      - name: Build plugin
-        run: dotnet build nina-plugin/SpaceCat.NINA/SpaceCat.NINA.csproj --configuration Release
+      - name: Build and package plugin
+        shell: pwsh
+        run: >-
+          ./nina-plugin/build-package.ps1
+          -Version 0.1.0.0
+          -InstallerUrl https://example.invalid/SpaceCat.NINA.0.1.0.0.zip
+          -FeaturedImageUrl https://example.invalid/spacecat-nina-plugin-featured.png
 
   security:
     name: Security Audit
