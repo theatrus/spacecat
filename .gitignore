@@ -2,6 +2,9 @@
 config.json
 config.*.json
 chatstronomy-state.json
+hub.json
+hub.*.json
+chatstronomy-hub.db*
 *.log
 /installer/output
 /artifacts
