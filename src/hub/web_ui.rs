@@ -1,8 +1,10 @@
 //! The hub's management page: one inline HTML document, no build pipeline.
 //!
-//! The page drives the JSON API under `/api` with the session cookie and
-//! CSRF token from `/api/session`. Channels and roles come from Discord via
-//! `/api/guilds/{id}/options` — nobody types an ID anywhere.
+//! Structure mirrors the data model: "My telescopes" (user-owned rigs —
+//! pairing, cooldown, attach/share) on top, then one card per server with
+//! its attachments (per-server permissions and channel destinations).
+//! Channels and roles come from Discord via `/api/guilds/{id}/options` —
+//! nobody types an ID anywhere.
 
 pub const INDEX_HTML: &str = r#"<!doctype html>
 <html lang="en">
@@ -39,7 +41,7 @@ pub const INDEX_HTML: &str = r#"<!doctype html>
     background: var(--panel2); border: 1px solid var(--border);
     border-radius: var(--radius); padding: .9rem 1rem; margin-top: .9rem;
   }
-  .sub .head { display: flex; align-items: center; gap: .6rem; margin-bottom: .6rem; }
+  .sub .head { display: flex; align-items: center; gap: .6rem; margin-bottom: .6rem; flex-wrap: wrap; }
   .sub .head b { font-size: 1rem; }
   .grow { flex: 1; }
 
@@ -78,6 +80,8 @@ pub const INDEX_HTML: &str = r#"<!doctype html>
     border: 1px solid var(--border); border-radius: 7px; padding: .45rem .55rem;
     font: inherit; font-size: .88rem;
   }
+  .row select, .row input, .newrow select, .newrow input { width: auto; }
+  .row { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
   .chips { display: flex; flex-wrap: wrap; gap: .4rem; }
   .chip {
     display: inline-flex; align-items: center; gap: .35rem;
@@ -93,7 +97,7 @@ pub const INDEX_HTML: &str = r#"<!doctype html>
   }
   .chip .rm-route:hover { color: var(--bad); }
 
-  .newrow { display: flex; gap: .5rem; margin-top: .9rem; align-items: center; }
+  .newrow { display: flex; gap: .5rem; margin-top: .9rem; align-items: center; flex-wrap: wrap; }
   .newrow input { max-width: 240px; }
   .token-box {
     background: var(--bg); border: 1px dashed var(--warn); border-radius: 8px;
@@ -126,6 +130,7 @@ pub const INDEX_HTML: &str = r#"<!doctype html>
 <script>
 "use strict";
 let CSRF = null;
+let GUILDS = [];
 
 const app = document.getElementById("app");
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
@@ -160,8 +165,8 @@ async function boot() {
     who.innerHTML = "";
     app.innerHTML =
       '<div class="card"><h2>Bring your observatory into Discord</h2>' +
-      '<p>Pair your N.I.N.A. rigs, route each telescope to a channel, and let your ' +
-      "server watch sessions unfold — images, autofocus runs, guiding graphs, and " +
+      '<p>Add your telescopes, attach them to your servers, and let everyone ' +
+      "watch sessions unfold — images, autofocus runs, guiding graphs, and " +
       "slash commands to drive the mount.</p>" +
       '<p><a href="/login"><button class="primary">Log in with Discord</button></a></p></div>';
     return;
@@ -170,21 +175,18 @@ async function boot() {
   const u = session.user;
   who.innerHTML = (u.avatar_url ? '<img class="avatar" src="' + esc(u.avatar_url) + '" alt=""> ' : "") +
     esc(u.username) + ' &nbsp;·&nbsp; <a href="/logout">log out</a>';
-  await renderGuilds();
+  await renderAll();
 }
 
-async function renderGuilds() {
-  app.innerHTML = '<p class="hint">Loading your servers…</p>';
-  let data;
-  try { data = await api("/api/guilds"); }
-  catch (e) { app.innerHTML = '<p class="error">' + esc(e.message) + "</p>"; return; }
-  if (!data.guilds.length) {
-    app.innerHTML = '<div class="card"><p>No servers where you hold <b>Manage Server</b>. ' +
-      "Ask a server admin, or check your Discord permissions.</p></div>";
-    return;
-  }
+async function renderAll() {
+  app.innerHTML = '<p class="hint">Loading…</p>';
+  let guilds, mine;
+  try {
+    [guilds, mine] = await Promise.all([api("/api/guilds"), api("/api/telescopes")]);
+  } catch (e) { app.innerHTML = '<p class="error">' + esc(e.message) + "</p>"; return; }
+  GUILDS = guilds.guilds;
   app.innerHTML = "";
-  if (data.bot_configured === false) {
+  if (guilds.bot_configured === false) {
     const banner = document.createElement("div");
     banner.className = "banner";
     banner.innerHTML = "<b>This hub is running without a Discord bot token.</b> " +
@@ -193,38 +195,190 @@ async function renderGuilds() {
       "and restarts the hub.";
     app.appendChild(banner);
   }
-  for (const g of data.guilds) {
-    const card = document.createElement("div");
-    card.className = "card";
-    const botBadge = g.bot_installed === null ? "" :
-      g.bot_installed ? '<span class="badge good">bot installed</span>'
-                      : '<span class="badge bad">bot not installed</span>';
-    const regBadge = g.registered ? '<span class="badge good">registered</span>'
-                                  : '<span class="badge">not registered</span>';
-    let actions = "";
-    if (g.bot_installed === false && g.install_url) {
-      actions += '<a href="' + esc(g.install_url) + '" target="_blank" rel="noopener">' +
-        '<button class="primary">Add bot to server</button></a> ';
-    }
-    if (!g.registered && g.bot_installed !== false) {
-      actions += '<button class="primary" data-register="' + esc(g.id) + '">Set up this server</button>';
-    }
-    card.innerHTML =
-      '<div class="head"><h2>' + esc(g.name) + "</h2>" +
-      regBadge + " " + botBadge + " " + actions + "</div>" +
-      '<div class="telescopes" data-guild="' + esc(g.id) + '"></div>';
-    app.appendChild(card);
-    if (g.registered) renderTelescopes(g.id, card.querySelector(".telescopes"));
+  renderMyTelescopes(mine.telescopes);
+  for (const g of GUILDS) {
+    renderGuildCard(g);
   }
-  app.querySelectorAll("[data-register]").forEach((btn) => {
-    btn.onclick = async () => {
+  if (!GUILDS.length) {
+    const note = document.createElement("div");
+    note.className = "card";
+    note.innerHTML = "<p>No servers where you hold <b>Manage Server</b>. " +
+      "Ask a server admin, or check your Discord permissions.</p>";
+    app.appendChild(note);
+  }
+}
+
+// ---------- My telescopes ----------
+
+function attachTargets(t) {
+  // Registered, manageable servers this telescope is not attached to yet.
+  const attached = new Set(t.attachments.map((a) => a.guild_id));
+  return GUILDS.filter((g) => g.registered && !attached.has(g.id));
+}
+
+function renderMyTelescopes(telescopes) {
+  const card = document.createElement("div");
+  card.className = "card";
+  let html = '<div class="head"><h2>My telescopes</h2>' +
+    '<span class="hint">One per N.I.N.A. profile or relay agent — yours across every server.</span></div>';
+  for (const t of telescopes) {
+    const connected = t.connected
+      ? '<span class="badge good">connected</span>'
+      : '<span class="badge warn">waiting for rig</span>';
+    const where = t.attachments.length
+      ? t.attachments.map((a) =>
+          esc(a.guild_name || a.guild_id) + (a.can_command ? "" : " (feed)")).join(", ")
+      : "not attached to any server yet";
+    const targets = attachTargets(t);
+    const attachRow = targets.length
+      ? '<select class="f-attach">' + targets.map((g) =>
+          '<option value="' + esc(g.id) + '">' + esc(g.name) + "</option>").join("") +
+        '</select><button class="b-attach">Attach to server</button>'
+      : '<span class="hint">Attached to all your registered servers.</span>';
+    html +=
+      '<div class="sub telescope" data-id="' + t.id + '">' +
+      '<div class="head"><b>' + esc(t.name) + "</b>" + connected +
+      '<span class="hint">' + where + '</span><span class="grow"></span></div>' +
+      '<div class="row">' +
+      '<span class="hint">Image cooldown (s)</span>' +
+      '<input class="f-cooldown" type="number" min="0" max="86400" style="max-width:6.5rem" value="' +
+      t.image_cooldown_seconds + '">' +
+      '<button class="b-save">Save</button>' +
+      attachRow +
+      "</div>" +
+      '<div class="actions">' +
+      '<button class="primary b-token">Pair a rig…</button>' +
+      '<button class="b-share">Share code…</button>' +
+      '<span class="spacer"></span>' +
+      '<button class="subtle danger b-revoke">Revoke access</button>' +
+      '<button class="subtle danger b-delete">Delete</button>' +
+      "</div></div>";
+  }
+  html +=
+    '<div class="newrow">' +
+    '<input class="new-name" placeholder="telescope name (e.g. c925)">' +
+    '<button class="b-create">Add telescope</button></div>' +
+    '<div class="token-out"></div>';
+  card.innerHTML = html;
+  app.appendChild(card);
+
+  card.querySelector(".b-create").onclick = async () => {
+    const name = card.querySelector(".new-name").value.trim();
+    if (!name) return;
+    try {
+      await api("/api/telescopes", { method: "POST", body: JSON.stringify({ name }) });
+      toast("Telescope added — attach it to a server, then pair the rig");
+      renderAll();
+    } catch (e) { toast(e.message); }
+  };
+
+  card.querySelectorAll(".telescope").forEach((row) => {
+    const id = row.dataset.id;
+    row.querySelector(".b-save").onclick = async () => {
+      const body = {
+        image_cooldown_seconds: parseInt(row.querySelector(".f-cooldown").value, 10) || 0,
+      };
       try {
-        await api("/api/guilds/" + btn.dataset.register + "/register", { method: "POST" });
-        toast("Server registered");
-        renderGuilds();
+        await api("/api/telescopes/" + id, { method: "PATCH", body: JSON.stringify(body) });
+        toast("Saved");
+      } catch (e) { toast(e.message); }
+    };
+    const attach = row.querySelector(".b-attach");
+    if (attach) {
+      attach.onclick = async () => {
+        const guild = row.querySelector(".f-attach").value;
+        try {
+          await api("/api/telescopes/" + id + "/attach",
+            { method: "POST", body: JSON.stringify({ guild_id: guild }) });
+          toast("Attached — pick channels on the server card below");
+          renderAll();
+        } catch (e) { toast(e.message); }
+      };
+    }
+    row.querySelector(".b-token").onclick = async () => {
+      try {
+        const out = await api("/api/telescopes/" + id + "/pairing-token", { method: "POST" });
+        showToken(card, "Pairing token (shown once, valid " +
+          Math.round(out.expires_in_seconds / 60) + " minutes)", out.token,
+          "Paste into the N.I.N.A. plugin or the relay config, then connect. " +
+          "Issuing a new token cancels this one.");
+      } catch (e) { toast(e.message); }
+    };
+    row.querySelector(".b-share").onclick = async () => {
+      try {
+        const out = await api("/api/telescopes/" + id + "/share-code", { method: "POST" });
+        showToken(card, "Share code (valid " +
+          Math.round(out.expires_in_seconds / 86400) + " days, single use)", out.code,
+          "Give this to a manager of another server. They redeem it on their server " +
+          "card against one of their channels. Their server gets the feed and read " +
+          "commands; only servers you attach directly can drive the scope.");
+      } catch (e) { toast(e.message); }
+    };
+    row.querySelector(".b-revoke").onclick = async () => {
+      if (!confirm("Revoke this telescope's rig credentials? The rig is disconnected " +
+        "and must re-pair with a new token.")) return;
+      try {
+        await api("/api/telescopes/" + id + "/credentials", { method: "DELETE" });
+        await api("/api/telescopes/" + id + "/pairing-tokens", { method: "DELETE" });
+        toast("Access revoked");
+        renderAll();
+      } catch (e) { toast(e.message); }
+    };
+    row.querySelector(".b-delete").onclick = async () => {
+      if (!confirm("Delete this telescope everywhere? All attachments, destinations, " +
+        "and credentials go with it.")) return;
+      try {
+        await api("/api/telescopes/" + id, { method: "DELETE" });
+        toast("Deleted");
+        renderAll();
       } catch (e) { toast(e.message); }
     };
   });
+}
+
+function showToken(card, title, value, hint) {
+  const box = card.querySelector(".token-out");
+  box.innerHTML = '<div class="token-box">' + esc(title) + ":<br><b>" + esc(value) +
+    '</b><br><button class="b-copy">Copy</button> <span class="hint">' + hint + "</span></div>";
+  box.querySelector(".b-copy").onclick = () => {
+    navigator.clipboard.writeText(value).then(() => toast("Copied"));
+  };
+}
+
+// ---------- Server cards ----------
+
+function renderGuildCard(g) {
+  const card = document.createElement("div");
+  card.className = "card";
+  const botBadge = g.bot_installed === null ? "" :
+    g.bot_installed ? '<span class="badge good">bot installed</span>'
+                    : '<span class="badge bad">bot not installed</span>';
+  const regBadge = g.registered ? '<span class="badge good">registered</span>'
+                                : '<span class="badge">not registered</span>';
+  let actions = "";
+  if (g.bot_installed === false && g.install_url) {
+    actions += '<a href="' + esc(g.install_url) + '" target="_blank" rel="noopener">' +
+      '<button class="primary">Add bot to server</button></a> ';
+  }
+  if (!g.registered && g.bot_installed !== false) {
+    actions += '<button class="primary b-register">Set up this server</button>';
+  }
+  card.innerHTML =
+    '<div class="head"><h2>' + esc(g.name) + "</h2>" +
+    regBadge + " " + botBadge + " " + actions + "</div>" +
+    '<div class="attachments"></div>';
+  app.appendChild(card);
+  const registerBtn = card.querySelector(".b-register");
+  if (registerBtn) {
+    registerBtn.onclick = async () => {
+      try {
+        await api("/api/guilds/" + g.id + "/register", { method: "POST" });
+        toast("Server registered");
+        renderAll();
+      } catch (e) { toast(e.message); }
+    };
+  }
+  if (g.registered) renderAttachments(g, card.querySelector(".attachments"));
 }
 
 const POLICY_OPTIONS = [
@@ -233,35 +387,20 @@ const POLICY_OPTIONS = [
   ["disabled", "Disabled"],
 ];
 
-function addChannelSelect(options, used) {
-  // Discord-sourced picker of this guild's channels not already routed.
+function addChannelSelect(options, used, cls) {
   const free = options.channels.filter((c) => !used.includes(c.id));
   if (!options.channels.length) {
     const why = options.bot_configured === false
       ? "hub has no bot token"
       : "none visible to the bot — check its channel permissions";
-    return '<select class="f-addchan" disabled><option value="">no channels (' +
+    return '<select class="' + cls + '" disabled><option value="">no channels (' +
       why + ")</option></select>";
   }
   if (!free.length) {
-    return '<select class="f-addchan" disabled><option value="">all channels routed</option></select>';
+    return '<select class="' + cls + '" disabled><option value="">all channels routed</option></select>';
   }
-  return '<select class="f-addchan">' + free.map((c) =>
+  return '<select class="' + cls + '">' + free.map((c) =>
     '<option value="' + esc(c.id) + '">#' + esc(c.name) + "</option>").join("") + "</select>";
-}
-
-function destinationList(t) {
-  if (!t.channels.length) {
-    return '<span class="hint">No destinations yet — this telescope is not posting anywhere.</span>';
-  }
-  return '<div class="chips">' + t.channels.map((route) => {
-    const name = route.channel_name ? '#' + esc(route.channel_name)
-                                    : "channel " + esc(route.channel_id);
-    const where = route.external ? ' <span class="hint">(' + esc(route.guild_name || "another server") + ")</span>" : "";
-    return '<span class="chip on">' + name + where +
-      ' <button type="button" class="rm-route" data-route="' + route.route_id +
-      '" title="Remove">✕</button></span>';
-  }).join("") + "</div>";
 }
 
 function roleChips(options, selected) {
@@ -275,204 +414,135 @@ function roleChips(options, selected) {
   }).join("") + "</div>";
 }
 
-async function renderTelescopes(guildId, el) {
+function destinationChips(a) {
+  if (!a.channels.length) {
+    return '<span class="hint">No channels yet — this feed is not posting here.</span>';
+  }
+  return '<div class="chips">' + a.channels.map((route) => {
+    const name = route.channel_name ? '#' + esc(route.channel_name)
+                                    : "channel " + esc(route.channel_id);
+    return '<span class="chip on">' + name +
+      ' <button type="button" class="rm-route" data-route="' + route.route_id +
+      '" title="Remove">✕</button></span>';
+  }).join("") + "</div>";
+}
+
+async function renderAttachments(g, el) {
   let data, options;
   try {
     [data, options] = await Promise.all([
-      api("/api/guilds/" + guildId + "/telescopes"),
-      api("/api/guilds/" + guildId + "/options"),
+      api("/api/guilds/" + g.id + "/attachments"),
+      api("/api/guilds/" + g.id + "/options"),
     ]);
   } catch (e) { el.innerHTML = '<p class="error">' + esc(e.message) + "</p>"; return; }
 
+  const usedChannels = data.attachments.flatMap((a) => a.channels.map((r) => r.channel_id));
   let html = "";
-  for (const t of data.telescopes) {
-    const connected = t.connected
+  for (const a of data.attachments) {
+    const connected = a.connected
       ? '<span class="badge good">connected</span>'
       : '<span class="badge warn">waiting for rig</span>';
+    const kind = a.can_command
+      ? '<span class="badge good">commands enabled</span>'
+      : '<span class="badge">feed only</span>';
+    const owner = a.owned_by_me ? "" :
+      '<span class="hint">from ' + esc(a.owner_name) + "</span>";
     const policySelect = '<select class="f-policy">' + POLICY_OPTIONS.map(([v, label]) =>
-      '<option value="' + v + '"' + (t.write_policy === v ? " selected" : "") + ">" +
+      '<option value="' + v + '"' + (a.write_policy === v ? " selected" : "") + ">" +
       label + "</option>").join("") + "</select>";
-    const used = t.channels.map((route) => route.channel_id);
     html +=
-      '<div class="sub telescope" data-id="' + t.id + '">' +
-      '<div class="head"><b>' + esc(t.name) + "</b>" + connected + '<span class="grow"></span></div>' +
-      '<div class="field"><label>Destinations — every channel this telescope posts to</label>' +
-      destinationList(t) +
+      '<div class="sub attachment" data-id="' + a.attachment_id + '">' +
+      '<div class="head"><b>' + esc(a.telescope_name) + "</b>" + owner + connected + kind +
+      '<span class="grow"></span>' +
+      '<button class="subtle danger b-detach">Detach</button></div>' +
+      '<div class="field"><label>Posts to channels</label>' + destinationChips(a) +
       '<div class="row" style="margin-top:.5rem">' +
-      addChannelSelect(options, used) +
-      '<button class="b-addchan">Add channel</button>' +
-      '<button class="subtle b-share">Share to another server…</button>' +
-      "</div></div>" +
-      '<div class="fields" style="margin-top:.8rem">' +
-      '<div class="field"><label>Image cooldown (seconds)</label>' +
-      '<input class="f-cooldown" type="number" min="0" max="86400" value="' + t.image_cooldown_seconds + '"></div>' +
-      '<div class="field"><label>Who can send commands</label>' + policySelect + "</div>" +
-      "</div>" +
-      '<div class="field roles-field" style="margin-top:.7rem' +
-      (t.write_policy === "roles" ? "" : ";display:none") + '">' +
-      "<label>Roles allowed to send commands (managers always can)</label>" +
-      roleChips(options, t.allowed_role_ids) + "</div>" +
-      '<div class="actions">' +
-      '<button class="primary b-save">Save</button>' +
-      '<button class="b-token">Pair a rig…</button>' +
-      '<span class="spacer"></span>' +
-      '<button class="subtle danger b-revoke">Revoke access</button>' +
-      '<button class="subtle danger b-delete">Delete</button>' +
-      "</div></div>";
-  }
-  if (data.shared_in.length) {
-    html += '<div class="field" style="margin-top:.9rem"><label>Shared into this server</label>';
-    for (const share of data.shared_in) {
-      const name = share.channel_name ? '#' + esc(share.channel_name)
-                                      : "channel " + esc(share.channel_id);
-      html += '<div class="row" style="margin-top:.3rem">' +
-        "<b>" + esc(share.telescope_name) + "</b>" +
-        '<span class="hint">from ' + esc(share.owning_guild_name || "another server") +
-        " → " + name + "</span>" +
-        '<span class="grow"></span>' +
-        '<button class="subtle danger b-unsub" data-telescope="' + share.telescope_id +
-        '" data-route="' + share.route_id + '">Remove</button></div>';
-    }
-    html += "</div>";
+      addChannelSelect(options, usedChannels, "f-addchan") +
+      '<button class="b-addchan">Add channel</button></div></div>' +
+      (a.can_command
+        ? '<div class="fields" style="margin-top:.8rem">' +
+          '<div class="field"><label>Who can send commands here</label>' + policySelect + "</div>" +
+          "</div>" +
+          '<div class="field roles-field" style="margin-top:.7rem' +
+          (a.write_policy === "roles" ? "" : ";display:none") + '">' +
+          "<label>Roles allowed to send commands (managers always can)</label>" +
+          roleChips(options, a.allowed_role_ids) + "</div>" +
+          '<div class="actions"><button class="primary b-savepolicy">Save permissions</button></div>'
+        : '<p class="hint" style="margin:.6rem 0 0">This server receives the feed and read ' +
+          "commands; it cannot drive the telescope.</p>") +
+      "</div>";
   }
   html +=
     '<div class="newrow">' +
-    '<input class="new-name" placeholder="telescope name (e.g. c925)">' +
-    '<button class="b-create">Add telescope</button>' +
-    '<span class="hint">One per N.I.N.A. profile or relay agent.</span></div>' +
-    '<div class="newrow">' +
     '<input class="share-code" placeholder="share code (cssh_…)">' +
-    addChannelSelect(options, []).replace("f-addchan", "sub-channel") +
+    addChannelSelect(options, usedChannels, "sub-channel") +
     '<button class="b-subscribe">Add shared telescope</button>' +
-    '<span class="hint">Subscribe a channel here to a telescope shared from another server.</span></div>' +
-    '<div class="token-out"></div>';
+    '<span class="hint">Redeem a code from another server’s telescope owner.</span></div>';
   el.innerHTML = html;
-
-  el.querySelectorAll(".b-unsub").forEach((btn) => {
-    btn.onclick = async () => {
-      if (!confirm("Stop receiving this shared telescope's feed here?")) return;
-      try {
-        await api("/api/telescopes/" + btn.dataset.telescope + "/channels/" + btn.dataset.route,
-          { method: "DELETE" });
-        toast("Removed");
-        renderTelescopes(guildId, el);
-      } catch (e) { toast(e.message); }
-    };
-  });
 
   el.querySelector(".b-subscribe").onclick = async () => {
     const code = el.querySelector(".share-code").value.trim();
     const channel = el.querySelector(".sub-channel").value;
     if (!code || !channel) { toast("Enter a share code and pick a channel"); return; }
     try {
-      const out = await api("/api/guilds/" + guildId + "/subscribe",
+      const out = await api("/api/guilds/" + g.id + "/subscribe",
         { method: "POST", body: JSON.stringify({ code, channel_id: channel }) });
       toast("Subscribed to " + out.telescope_name);
-      renderTelescopes(guildId, el);
+      renderAll();
     } catch (e) { toast(e.message); }
   };
 
-  el.querySelector(".b-create").onclick = async () => {
-    const name = el.querySelector(".new-name").value.trim();
-    if (!name) return;
-    try {
-      await api("/api/guilds/" + guildId + "/telescopes",
-        { method: "POST", body: JSON.stringify({ name }) });
-      toast("Telescope added — pair a rig to bring it online");
-      renderTelescopes(guildId, el);
-    } catch (e) { toast(e.message); }
-  };
-
-  el.querySelectorAll(".telescope").forEach((row) => {
+  el.querySelectorAll(".attachment").forEach((row) => {
     const id = row.dataset.id;
     const rolesField = row.querySelector(".roles-field");
-    row.querySelector(".f-policy").onchange = (ev) => {
-      rolesField.style.display = ev.target.value === "roles" ? "" : "none";
-    };
+    const policy = row.querySelector(".f-policy");
+    if (policy) {
+      policy.onchange = (ev) => {
+        if (rolesField) rolesField.style.display = ev.target.value === "roles" ? "" : "none";
+      };
+    }
     row.querySelectorAll(".chip input").forEach((box) => {
       box.onchange = () => box.closest(".chip").classList.toggle("on", box.checked);
     });
-    row.querySelector(".b-save").onclick = async () => {
-      const roles = [...row.querySelectorAll(".chip input:checked")].map((box) => box.value);
-      const body = {
-        image_cooldown_seconds: parseInt(row.querySelector(".f-cooldown").value, 10) || 0,
-        write_policy: row.querySelector(".f-policy").value,
-        allowed_role_ids: roles,
+    const save = row.querySelector(".b-savepolicy");
+    if (save) {
+      save.onclick = async () => {
+        const roles = [...row.querySelectorAll(".chip input:checked")].map((box) => box.value);
+        try {
+          await api("/api/attachments/" + id, {
+            method: "PATCH",
+            body: JSON.stringify({ write_policy: policy.value, allowed_role_ids: roles }),
+          });
+          toast("Permissions saved");
+        } catch (e) { toast(e.message); }
       };
-      try {
-        await api("/api/telescopes/" + id, { method: "PATCH", body: JSON.stringify(body) });
-        toast("Saved");
-        renderTelescopes(guildId, el);
-      } catch (e) { toast(e.message); }
-    };
+    }
     row.querySelector(".b-addchan").onclick = async () => {
       const box = row.querySelector(".f-addchan");
       if (box.disabled || !box.value) return;
       try {
-        await api("/api/telescopes/" + id + "/channels",
+        await api("/api/attachments/" + id + "/channels",
           { method: "POST", body: JSON.stringify({ channel_id: box.value }) });
-        toast("Destination added");
-        renderTelescopes(guildId, el);
+        toast("Channel added");
+        renderAll();
       } catch (e) { toast(e.message); }
     };
-    row.querySelectorAll(".rm-route").forEach((link) => {
-      link.onclick = async (ev) => {
-        ev.preventDefault();
+    row.querySelectorAll(".rm-route").forEach((btn) => {
+      btn.onclick = async () => {
         try {
-          await api("/api/telescopes/" + id + "/channels/" + link.dataset.route,
+          await api("/api/attachments/" + id + "/channels/" + btn.dataset.route,
             { method: "DELETE" });
-          toast("Destination removed");
-          renderTelescopes(guildId, el);
+          toast("Channel removed");
+          renderAll();
         } catch (e) { toast(e.message); }
       };
     });
-    row.querySelector(".b-share").onclick = async () => {
+    row.querySelector(".b-detach").onclick = async () => {
+      if (!confirm("Detach this telescope from this server? Its channels here are removed.")) return;
       try {
-        const out = await api("/api/telescopes/" + id + "/share-code", { method: "POST" });
-        const box = el.querySelector(".token-out");
-        box.innerHTML =
-          '<div class="token-box">Share code (valid ' +
-          Math.round(out.expires_in_seconds / 86400) + " days, single use):<br><b>" +
-          esc(out.code) + '</b><br><button class="b-copy">Copy</button> ' +
-          '<span class="hint">Give this to a manager of the other server. They log in ' +
-          "here, open their server, and redeem it against one of their channels. " +
-          "Their server gets the feed and read commands; only your server can drive the scope.</span></div>";
-        box.querySelector(".b-copy").onclick = () => {
-          navigator.clipboard.writeText(out.code).then(() => toast("Copied"));
-        };
-      } catch (e) { toast(e.message); }
-    };
-    row.querySelector(".b-delete").onclick = async () => {
-      if (!confirm("Delete this telescope? Its credentials and tokens go with it.")) return;
-      try {
-        await api("/api/telescopes/" + id, { method: "DELETE" });
-        toast("Deleted");
-        renderTelescopes(guildId, el);
-      } catch (e) { toast(e.message); }
-    };
-    row.querySelector(".b-revoke").onclick = async () => {
-      if (!confirm("Revoke this telescope's credentials? The rig is disconnected " +
-        "and must re-pair with a new token.")) return;
-      try {
-        await api("/api/telescopes/" + id + "/credentials", { method: "DELETE" });
-        await api("/api/telescopes/" + id + "/pairing-tokens", { method: "DELETE" });
-        toast("Access revoked");
-        renderTelescopes(guildId, el);
-      } catch (e) { toast(e.message); }
-    };
-    row.querySelector(".b-token").onclick = async () => {
-      try {
-        const out = await api("/api/telescopes/" + id + "/pairing-token", { method: "POST" });
-        const box = el.querySelector(".token-out");
-        box.innerHTML =
-          '<div class="token-box">Pairing token (shown once, valid ' +
-          Math.round(out.expires_in_seconds / 60) + " minutes):<br><b>" + esc(out.token) +
-          '</b><br><button class="b-copy">Copy</button> ' +
-          '<span class="hint">Paste into the N.I.N.A. plugin or the relay config, ' +
-          "then connect. Issuing a new token cancels this one.</span></div>";
-        box.querySelector(".b-copy").onclick = () => {
-          navigator.clipboard.writeText(out.token).then(() => toast("Copied"));
-        };
+        await api("/api/attachments/" + id, { method: "DELETE" });
+        toast("Detached");
+        renderAll();
       } catch (e) { toast(e.message); }
     };
   });
@@ -494,11 +564,28 @@ mod tests {
         for needle in [
             "/api/session",
             "/api/guilds",
+            "/api/telescopes",
+            "/attachments",
             "/options",
             "/pairing-token",
+            "/share-code",
+            "/subscribe",
             "/login",
             "/logout",
             "x-csrf-token",
+        ] {
+            assert!(INDEX_HTML.contains(needle), "missing {needle}");
+        }
+    }
+
+    #[test]
+    fn page_reflects_the_ownership_model() {
+        for needle in [
+            "My telescopes",
+            "Attach to server",
+            "feed only",
+            "commands enabled",
+            "Detach",
         ] {
             assert!(INDEX_HTML.contains(needle), "missing {needle}");
         }
@@ -514,16 +601,9 @@ mod tests {
     }
 
     #[test]
-    fn page_has_multi_destination_flow() {
-        for needle in [
-            "Destinations",
-            "/channels",
-            "share-code",
-            "/subscribe",
-            "Shared into this server",
-            "rm-route",
-        ] {
-            assert!(INDEX_HTML.contains(needle), "missing {needle}");
+    fn page_offers_all_write_policies() {
+        for policy in ["admins", "roles", "disabled"] {
+            assert!(INDEX_HTML.contains(policy), "missing policy {policy}");
         }
     }
 
@@ -532,12 +612,5 @@ mod tests {
         // A hub without a bot token must say so, not just look broken.
         assert!(INDEX_HTML.contains("bot_configured"));
         assert!(INDEX_HTML.contains("without a Discord bot token"));
-    }
-
-    #[test]
-    fn page_offers_all_write_policies() {
-        for policy in ["admins", "roles", "disabled"] {
-            assert!(INDEX_HTML.contains(policy), "missing policy {policy}");
-        }
     }
 }
