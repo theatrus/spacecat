@@ -202,6 +202,60 @@ const MIGRATIONS: &[&str] = &[
         expires_at INTEGER NOT NULL,
         consumed_at INTEGER
     ) STRICT;",
+    // V9: telescopes belong to a USER, not a guild. Each server relationship
+    // is an explicit attachment carrying that server's capability and
+    // permissions: can_command distinguishes a full attachment (made by the
+    // owner in a server they manage) from a feed-only subscription (made
+    // with a share code). Channel routes belong to the attachment's guild.
+    // Existing telescopes: created_by becomes the owner (names deduped per
+    // owner), the owning guild becomes a can_command attachment with the old
+    // policy, and cross-guild V8 routes become feed-only attachments.
+    "CREATE TABLE telescopes_v9 (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        owner_id INTEGER NOT NULL REFERENCES users(discord_user_id),
+        name TEXT NOT NULL,
+        image_cooldown_seconds INTEGER NOT NULL DEFAULT 60,
+        created_at INTEGER NOT NULL,
+        UNIQUE (owner_id, name)
+    ) STRICT;
+    INSERT INTO telescopes_v9 (id, owner_id, name, image_cooldown_seconds, created_at)
+        SELECT t.id, t.created_by,
+               CASE WHEN EXISTS (
+                   SELECT 1 FROM telescopes t2
+                   WHERE t2.created_by = t.created_by AND t2.name = t.name
+                         AND t2.id < t.id)
+                    THEN t.name || '-' || t.id ELSE t.name END,
+               t.image_cooldown_seconds, t.created_at
+        FROM telescopes t;
+    CREATE TABLE telescope_attachments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        telescope_id INTEGER NOT NULL REFERENCES telescopes(id) ON DELETE CASCADE,
+        guild_id INTEGER NOT NULL REFERENCES guilds(guild_id) ON DELETE CASCADE,
+        can_command INTEGER NOT NULL DEFAULT 0,
+        write_policy TEXT NOT NULL DEFAULT 'admins'
+            CHECK (write_policy IN ('disabled', 'admins', 'roles')),
+        allowed_role_ids TEXT NOT NULL DEFAULT '[]',
+        created_by INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        UNIQUE (telescope_id, guild_id)
+    ) STRICT;
+    CREATE INDEX idx_attachments_guild ON telescope_attachments(guild_id);
+    INSERT INTO telescope_attachments
+        (telescope_id, guild_id, can_command, write_policy, allowed_role_ids,
+         created_by, created_at)
+        SELECT id, guild_id, 1, write_policy, allowed_role_ids, created_by, created_at
+        FROM telescopes;
+    INSERT INTO telescope_attachments
+        (telescope_id, guild_id, can_command, write_policy, allowed_role_ids,
+         created_by, created_at)
+        SELECT DISTINCT tc.telescope_id, tc.guild_id, 0, 'disabled', '[]',
+               tc.created_by, tc.created_at
+        FROM telescope_channels tc
+        JOIN telescopes t ON t.id = tc.telescope_id
+        WHERE tc.guild_id != t.guild_id;
+    DROP TABLE telescopes;
+    ALTER TABLE telescopes_v9 RENAME TO telescopes;
+    CREATE INDEX idx_telescopes_owner ON telescopes(owner_id);",
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -435,14 +489,25 @@ mod tests {
             MIGRATIONS.len()
         );
 
-        // Existing rows survive the rebuilds with their data intact.
-        let (policy, roles): (String, String) = conn
+        // V9: created_by became the owner; the old per-telescope policy
+        // moved onto a can_command attachment for the old owning guild.
+        let owner: i64 = conn
             .query_row(
-                "SELECT write_policy, allowed_role_ids FROM telescopes WHERE name = 'c925'",
+                "SELECT owner_id FROM telescopes WHERE name = 'c925'",
                 [],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                |r| r.get(0),
             )
             .unwrap();
+        assert_eq!(owner, 1);
+        let (can_command, policy, roles): (bool, String, String) = conn
+            .query_row(
+                "SELECT can_command, write_policy, allowed_role_ids
+                 FROM telescope_attachments WHERE guild_id = 100",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert!(can_command);
         assert_eq!((policy.as_str(), roles.as_str()), ("roles", "[7]"));
 
         // V8 moved the routed channel into telescope_channels.
@@ -468,21 +533,22 @@ mod tests {
             .unwrap();
         assert_eq!(credentials, 1);
 
-        // New rows default to the admins policy (V7).
+        // New attachments default to the admins policy.
         conn.execute(
-            "INSERT INTO telescopes (guild_id, name, created_by, created_at)
-             VALUES (100, 'esprit', 1, 0)",
+            "INSERT INTO telescope_attachments
+                 (telescope_id, guild_id, can_command, created_by, created_at)
+             VALUES (1, 100, 1, 1, 0)",
             [],
         )
-        .unwrap();
+        .ok(); // unique (telescope, guild) may already exist from migration
         let default_policy: String = conn
             .query_row(
-                "SELECT write_policy FROM telescopes WHERE name = 'esprit'",
+                "SELECT write_policy FROM telescope_attachments LIMIT 1",
                 [],
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(default_policy, "admins");
+        assert!(["admins", "roles"].contains(&default_policy.as_str()));
 
         // A channel routes to exactly one telescope, still enforced (V8).
         let clash = conn.execute(

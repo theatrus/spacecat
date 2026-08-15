@@ -1,15 +1,15 @@
 //! Database-backed telescope resolution for the hub's Discord bot.
 //!
-//! Telescope names are unique per guild, so explicit-name lookups are scoped
-//! to the guild the command was invoked in. Channel routing is global —
-//! Discord channel IDs are unique. Sources come from live `/v1/direct`
-//! connections; an offline rig resolves to a clear error instead of a
-//! hanging command.
+//! Telescopes are user-owned; a guild reaches one through its attachment.
+//! Channel routing is global (channel IDs are unique), name lookup is
+//! scoped to the invoking guild's attachments. Write authorization comes
+//! from the ATTACHMENT of the invoking guild: `can_command` plus that
+//! guild's own policy — a feed-only subscription can never drive the rig.
 
 use super::db::Db;
 use super::direct_server::RigConnections;
 use super::direct_source::DirectRigSource;
-use super::tenants::TelescopeRow;
+use super::tenants::{AttachmentRow, TelescopeRow};
 use crate::chat::{CommandContext, RigResolver};
 use crate::source::SharedRigSource;
 use std::sync::Arc;
@@ -25,10 +25,7 @@ impl HubRigResolver {
     }
 
     fn guild_names(&self, guild_id: i64) -> Vec<String> {
-        self.db
-            .guild_telescopes(guild_id)
-            .map(|rows| rows.into_iter().map(|t| t.name).collect())
-            .unwrap_or_default()
+        self.db.guild_telescope_names(guild_id).unwrap_or_default()
     }
 
     fn find_telescope(
@@ -43,7 +40,7 @@ impl HubRigResolver {
             return match self.db.telescope_by_guild_and_name(guild_id as i64, name) {
                 Ok(Some(row)) => Ok(row),
                 Ok(None) => Err(format!(
-                    "Unknown telescope '{name}' in this server. Known: {:?}",
+                    "No telescope named '{name}' is attached to this server. Known: {:?}",
                     self.guild_names(guild_id as i64)
                 )),
                 Err(e) => Err(format!("Lookup failed: {e}")),
@@ -63,6 +60,33 @@ impl HubRigResolver {
             Err(e) => Err(format!("Lookup failed: {e}")),
         }
     }
+
+    /// The invoking guild's attachment to this telescope. Its absence means
+    /// the command came from outside every attached guild.
+    fn invoking_attachment(
+        &self,
+        telescope: &TelescopeRow,
+        invocation: &CommandContext,
+    ) -> Result<AttachmentRow, String> {
+        let Some(guild_id) = invocation.guild_id else {
+            return Err("Write commands only work in a server".to_string());
+        };
+        match self.db.attachment_for(telescope.id, guild_id as i64) {
+            Ok(Some(attachment)) => Ok(attachment),
+            Ok(None) => Err("This telescope is not attached to this server.".to_string()),
+            Err(e) => Err(format!("Lookup failed: {e}")),
+        }
+    }
+
+    fn source_for(&self, row: &TelescopeRow) -> Result<SharedRigSource, String> {
+        let Some(connection) = self.connections.get(row.id) else {
+            return Err(format!(
+                "Telescope '{}' is not connected to the hub right now.",
+                row.name
+            ));
+        };
+        Ok(Arc::new(DirectRigSource::new(connection)))
+    }
 }
 
 impl RigResolver for HubRigResolver {
@@ -72,62 +96,49 @@ impl RigResolver for HubRigResolver {
         override_name: Option<&str>,
     ) -> Result<(String, SharedRigSource), String> {
         let row = self.find_telescope(invocation, override_name)?;
-        // Cross-guild access through an explicit channel is impossible
-        // (channel routing is set by the guild's own admins), but a name
-        // resolved in guild A must never reach guild B's telescope — the
-        // guild scope in find_telescope guarantees that.
-        let Some(connection) = self.connections.get(row.id) else {
-            return Err(format!(
-                "Telescope '{}' is not connected to the hub right now.",
-                row.name
-            ));
-        };
-        let source: SharedRigSource = Arc::new(DirectRigSource::new(connection));
+        let source = self.source_for(&row)?;
         Ok((row.name, source))
     }
 
-    /// One lookup: the row that authorizes is the row that actuates. The
-    /// default trait impl would re-resolve by name scoped to the invoker's
-    /// guild, which can be a different telescope than the channel routed to.
+    /// One lookup chain: the attachment that authorizes belongs to the
+    /// invoking guild and the telescope the command actuates.
     fn resolve_for_write(
         &self,
         invocation: &CommandContext,
         override_name: Option<&str>,
     ) -> Result<(String, SharedRigSource), String> {
         let row = self.find_telescope(invocation, override_name)?;
-        check_write_policy(&row, invocation)?;
-        let Some(connection) = self.connections.get(row.id) else {
-            return Err(format!(
-                "Telescope '{}' is not connected to the hub right now.",
-                row.name
-            ));
-        };
-        let source: SharedRigSource = Arc::new(DirectRigSource::new(connection));
+        let attachment = self.invoking_attachment(&row, invocation)?;
+        check_write_policy(&attachment, invocation)?;
+        let source = self.source_for(&row)?;
         Ok((row.name, source))
     }
 
     fn write_allowed(&self, invocation: &CommandContext, telescope: &str) -> Result<(), String> {
         let row = self.find_telescope(invocation, Some(telescope))?;
-        check_write_policy(&row, invocation)
+        let attachment = self.invoking_attachment(&row, invocation)?;
+        check_write_policy(&attachment, invocation)
     }
 }
 
-/// Per-telescope write policy.
+/// Write policy of one guild's attachment.
 ///
+/// - `can_command == false`: a feed-only subscription; no one here drives
+///   the rig, whatever the policy says.
 /// - `disabled`: nobody, not even admins — a deliberate off switch.
 /// - `admins` (the default): whoever manages the guild on Discord — its
-///   owner or members holding ADMINISTRATOR/MANAGE_GUILD. The integration's
-///   owner controls their scopes out of the box, straight from Discord.
+///   owner or members holding ADMINISTRATOR/MANAGE_GUILD.
 /// - `roles`: guild managers plus members holding an allowlisted role.
-fn check_write_policy(row: &TelescopeRow, invocation: &CommandContext) -> Result<(), String> {
-    // `manages_guild` and `role_ids` describe the invoker's standing in the
-    // guild the command came from. Discord's channel model already binds an
-    // interaction to one guild, but this guard makes the invariant local:
-    // an invoker's standing never authorizes another guild's telescope.
-    if invocation.guild_id != Some(row.guild_id as u64) {
-        return Err("This telescope belongs to a different server.".to_string());
+fn check_write_policy(
+    attachment: &AttachmentRow,
+    invocation: &CommandContext,
+) -> Result<(), String> {
+    if !attachment.can_command {
+        return Err(
+            "This server receives this telescope's feed but cannot send it commands.".to_string(),
+        );
     }
-    match row.write_policy.as_str() {
+    match attachment.write_policy.as_str() {
         "admins" if invocation.manages_guild => Ok(()),
         "admins" => Err(
             "Write commands on this telescope are limited to server managers. \
@@ -136,7 +147,7 @@ fn check_write_policy(row: &TelescopeRow, invocation: &CommandContext) -> Result
         ),
         "roles" => {
             let allowed = invocation.manages_guild
-                || row
+                || attachment
                     .allowed_role_ids
                     .iter()
                     .any(|role| invocation.role_ids.contains(&(*role as u64)));
@@ -162,22 +173,23 @@ fn check_write_policy(row: &TelescopeRow, invocation: &CommandContext) -> Result
 mod tests {
     use super::*;
     use crate::hub::store::UserRow;
-    use crate::hub::tenants::TelescopeUpdate;
+    use crate::hub::tenants::AttachmentUpdate;
     use uuid::Uuid;
 
     fn setup() -> (Db, Arc<RigConnections>, HubRigResolver, i64) {
         let db = Db::open_in_memory().unwrap();
         db.upsert_user(&UserRow {
             discord_user_id: 1,
-            username: "admin".to_string(),
+            username: "alice".to_string(),
             email: None,
             email_verified: false,
             avatar_url: None,
         })
         .unwrap();
-        db.register_guild(100, "g", 1).unwrap();
-        let telescope = db.create_telescope(100, "c925", 1).unwrap();
-        db.add_channel_route(telescope.id, 100, 42, "obs", "g", 1)
+        db.register_guild(100, "home", 1).unwrap();
+        let telescope = db.create_telescope(1, "c925").unwrap();
+        db.attach_telescope(telescope.id, 100, true, 1).unwrap();
+        db.add_channel_route(telescope.id, 100, 42, "obs", "home", 1)
             .unwrap();
         let connections = Arc::new(RigConnections::default());
         let resolver = HubRigResolver::new(db.clone(), connections.clone());
@@ -202,31 +214,37 @@ mod tests {
     }
 
     fn connect(connections: &RigConnections, telescope_id: i64) {
-        let (connection, _rx) =
+        let (connection, rx) =
             crate::hub::direct_server::RigConnection::stub(telescope_id, Uuid::new_v4());
-        // Leak the receiver so the channel stays open for the test.
-        std::mem::forget(_rx);
+        std::mem::forget(rx);
         connections.insert(connection);
     }
 
     #[test]
-    fn resolves_by_channel_and_scoped_name() {
+    fn resolves_by_channel_and_attached_name() {
         let (_db, connections, resolver, id) = setup();
         connect(&connections, id);
 
-        let by_channel = resolver
-            .resolve(&invocation(100, 42, vec![]), None)
+        assert_eq!(
+            resolver
+                .resolve(&invocation(100, 42, vec![]), None)
+                .unwrap()
+                .0,
+            "c925"
+        );
+        assert_eq!(
+            resolver
+                .resolve(&invocation(100, 0, vec![]), Some("c925"))
+                .unwrap()
+                .0,
+            "c925"
+        );
+        // A guild the telescope is not attached to cannot name it.
+        let err = resolver
+            .resolve(&invocation(999, 0, vec![]), Some("c925"))
+            .err()
             .unwrap();
-        assert_eq!(by_channel.0, "c925");
-
-        let by_name = resolver
-            .resolve(&invocation(100, 0, vec![]), Some("c925"))
-            .unwrap();
-        assert_eq!(by_name.0, "c925");
-
-        // Same name from a different guild does not resolve.
-        let cross_guild = resolver.resolve(&invocation(999, 0, vec![]), Some("c925"));
-        assert!(cross_guild.err().unwrap().contains("Unknown telescope"));
+        assert!(err.contains("No telescope named"), "got: {err}");
     }
 
     #[test]
@@ -240,20 +258,7 @@ mod tests {
     }
 
     #[test]
-    fn unmapped_channel_lists_guild_telescopes() {
-        let (_db, connections, resolver, id) = setup();
-        connect(&connections, id);
-        let err = resolver
-            .resolve(&invocation(100, 555, vec![]), None)
-            .err()
-            .unwrap();
-        assert!(err.contains("c925"));
-    }
-
-    #[test]
     fn default_policy_lets_managers_and_only_managers_write() {
-        // New telescopes default to 'admins': the integration's owner and
-        // other server managers control their scopes out of the box.
         let (_db, connections, resolver, id) = setup();
         connect(&connections, id);
         assert!(
@@ -269,12 +274,73 @@ mod tests {
     }
 
     #[test]
-    fn disabled_policy_blocks_even_managers() {
+    fn feed_only_attachment_reads_but_never_writes() {
+        // The club subscribes to alice's scope: reads resolve from the
+        // club's routed channel, writes are refused even for its managers.
         let (db, connections, resolver, id) = setup();
         connect(&connections, id);
-        db.update_telescope(
-            id,
-            &TelescopeUpdate {
+        db.upsert_user(&UserRow {
+            discord_user_id: 2,
+            username: "bob".to_string(),
+            email: None,
+            email_verified: false,
+            avatar_url: None,
+        })
+        .unwrap();
+        db.register_guild(200, "club", 2).unwrap();
+        db.attach_telescope(id, 200, false, 2).unwrap();
+        db.add_channel_route(id, 200, 900, "feed", "club", 2)
+            .unwrap();
+
+        assert_eq!(
+            resolver
+                .resolve(&invocation(200, 900, vec![]), None)
+                .unwrap()
+                .0,
+            "c925"
+        );
+        let err = resolver
+            .resolve_for_write(&manager_invocation(200, 900), None)
+            .err()
+            .unwrap();
+        assert!(err.contains("cannot send it commands"), "got: {err}");
+    }
+
+    #[test]
+    fn attachment_policies_are_per_guild() {
+        let (db, connections, resolver, id) = setup();
+        connect(&connections, id);
+        let attachment = db.attachment_for(id, 100).unwrap().unwrap();
+        db.update_attachment(
+            attachment.id,
+            &AttachmentUpdate {
+                write_policy: Some("roles".to_string()),
+                allowed_role_ids: Some(vec![1111]),
+            },
+        )
+        .unwrap();
+
+        assert!(
+            resolver
+                .resolve_for_write(&invocation(100, 42, vec![1111]), None)
+                .is_ok()
+        );
+        assert!(
+            resolver
+                .resolve_for_write(&invocation(100, 42, vec![3333]), None)
+                .is_err()
+        );
+        // Managers pass without the role.
+        assert!(
+            resolver
+                .resolve_for_write(&manager_invocation(100, 42), None)
+                .is_ok()
+        );
+
+        // Disabled blocks even managers.
+        db.update_attachment(
+            attachment.id,
+            &AttachmentUpdate {
                 write_policy: Some("disabled".to_string()),
                 ..Default::default()
             },
@@ -285,68 +351,5 @@ mod tests {
             .err()
             .unwrap();
         assert!(err.contains("disabled"), "got: {err}");
-    }
-
-    #[test]
-    fn write_auth_applies_to_the_channel_routed_telescope() {
-        // Guild 200 has a same-named telescope with a permissive role
-        // policy. A guild-200 invocation reaching guild 100's channel-routed
-        // rig (impossible on real Discord, but defended anyway) is denied by
-        // the guild-match guard, whatever the invoker's standing.
-        let (db, connections, resolver, id) = setup();
-        connect(&connections, id);
-        db.register_guild(200, "other", 1).unwrap();
-        let other = db.create_telescope(200, "c925", 1).unwrap();
-        db.update_telescope(
-            other.id,
-            &TelescopeUpdate {
-                write_policy: Some("roles".to_string()),
-                allowed_role_ids: Some(vec![9]),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
-        let err = resolver
-            .resolve_for_write(&invocation(200, 42, vec![9]), None)
-            .err()
-            .unwrap();
-        assert!(err.contains("different server"), "got: {err}");
-        let err = resolver
-            .resolve_for_write(&manager_invocation(200, 42), None)
-            .err()
-            .unwrap();
-        assert!(err.contains("different server"), "got: {err}");
-    }
-
-    #[test]
-    fn write_policy_roles_matches_member_roles() {
-        let (db, connections, resolver, id) = setup();
-        connect(&connections, id);
-        db.update_telescope(
-            id,
-            &TelescopeUpdate {
-                write_policy: Some("roles".to_string()),
-                allowed_role_ids: Some(vec![1111]),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
-        assert!(
-            resolver
-                .write_allowed(&invocation(100, 42, vec![1111, 2222]), "c925")
-                .is_ok()
-        );
-        assert!(
-            resolver
-                .write_allowed(&invocation(100, 42, vec![3333]), "c925")
-                .is_err()
-        );
-        assert!(
-            resolver
-                .write_allowed(&invocation(100, 42, vec![]), "c925")
-                .is_err()
-        );
     }
 }

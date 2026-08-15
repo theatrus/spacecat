@@ -9,7 +9,7 @@ use super::db::{Db, DbError};
 use super::discord_api::{DiscordOauthClient, parse_snowflake, snowflake_string};
 use super::guild_check::{CachedGuildChecker, GuildChecker, SerenityGuildChecker};
 use super::store::{GuildSnapshot, SessionRow, UserRow};
-use super::tenants::{TelescopeRow, TelescopeUpdate};
+use super::tenants::TelescopeRow;
 use axum::extract::{Path, Query, State};
 use axum::http::header::{COOKIE, SET_COOKIE};
 use axum::http::{HeaderMap, StatusCode};
@@ -128,28 +128,12 @@ pub fn router(state: HubState) -> Router {
         .route("/api/guilds", get(api_list_guilds))
         .route("/api/guilds/{guild_id}/register", post(api_register_guild))
         .route(
-            "/api/guilds/{guild_id}/telescopes",
-            get(api_list_telescopes).post(api_create_telescope),
+            "/api/telescopes",
+            get(api_my_telescopes).post(api_create_telescope),
         )
         .route(
             "/api/telescopes/{telescope_id}",
             axum::routing::patch(api_update_telescope).delete(api_delete_telescope),
-        )
-        .route(
-            "/api/telescopes/{telescope_id}/channels",
-            post(api_add_channel_route),
-        )
-        .route(
-            "/api/telescopes/{telescope_id}/channels/{route_id}",
-            delete(api_delete_channel_route),
-        )
-        .route(
-            "/api/telescopes/{telescope_id}/share-code",
-            post(api_create_share_code),
-        )
-        .route(
-            "/api/guilds/{guild_id}/subscribe",
-            post(api_subscribe_share),
         )
         .route(
             "/api/telescopes/{telescope_id}/pairing-token",
@@ -162,6 +146,34 @@ pub fn router(state: HubState) -> Router {
         .route(
             "/api/telescopes/{telescope_id}/credentials",
             delete(api_revoke_credentials),
+        )
+        .route(
+            "/api/telescopes/{telescope_id}/share-code",
+            post(api_create_share_code),
+        )
+        .route(
+            "/api/telescopes/{telescope_id}/attach",
+            post(api_attach_telescope),
+        )
+        .route(
+            "/api/guilds/{guild_id}/attachments",
+            get(api_guild_attachments),
+        )
+        .route(
+            "/api/attachments/{attachment_id}",
+            axum::routing::patch(api_update_attachment).delete(api_detach_telescope),
+        )
+        .route(
+            "/api/attachments/{attachment_id}/channels",
+            post(api_add_channel_route),
+        )
+        .route(
+            "/api/attachments/{attachment_id}/channels/{route_id}",
+            delete(api_delete_channel_route),
+        )
+        .route(
+            "/api/guilds/{guild_id}/subscribe",
+            post(api_subscribe_share),
         )
         .route("/api/guilds/{guild_id}/audit", get(api_guild_audit))
         .route("/api/guilds/{guild_id}/options", get(api_guild_options))
@@ -451,13 +463,46 @@ fn parse_id_param(raw: &str) -> Result<i64, Response> {
 fn telescope_json(t: &TelescopeRow) -> serde_json::Value {
     serde_json::json!({
         "id": t.id,
-        "guild_id": snowflake_string(t.guild_id),
         "name": t.name,
+        "owner_id": snowflake_string(t.owner_id),
         "image_cooldown_seconds": t.image_cooldown_seconds,
-        "write_policy": t.write_policy,
-        "allowed_role_ids": t.allowed_role_ids.iter().copied()
+    })
+}
+
+fn attachment_json(a: &super::tenants::AttachmentRow) -> serde_json::Value {
+    serde_json::json!({
+        "attachment_id": a.id,
+        "telescope_id": a.telescope_id,
+        "guild_id": snowflake_string(a.guild_id),
+        "can_command": a.can_command,
+        "write_policy": a.write_policy,
+        "allowed_role_ids": a.allowed_role_ids.iter().copied()
             .map(snowflake_string).collect::<Vec<_>>(),
     })
+}
+
+fn route_json(route: &super::tenants::ChannelRoute) -> serde_json::Value {
+    serde_json::json!({
+        "route_id": route.id,
+        "guild_id": snowflake_string(route.guild_id),
+        "channel_id": snowflake_string(route.channel_id),
+        "channel_name": route.channel_name,
+        "guild_name": route.guild_name,
+    })
+}
+
+/// Resolve a channel's display name from the guild's channel listing.
+async fn channel_display_name(state: &HubState, guild_id: i64, channel_id: i64) -> String {
+    match &state.guild_checker {
+        Some(checker) => checker
+            .guild_channels(guild_id as u64)
+            .await
+            .into_iter()
+            .find(|c| c.id == channel_id as u64)
+            .map(|c| c.name)
+            .unwrap_or_default(),
+        None => String::new(),
+    }
 }
 
 /// The guilds this user can manage, with registration and bot state.
@@ -571,53 +616,85 @@ async fn api_register_guild(
     Json(serde_json::json!({ "registered": true })).into_response()
 }
 
-async fn api_list_telescopes(
-    State(state): State<HubState>,
-    Path(guild_id): Path<String>,
-    headers: HeaderMap,
-) -> Response {
-    let guild_id = match parse_id_param(&guild_id) {
-        Ok(id) => id,
-        Err(response) => return response,
+// ---------------------------------------------------------------------------
+// Telescopes (user-owned)
+// ---------------------------------------------------------------------------
+
+/// Require a session (with CSRF for mutations) and that it owns the
+/// telescope.
+async fn owner_telescope(
+    state: &HubState,
+    headers: &HeaderMap,
+    telescope_id: &str,
+    mutating: bool,
+) -> Result<(TelescopeRow, SessionRow), Response> {
+    let session = if mutating {
+        require_session_with_csrf(state, headers).ok_or_else(|| {
+            (StatusCode::UNAUTHORIZED, "login and CSRF token required").into_response()
+        })?
+    } else {
+        session_from_headers(state, headers)
+            .ok_or_else(|| (StatusCode::UNAUTHORIZED, "login required").into_response())?
     };
-    if let ManageAuth::Denied(response) = authorize_manage(&state, &headers, guild_id, false).await
-    {
-        return response;
+    let id: i64 = telescope_id
+        .parse()
+        .map_err(|_| bad_request("invalid telescope id"))?;
+    let telescope = match state.db.get_telescope(id) {
+        Ok(Some(telescope)) => telescope,
+        Ok(None) => return Err((StatusCode::NOT_FOUND, "no such telescope").into_response()),
+        Err(e) => return Err(internal_error(e)),
+    };
+    if telescope.owner_id != session.discord_user_id {
+        return Err((StatusCode::FORBIDDEN, "not your telescope").into_response());
     }
-    match state.db.guild_telescopes(guild_id) {
-        Ok(telescopes) => Json(serde_json::json!({
-            "telescopes": telescopes
+    Ok((telescope, session))
+}
+
+/// The session user's telescopes, with connection state, attachments, and
+/// destinations — everything the "My telescopes" section needs.
+async fn api_my_telescopes(State(state): State<HubState>, headers: HeaderMap) -> Response {
+    let Some(session) = session_from_headers(&state, &headers) else {
+        return (StatusCode::UNAUTHORIZED, "login required").into_response();
+    };
+    let telescopes = match state.db.user_telescopes(session.discord_user_id) {
+        Ok(telescopes) => telescopes,
+        Err(e) => return internal_error(e),
+    };
+    let mut out = Vec::new();
+    for t in &telescopes {
+        let mut value = telescope_json(t);
+        value["connected"] = serde_json::Value::from(state.rig_connections.get(t.id).is_some());
+        let attachments = state.db.telescope_attachments(t.id).unwrap_or_default();
+        value["attachments"] = serde_json::Value::from(
+            attachments
                 .iter()
-                .map(|t| {
-                    let mut value = telescope_json(t);
-                    let routes = state.db.telescope_routes(t.id).unwrap_or_default();
-                    value["channels"] = serde_json::Value::from(
-                        routes
+                .map(|a| {
+                    let mut aj = attachment_json(a);
+                    aj["guild_name"] = serde_json::Value::from(
+                        state
+                            .db
+                            .get_guild(a.guild_id)
+                            .ok()
+                            .flatten()
+                            .map(|g| g.name)
+                            .unwrap_or_default(),
+                    );
+                    aj["channels"] = serde_json::Value::from(
+                        state
+                            .db
+                            .attachment_routes(t.id, a.guild_id)
+                            .unwrap_or_default()
                             .iter()
-                            .map(|route| route_json(route, t.guild_id))
+                            .map(route_json)
                             .collect::<Vec<_>>(),
                     );
-                    value["connected"] =
-                        serde_json::Value::from(state.rig_connections.get(t.id).is_some());
-                    value
+                    aj
                 })
                 .collect::<Vec<_>>(),
-            // Feeds shared into this guild from other guilds' telescopes.
-            "shared_in": state.db.routes_into_guild(guild_id).unwrap_or_default()
-                .iter()
-                .map(|share| serde_json::json!({
-                    "route_id": share.route.id,
-                    "telescope_id": share.route.telescope_id,
-                    "telescope_name": share.telescope_name,
-                    "owning_guild_name": share.owning_guild_name,
-                    "channel_id": snowflake_string(share.route.channel_id),
-                    "channel_name": share.route.channel_name,
-                }))
-                .collect::<Vec<_>>(),
-        }))
-        .into_response(),
-        Err(e) => internal_error(e),
+        );
+        out.push(value);
     }
+    Json(serde_json::json!({ "telescopes": out })).into_response()
 }
 
 #[derive(Deserialize)]
@@ -627,68 +704,30 @@ struct CreateTelescopeBody {
 
 async fn api_create_telescope(
     State(state): State<HubState>,
-    Path(guild_id): Path<String>,
     headers: HeaderMap,
     Json(body): Json<CreateTelescopeBody>,
 ) -> Response {
-    let guild_id = match parse_id_param(&guild_id) {
-        Ok(id) => id,
-        Err(response) => return response,
-    };
-    let session = match authorize_manage(&state, &headers, guild_id, true).await {
-        ManageAuth::Ok(session) => session,
-        ManageAuth::Denied(response) => return response,
+    let Some(session) = require_session_with_csrf(&state, &headers) else {
+        return (StatusCode::UNAUTHORIZED, "login and CSRF token required").into_response();
     };
     let name = body.name.trim();
     if name.is_empty() || name.len() > 64 {
         return bad_request("telescope name must be 1-64 characters");
     }
-    match state.db.get_guild(guild_id) {
-        Ok(Some(_)) => {}
-        Ok(None) => return bad_request("register this guild first"),
-        Err(e) => return internal_error(e),
-    }
-    match state
-        .db
-        .create_telescope(guild_id, name, session.discord_user_id)
-    {
+    match state.db.create_telescope(session.discord_user_id, name) {
         Ok(telescope) => {
             state
                 .db
-                .audit(session.discord_user_id, guild_id, "telescope_created", name);
+                .audit(session.discord_user_id, 0, "telescope_created", name);
             Json(telescope_json(&telescope)).into_response()
         }
-        Err(_) => bad_request("a telescope with this name already exists in this guild"),
+        Err(_) => bad_request("you already have a telescope with this name"),
     }
 }
 
-/// Load a telescope and authorize management of its guild. Returns the
-/// session too so handlers audit without re-parsing the cookie.
-async fn telescope_for_manage(
-    state: &HubState,
-    headers: &HeaderMap,
-    telescope_id: &str,
-    mutating: bool,
-) -> Result<(TelescopeRow, SessionRow), Response> {
-    let id: i64 = telescope_id
-        .parse()
-        .map_err(|_| bad_request("invalid telescope id"))?;
-    let telescope = match state.db.get_telescope(id) {
-        Ok(Some(telescope)) => telescope,
-        Ok(None) => return Err((StatusCode::NOT_FOUND, "no such telescope").into_response()),
-        Err(e) => return Err(internal_error(e)),
-    };
-    match authorize_manage(state, headers, telescope.guild_id, mutating).await {
-        ManageAuth::Ok(session) => Ok((telescope, session)),
-        ManageAuth::Denied(response) => Err(response),
-    }
-}
-
-#[derive(Deserialize, Default)]
+#[derive(Deserialize)]
 struct UpdateTelescopeBody {
     image_cooldown_seconds: Option<i64>,
-    write_policy: Option<String>,
-    allowed_role_ids: Option<Vec<String>>,
 }
 
 async fn api_update_telescope(
@@ -697,48 +736,18 @@ async fn api_update_telescope(
     headers: HeaderMap,
     Json(body): Json<UpdateTelescopeBody>,
 ) -> Response {
-    let (telescope, session) =
-        match telescope_for_manage(&state, &headers, &telescope_id, true).await {
-            Ok(found) => found,
-            Err(response) => return response,
-        };
-    if let Some(policy) = &body.write_policy
-        && !["disabled", "admins", "roles"].contains(&policy.as_str())
-    {
-        return bad_request("write_policy must be 'disabled', 'admins', or 'roles'");
-    }
-    if let Some(cooldown) = body.image_cooldown_seconds
-        && !(0..=86400).contains(&cooldown)
-    {
-        return bad_request("image_cooldown_seconds must be 0-86400");
-    }
-    let roles = match &body.allowed_role_ids {
-        None => None,
-        Some(raw_roles) => {
-            let mut parsed = Vec::new();
-            for raw in raw_roles {
-                match parse_snowflake(raw) {
-                    Ok(id) => parsed.push(id),
-                    Err(_) => return bad_request("invalid role id"),
-                }
-            }
-            Some(parsed)
+    let (telescope, _session) = match owner_telescope(&state, &headers, &telescope_id, true).await {
+        Ok(found) => found,
+        Err(response) => return response,
+    };
+    if let Some(cooldown) = body.image_cooldown_seconds {
+        if !(0..=86400).contains(&cooldown) {
+            return bad_request("image_cooldown_seconds must be 0-86400");
         }
-    };
-    let update = TelescopeUpdate {
-        image_cooldown_seconds: body.image_cooldown_seconds,
-        write_policy: body.write_policy.clone(),
-        allowed_role_ids: roles,
-    };
-    if let Err(e) = state.db.update_telescope(telescope.id, &update) {
-        return internal_error(e);
+        if let Err(e) = state.db.set_telescope_cooldown(telescope.id, cooldown) {
+            return internal_error(e);
+        }
     }
-    state.db.audit(
-        session.discord_user_id,
-        telescope.guild_id,
-        "telescope_updated",
-        &telescope.name,
-    );
     match state.db.get_telescope(telescope.id) {
         Ok(Some(updated)) => Json(telescope_json(&updated)).into_response(),
         Ok(None) => (StatusCode::NOT_FOUND, "no such telescope").into_response(),
@@ -746,155 +755,134 @@ async fn api_update_telescope(
     }
 }
 
-fn route_json(route: &super::tenants::ChannelRoute, owning_guild: i64) -> serde_json::Value {
-    serde_json::json!({
-        "route_id": route.id,
-        "guild_id": snowflake_string(route.guild_id),
-        "channel_id": snowflake_string(route.channel_id),
-        "channel_name": route.channel_name,
-        "guild_name": route.guild_name,
-        "external": route.guild_id != owning_guild,
-    })
-}
-
-/// Resolve a channel's display name from the guild's channel listing.
-async fn channel_display_name(state: &HubState, guild_id: i64, channel_id: i64) -> String {
-    match &state.guild_checker {
-        Some(checker) => checker
-            .guild_channels(guild_id as u64)
-            .await
-            .into_iter()
-            .find(|c| c.id == channel_id as u64)
-            .map(|c| c.name)
-            .unwrap_or_default(),
-        None => String::new(),
-    }
-}
-
-#[derive(Deserialize)]
-struct AddChannelBody {
-    channel_id: String,
-}
-
-/// Add a destination in the telescope's own guild. Cross-server
-/// destinations go through the share-code flow instead, so the receiving
-/// guild's manager is always the one who acts.
-async fn api_add_channel_route(
+async fn api_delete_telescope(
     State(state): State<HubState>,
     Path(telescope_id): Path<String>,
     headers: HeaderMap,
-    Json(body): Json<AddChannelBody>,
 ) -> Response {
-    let (telescope, session) =
-        match telescope_for_manage(&state, &headers, &telescope_id, true).await {
-            Ok(found) => found,
-            Err(response) => return response,
-        };
-    let channel_id = match parse_snowflake(&body.channel_id) {
-        Ok(id) => id,
-        Err(_) => return bad_request("invalid channel_id"),
+    let (telescope, session) = match owner_telescope(&state, &headers, &telescope_id, true).await {
+        Ok(found) => found,
+        Err(response) => return response,
     };
-    if let Some(checker) = &state.guild_checker
-        && !checker
-            .channel_in_guild(channel_id as u64, telescope.guild_id as u64)
-            .await
-    {
-        return bad_request("that channel is not in this server");
-    }
-    let channel_name = channel_display_name(&state, telescope.guild_id, channel_id).await;
-    let guild_name = state
-        .db
-        .get_guild(telescope.guild_id)
-        .ok()
-        .flatten()
-        .map(|g| g.name)
-        .unwrap_or_default();
-    match state.db.add_channel_route(
-        telescope.id,
-        telescope.guild_id,
-        channel_id,
-        &channel_name,
-        &guild_name,
-        session.discord_user_id,
-    ) {
-        Ok(route) => {
+    match state.db.delete_telescope(telescope.id) {
+        Ok(()) => {
+            // Attachments, routes, credentials, and tokens cascade; the
+            // live connection and updater need explicit teardown.
+            if let Some(connection) = state.rig_connections.remove(telescope.id) {
+                connection.request_close("telescope deleted by its owner", false);
+            }
             state.db.audit(
                 session.discord_user_id,
-                telescope.guild_id,
-                "destination_added",
-                &format!("{} -> #{}", telescope.name, route.channel_name),
+                0,
+                "telescope_deleted",
+                &telescope.name,
             );
-            Json(route_json(&route, telescope.guild_id)).into_response()
-        }
-        Err(DbError::Sqlite(rusqlite::Error::SqliteFailure(failure, _)))
-            if failure.code == rusqlite::ErrorCode::ConstraintViolation =>
-        {
-            bad_request("that channel is already routed to a telescope")
+            Json(serde_json::json!({ "deleted": true })).into_response()
         }
         Err(e) => internal_error(e),
     }
 }
 
-/// Remove a destination. Either side may sever: a manager of the owning
-/// guild, or a manager of the guild the channel lives in.
-async fn api_delete_channel_route(
+/// Issue a fresh pairing token, revoking any live unconsumed ones so only
+/// one token is outstanding per telescope.
+async fn api_issue_pairing_token(
     State(state): State<HubState>,
-    Path((telescope_id, route_id)): Path<(String, String)>,
+    Path(telescope_id): Path<String>,
     headers: HeaderMap,
 ) -> Response {
-    let telescope_id: i64 = match telescope_id.parse() {
-        Ok(id) => id,
-        Err(_) => return bad_request("invalid telescope id"),
+    let (telescope, session) = match owner_telescope(&state, &headers, &telescope_id, true).await {
+        Ok(found) => found,
+        Err(response) => return response,
     };
-    let route_id: i64 = match route_id.parse() {
-        Ok(id) => id,
-        Err(_) => return bad_request("invalid route id"),
-    };
-    let route = match state.db.get_route(route_id) {
-        Ok(Some(route)) if route.telescope_id == telescope_id => route,
-        Ok(_) => return (StatusCode::NOT_FOUND, "no such destination").into_response(),
-        Err(e) => return internal_error(e),
-    };
-    let telescope = match state.db.get_telescope(telescope_id) {
-        Ok(Some(telescope)) => telescope,
-        Ok(None) => return (StatusCode::NOT_FOUND, "no such telescope").into_response(),
-        Err(e) => return internal_error(e),
-    };
-    let session = match authorize_manage(&state, &headers, telescope.guild_id, true).await {
-        ManageAuth::Ok(session) => Some(session),
-        ManageAuth::Denied(_) => {
-            match authorize_manage(&state, &headers, route.guild_id, true).await {
-                ManageAuth::Ok(session) => Some(session),
-                ManageAuth::Denied(response) => return response,
-            }
-        }
-    };
-    if let Err(e) = state.db.delete_route(route.id) {
+    if let Err(e) = state.db.revoke_pairing_tokens(telescope.id) {
         return internal_error(e);
     }
-    if let Some(session) = session {
-        state.db.audit(
-            session.discord_user_id,
-            route.guild_id,
-            "destination_removed",
-            &format!("{} -> #{}", telescope.name, route.channel_name),
-        );
+    match state
+        .db
+        .issue_pairing_token(telescope.id, session.discord_user_id)
+    {
+        Ok(token) => {
+            state.db.audit(
+                session.discord_user_id,
+                0,
+                "pairing_token_issued",
+                &telescope.name,
+            );
+            Json(serde_json::json!({
+                "token": token,
+                "expires_in_seconds": super::tenants::PAIRING_TOKEN_TTL_SECONDS,
+            }))
+            .into_response()
+        }
+        Err(e) => internal_error(e),
     }
-    Json(serde_json::json!({ "deleted": true })).into_response()
 }
 
-/// Mint a share code so another server's manager can subscribe one of
-/// their channels to this telescope's feed.
+async fn api_revoke_pairing_tokens(
+    State(state): State<HubState>,
+    Path(telescope_id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let (telescope, session) = match owner_telescope(&state, &headers, &telescope_id, true).await {
+        Ok(found) => found,
+        Err(response) => return response,
+    };
+    match state.db.revoke_pairing_tokens(telescope.id) {
+        Ok(revoked) => {
+            state.db.audit(
+                session.discord_user_id,
+                0,
+                "pairing_tokens_revoked",
+                &telescope.name,
+            );
+            Json(serde_json::json!({ "revoked": revoked })).into_response()
+        }
+        Err(e) => internal_error(e),
+    }
+}
+
+/// Revoke every rig credential for a telescope and drop its live
+/// connection. The rig must re-pair with a fresh token.
+async fn api_revoke_credentials(
+    State(state): State<HubState>,
+    Path(telescope_id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let (telescope, session) = match owner_telescope(&state, &headers, &telescope_id, true).await {
+        Ok(found) => found,
+        Err(response) => return response,
+    };
+    let revoked = match state.db.revoke_rig_credentials(telescope.id) {
+        Ok(revoked) => revoked,
+        Err(e) => return internal_error(e),
+    };
+    let disconnected = match state.rig_connections.remove(telescope.id) {
+        Some(connection) => {
+            connection.request_close("credentials revoked by the telescope owner", false);
+            true
+        }
+        None => false,
+    };
+    state.db.audit(
+        session.discord_user_id,
+        0,
+        "credentials_revoked",
+        &telescope.name,
+    );
+    Json(serde_json::json!({ "revoked": revoked, "disconnected": disconnected })).into_response()
+}
+
+/// Mint a share code so another server's manager can subscribe to this
+/// telescope's feed.
 async fn api_create_share_code(
     State(state): State<HubState>,
     Path(telescope_id): Path<String>,
     headers: HeaderMap,
 ) -> Response {
-    let (telescope, session) =
-        match telescope_for_manage(&state, &headers, &telescope_id, true).await {
-            Ok(found) => found,
-            Err(response) => return response,
-        };
+    let (telescope, session) = match owner_telescope(&state, &headers, &telescope_id, true).await {
+        Ok(found) => found,
+        Err(response) => return response,
+    };
     match state
         .db
         .create_share_code(telescope.id, session.discord_user_id)
@@ -902,7 +890,7 @@ async fn api_create_share_code(
         Ok(code) => {
             state.db.audit(
                 session.discord_user_id,
-                telescope.guild_id,
+                0,
                 "share_code_issued",
                 &telescope.name,
             );
@@ -917,13 +905,359 @@ async fn api_create_share_code(
 }
 
 #[derive(Deserialize)]
+struct AttachBody {
+    guild_id: String,
+}
+
+/// Attach your telescope to a server you manage: the owner path, no share
+/// code. Both consents come from one authenticated person — telescope
+/// ownership and Manage Server in the target guild.
+async fn api_attach_telescope(
+    State(state): State<HubState>,
+    Path(telescope_id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<AttachBody>,
+) -> Response {
+    let (telescope, session) = match owner_telescope(&state, &headers, &telescope_id, true).await {
+        Ok(found) => found,
+        Err(response) => return response,
+    };
+    let guild_id = match parse_snowflake(&body.guild_id) {
+        Ok(id) => id,
+        Err(_) => return bad_request("invalid guild_id"),
+    };
+    if let ManageAuth::Denied(response) = authorize_manage(&state, &headers, guild_id, true).await {
+        return response;
+    }
+    match state.db.get_guild(guild_id) {
+        Ok(Some(_)) => {}
+        Ok(None) => return bad_request("register that server first"),
+        Err(e) => return internal_error(e),
+    }
+    match state
+        .db
+        .attach_telescope(telescope.id, guild_id, true, session.discord_user_id)
+    {
+        Ok(attachment) => {
+            state.db.audit(
+                session.discord_user_id,
+                guild_id,
+                "telescope_attached",
+                &telescope.name,
+            );
+            Json(attachment_json(&attachment)).into_response()
+        }
+        Err(DbError::Sqlite(rusqlite::Error::SqliteFailure(failure, _)))
+            if failure.code == rusqlite::ErrorCode::ConstraintViolation =>
+        {
+            bad_request("this telescope is already attached to that server")
+        }
+        Err(e) => internal_error(e),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Attachments (telescope x guild)
+// ---------------------------------------------------------------------------
+
+/// Load an attachment and authorize management of its guild.
+async fn attachment_for_manage(
+    state: &HubState,
+    headers: &HeaderMap,
+    attachment_id: &str,
+    mutating: bool,
+) -> Result<(super::tenants::AttachmentRow, SessionRow), Response> {
+    let id: i64 = attachment_id
+        .parse()
+        .map_err(|_| bad_request("invalid attachment id"))?;
+    let attachment = match state.db.get_attachment(id) {
+        Ok(Some(attachment)) => attachment,
+        Ok(None) => return Err((StatusCode::NOT_FOUND, "no such attachment").into_response()),
+        Err(e) => return Err(internal_error(e)),
+    };
+    match authorize_manage(state, headers, attachment.guild_id, mutating).await {
+        ManageAuth::Ok(session) => Ok((attachment, session)),
+        ManageAuth::Denied(response) => Err(response),
+    }
+}
+
+/// Everything attached to this guild, with telescopes, owners, connection
+/// state, and destinations.
+async fn api_guild_attachments(
+    State(state): State<HubState>,
+    Path(guild_id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let guild_id = match parse_id_param(&guild_id) {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+    if let ManageAuth::Denied(response) = authorize_manage(&state, &headers, guild_id, false).await
+    {
+        return response;
+    }
+    let session_user = session_from_headers(&state, &headers)
+        .map(|s| s.discord_user_id)
+        .unwrap_or(0);
+    match state.db.guild_attachments(guild_id) {
+        Ok(attachments) => Json(serde_json::json!({
+            "attachments": attachments
+                .iter()
+                .map(|entry| {
+                    let mut value = attachment_json(&entry.attachment);
+                    value["telescope_name"] = serde_json::Value::from(entry.telescope.name.clone());
+                    value["owner_name"] = serde_json::Value::from(entry.owner_name.clone());
+                    value["owned_by_me"] =
+                        serde_json::Value::from(entry.telescope.owner_id == session_user);
+                    value["connected"] = serde_json::Value::from(
+                        state.rig_connections.get(entry.telescope.id).is_some(),
+                    );
+                    value["channels"] = serde_json::Value::from(
+                        state
+                            .db
+                            .attachment_routes(entry.telescope.id, guild_id)
+                            .unwrap_or_default()
+                            .iter()
+                            .map(route_json)
+                            .collect::<Vec<_>>(),
+                    );
+                    value
+                })
+                .collect::<Vec<_>>(),
+        }))
+        .into_response(),
+        Err(e) => internal_error(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct UpdateAttachmentBody {
+    write_policy: Option<String>,
+    allowed_role_ids: Option<Vec<String>>,
+}
+
+/// The attachment's guild managers set THEIR server's command policy.
+async fn api_update_attachment(
+    State(state): State<HubState>,
+    Path(attachment_id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<UpdateAttachmentBody>,
+) -> Response {
+    let (attachment, session) =
+        match attachment_for_manage(&state, &headers, &attachment_id, true).await {
+            Ok(found) => found,
+            Err(response) => return response,
+        };
+    if let Some(policy) = &body.write_policy
+        && !["disabled", "admins", "roles"].contains(&policy.as_str())
+    {
+        return bad_request("write_policy must be 'disabled', 'admins', or 'roles'");
+    }
+    let roles = match &body.allowed_role_ids {
+        None => None,
+        Some(raw_roles) => {
+            let mut parsed = Vec::new();
+            for raw in raw_roles {
+                match parse_snowflake(raw) {
+                    Ok(id) => parsed.push(id),
+                    Err(_) => return bad_request("invalid role id"),
+                }
+            }
+            Some(parsed)
+        }
+    };
+    let update = super::tenants::AttachmentUpdate {
+        write_policy: body.write_policy.clone(),
+        allowed_role_ids: roles,
+    };
+    if let Err(e) = state.db.update_attachment(attachment.id, &update) {
+        return internal_error(e);
+    }
+    state.db.audit(
+        session.discord_user_id,
+        attachment.guild_id,
+        "attachment_updated",
+        &attachment.telescope_id.to_string(),
+    );
+    match state.db.get_attachment(attachment.id) {
+        Ok(Some(updated)) => Json(attachment_json(&updated)).into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, "no such attachment").into_response(),
+        Err(e) => internal_error(e),
+    }
+}
+
+/// Remove an attachment (and its routes). Either side may sever: a manager
+/// of the attachment's guild, or the telescope's owner.
+async fn api_detach_telescope(
+    State(state): State<HubState>,
+    Path(attachment_id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let id: i64 = match attachment_id.parse() {
+        Ok(id) => id,
+        Err(_) => return bad_request("invalid attachment id"),
+    };
+    let attachment = match state.db.get_attachment(id) {
+        Ok(Some(attachment)) => attachment,
+        Ok(None) => return (StatusCode::NOT_FOUND, "no such attachment").into_response(),
+        Err(e) => return internal_error(e),
+    };
+    let telescope = match state.db.get_telescope(attachment.telescope_id) {
+        Ok(Some(telescope)) => telescope,
+        Ok(None) => return (StatusCode::NOT_FOUND, "no such telescope").into_response(),
+        Err(e) => return internal_error(e),
+    };
+    // Owner path first (session + CSRF, no guild management needed).
+    let session = match require_session_with_csrf(&state, &headers) {
+        Some(session) if session.discord_user_id == telescope.owner_id => Some(session),
+        _ => match authorize_manage(&state, &headers, attachment.guild_id, true).await {
+            ManageAuth::Ok(session) => Some(session),
+            ManageAuth::Denied(response) => return response,
+        },
+    };
+    if let Err(e) = state.db.detach_telescope(attachment.id) {
+        return internal_error(e);
+    }
+    if let Some(session) = session {
+        state.db.audit(
+            session.discord_user_id,
+            attachment.guild_id,
+            "telescope_detached",
+            &telescope.name,
+        );
+    }
+    Json(serde_json::json!({ "deleted": true })).into_response()
+}
+
+#[derive(Deserialize)]
+struct AddChannelBody {
+    channel_id: String,
+}
+
+/// Add a destination channel to an attachment. The channel must be in the
+/// attachment's guild, and only that guild's managers may do it — channel
+/// ownership stays with the server the channel lives in.
+async fn api_add_channel_route(
+    State(state): State<HubState>,
+    Path(attachment_id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<AddChannelBody>,
+) -> Response {
+    let (attachment, session) =
+        match attachment_for_manage(&state, &headers, &attachment_id, true).await {
+            Ok(found) => found,
+            Err(response) => return response,
+        };
+    let channel_id = match parse_snowflake(&body.channel_id) {
+        Ok(id) => id,
+        Err(_) => return bad_request("invalid channel_id"),
+    };
+    if let Some(checker) = &state.guild_checker
+        && !checker
+            .channel_in_guild(channel_id as u64, attachment.guild_id as u64)
+            .await
+    {
+        return bad_request("that channel is not in this server");
+    }
+    let channel_name = channel_display_name(&state, attachment.guild_id, channel_id).await;
+    let guild_name = state
+        .db
+        .get_guild(attachment.guild_id)
+        .ok()
+        .flatten()
+        .map(|g| g.name)
+        .unwrap_or_default();
+    match state.db.add_channel_route(
+        attachment.telescope_id,
+        attachment.guild_id,
+        channel_id,
+        &channel_name,
+        &guild_name,
+        session.discord_user_id,
+    ) {
+        Ok(route) => {
+            state.db.audit(
+                session.discord_user_id,
+                attachment.guild_id,
+                "destination_added",
+                &format!("#{}", route.channel_name),
+            );
+            Json(route_json(&route)).into_response()
+        }
+        Err(DbError::Sqlite(rusqlite::Error::SqliteFailure(failure, _)))
+            if failure.code == rusqlite::ErrorCode::ConstraintViolation =>
+        {
+            bad_request("that channel is already routed to a telescope")
+        }
+        Err(e) => internal_error(e),
+    }
+}
+
+/// Remove a destination. Managers of the attachment's guild, or the
+/// telescope's owner.
+async fn api_delete_channel_route(
+    State(state): State<HubState>,
+    Path((attachment_id, route_id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Response {
+    let attachment_id: i64 = match attachment_id.parse() {
+        Ok(id) => id,
+        Err(_) => return bad_request("invalid attachment id"),
+    };
+    let route_id: i64 = match route_id.parse() {
+        Ok(id) => id,
+        Err(_) => return bad_request("invalid route id"),
+    };
+    let attachment = match state.db.get_attachment(attachment_id) {
+        Ok(Some(attachment)) => attachment,
+        Ok(None) => return (StatusCode::NOT_FOUND, "no such attachment").into_response(),
+        Err(e) => return internal_error(e),
+    };
+    let route = match state.db.get_route(route_id) {
+        Ok(Some(route))
+            if route.telescope_id == attachment.telescope_id
+                && route.guild_id == attachment.guild_id =>
+        {
+            route
+        }
+        Ok(_) => return (StatusCode::NOT_FOUND, "no such destination").into_response(),
+        Err(e) => return internal_error(e),
+    };
+    let owner_id = state
+        .db
+        .get_telescope(attachment.telescope_id)
+        .ok()
+        .flatten()
+        .map(|t| t.owner_id);
+    let session = match require_session_with_csrf(&state, &headers) {
+        Some(session) if Some(session.discord_user_id) == owner_id => Some(session),
+        _ => match authorize_manage(&state, &headers, attachment.guild_id, true).await {
+            ManageAuth::Ok(session) => Some(session),
+            ManageAuth::Denied(response) => return response,
+        },
+    };
+    if let Err(e) = state.db.delete_route(route.id) {
+        return internal_error(e);
+    }
+    if let Some(session) = session {
+        state.db.audit(
+            session.discord_user_id,
+            attachment.guild_id,
+            "destination_removed",
+            &format!("#{}", route.channel_name),
+        );
+    }
+    Json(serde_json::json!({ "deleted": true })).into_response()
+}
+
+#[derive(Deserialize)]
 struct SubscribeBody {
     code: String,
     channel_id: String,
 }
 
-/// Redeem a share code: subscribes one of THIS guild's channels to the
-/// shared telescope's feed. Only this guild's manager can do it, so a feed
+/// Redeem a share code: creates a feed-only attachment in THIS guild plus
+/// its first destination. Only this guild's manager can do it, so a feed
 /// can never be pushed into a server whose managers didn't act.
 async fn api_subscribe_share(
     State(state): State<HubState>,
@@ -972,6 +1306,20 @@ async fn api_subscribe_share(
         Ok(None) => return bad_request("the shared telescope no longer exists"),
         Err(e) => return internal_error(e),
     };
+    // A feed-only attachment, unless this guild already has one.
+    let attachment = match state.db.attachment_for(telescope.id, guild_id) {
+        Ok(Some(existing)) => existing,
+        Ok(None) => {
+            match state
+                .db
+                .attach_telescope(telescope.id, guild_id, false, session.discord_user_id)
+            {
+                Ok(attachment) => attachment,
+                Err(e) => return internal_error(e),
+            }
+        }
+        Err(e) => return internal_error(e),
+    };
     let channel_name = channel_display_name(&state, guild_id, channel_id).await;
     let guild_name = state
         .db
@@ -995,147 +1343,15 @@ async fn api_subscribe_share(
                 "shared_telescope_subscribed",
                 &format!("{} -> #{}", telescope.name, route.channel_name),
             );
-            state.db.audit(
-                session.discord_user_id,
-                telescope.guild_id,
-                "telescope_shared_out",
-                &format!("{} -> {}", telescope.name, route.guild_name),
-            );
             Json(serde_json::json!({
                 "telescope_name": telescope.name,
-                "route": route_json(&route, telescope.guild_id),
-            }))
-            .into_response()
-        }
-        Err(DbError::Sqlite(rusqlite::Error::SqliteFailure(failure, _)))
-            if failure.code == rusqlite::ErrorCode::ConstraintViolation =>
-        {
-            bad_request("that channel is already routed to a telescope")
-        }
-        Err(e) => internal_error(e),
-    }
-}
-
-async fn api_delete_telescope(
-    State(state): State<HubState>,
-    Path(telescope_id): Path<String>,
-    headers: HeaderMap,
-) -> Response {
-    let (telescope, session) =
-        match telescope_for_manage(&state, &headers, &telescope_id, true).await {
-            Ok(found) => found,
-            Err(response) => return response,
-        };
-    match state.db.delete_telescope(telescope.id) {
-        Ok(()) => {
-            // Credentials and tokens cascade with the row; the live
-            // connection and its chat updater must be torn down explicitly
-            // or the rig keeps heartbeating and posting forever.
-            if let Some(connection) = state.rig_connections.remove(telescope.id) {
-                connection.request_close("telescope deleted by a server admin", false);
-            }
-            state.db.audit(
-                session.discord_user_id,
-                telescope.guild_id,
-                "telescope_deleted",
-                &telescope.name,
-            );
-            Json(serde_json::json!({ "deleted": true })).into_response()
-        }
-        Err(e) => internal_error(e),
-    }
-}
-
-/// Issue a fresh pairing token, revoking any live unconsumed ones so only
-/// one token is outstanding per telescope.
-async fn api_issue_pairing_token(
-    State(state): State<HubState>,
-    Path(telescope_id): Path<String>,
-    headers: HeaderMap,
-) -> Response {
-    let (telescope, session) =
-        match telescope_for_manage(&state, &headers, &telescope_id, true).await {
-            Ok(found) => found,
-            Err(response) => return response,
-        };
-    if let Err(e) = state.db.revoke_pairing_tokens(telescope.id) {
-        return internal_error(e);
-    }
-    match state
-        .db
-        .issue_pairing_token(telescope.id, session.discord_user_id)
-    {
-        Ok(token) => {
-            state.db.audit(
-                session.discord_user_id,
-                telescope.guild_id,
-                "pairing_token_issued",
-                &telescope.name,
-            );
-            Json(serde_json::json!({
-                "token": token,
-                "expires_in_seconds": super::tenants::PAIRING_TOKEN_TTL_SECONDS,
+                "attachment": attachment_json(&attachment),
+                "route": route_json(&route),
             }))
             .into_response()
         }
         Err(e) => internal_error(e),
     }
-}
-
-async fn api_revoke_pairing_tokens(
-    State(state): State<HubState>,
-    Path(telescope_id): Path<String>,
-    headers: HeaderMap,
-) -> Response {
-    let (telescope, session) =
-        match telescope_for_manage(&state, &headers, &telescope_id, true).await {
-            Ok(found) => found,
-            Err(response) => return response,
-        };
-    match state.db.revoke_pairing_tokens(telescope.id) {
-        Ok(revoked) => {
-            state.db.audit(
-                session.discord_user_id,
-                telescope.guild_id,
-                "pairing_tokens_revoked",
-                &telescope.name,
-            );
-            Json(serde_json::json!({ "revoked": revoked })).into_response()
-        }
-        Err(e) => internal_error(e),
-    }
-}
-
-/// Revoke every rig credential for a telescope and drop its live
-/// connection. The rig must re-pair with a fresh token.
-async fn api_revoke_credentials(
-    State(state): State<HubState>,
-    Path(telescope_id): Path<String>,
-    headers: HeaderMap,
-) -> Response {
-    let (telescope, session) =
-        match telescope_for_manage(&state, &headers, &telescope_id, true).await {
-            Ok(found) => found,
-            Err(response) => return response,
-        };
-    let revoked = match state.db.revoke_rig_credentials(telescope.id) {
-        Ok(revoked) => revoked,
-        Err(e) => return internal_error(e),
-    };
-    let disconnected = match state.rig_connections.remove(telescope.id) {
-        Some(connection) => {
-            connection.request_close("credentials revoked by a server admin", false);
-            true
-        }
-        None => false,
-    };
-    state.db.audit(
-        session.discord_user_id,
-        telescope.guild_id,
-        "credentials_revoked",
-        &telescope.name,
-    );
-    Json(serde_json::json!({ "revoked": revoked, "disconnected": disconnected })).into_response()
 }
 
 /// Picker options for a guild: its text channels and assignable roles,
@@ -1725,48 +1941,19 @@ mod tests {
         (base, db, client, csrf)
     }
 
-    #[tokio::test]
-    async fn management_flow_register_create_pair() {
-        let (base, db, client, csrf) = managed_hub(Some(Arc::new(StubChecker {
-            bot: true,
-            member: true,
-            channel: true,
-        })))
-        .await;
-
-        // Guild list shows only the manageable guild, unregistered.
-        let body: serde_json::Value = client
-            .get(format!("{base}/api/guilds"))
-            .send()
-            .await
-            .unwrap()
-            .json()
-            .await
-            .unwrap();
-        let guilds = body["guilds"].as_array().unwrap();
-        // Observatory (owner) and Partner (MANAGE_GUILD); "Other" is not
-        // manageable. Snapshot ordering is by guild name.
-        assert_eq!(guilds.len(), 2);
-        assert_eq!(guilds[0]["id"], OWNED_GUILD);
-        assert_eq!(guilds[0]["registered"], false);
-        assert_eq!(guilds[0]["bot_installed"], true);
-        let install_url = guilds[0]["install_url"].as_str().unwrap();
-        assert!(install_url.contains("client_id=client-1"));
-        assert!(install_url.contains(&format!("guild_id={OWNED_GUILD}")));
-        assert!(install_url.contains("scope=bot+applications.commands"));
-
-        // Register, then create a telescope.
-        let response = client
+    /// Helper: register the owned guild, create a telescope owned by the
+    /// session user, and attach it there. Returns (telescope_id,
+    /// attachment_id).
+    async fn create_and_attach(client: &reqwest::Client, base: &str, csrf: &str) -> (i64, i64) {
+        client
             .post(format!("{base}/api/guilds/{OWNED_GUILD}/register"))
-            .header("x-csrf-token", &csrf)
+            .header("x-csrf-token", csrf)
             .send()
             .await
             .unwrap();
-        assert_eq!(response.status(), 200);
-
         let telescope: serde_json::Value = client
-            .post(format!("{base}/api/guilds/{OWNED_GUILD}/telescopes"))
-            .header("x-csrf-token", &csrf)
+            .post(format!("{base}/api/telescopes"))
+            .header("x-csrf-token", csrf)
             .json(&serde_json::json!({ "name": "c925" }))
             .send()
             .await
@@ -1774,14 +1961,49 @@ mod tests {
             .json()
             .await
             .unwrap();
-        assert_eq!(telescope["name"], "c925");
-        // Managers control new scopes by default, straight from Discord.
-        assert_eq!(telescope["write_policy"], "admins");
         let id = telescope["id"].as_i64().unwrap();
+        let attachment: serde_json::Value = client
+            .post(format!("{base}/api/telescopes/{id}/attach"))
+            .header("x-csrf-token", csrf)
+            .json(&serde_json::json!({ "guild_id": OWNED_GUILD }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        (id, attachment["attachment_id"].as_i64().unwrap())
+    }
 
-        // Add a destination, then update the write policy.
+    #[tokio::test]
+    async fn owner_flow_create_attach_route_pair() {
+        let (base, db, client, csrf) = managed_hub(Some(Arc::new(StubChecker {
+            bot: true,
+            member: true,
+            channel: true,
+        })))
+        .await;
+        let (id, attachment_id) = create_and_attach(&client, &base, &csrf).await;
+
+        // The attachment made by the owner can command, defaults to the
+        // managers policy, and is visible on the guild page as mine.
+        let listed: serde_json::Value = client
+            .get(format!("{base}/api/guilds/{OWNED_GUILD}/attachments"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let entry = &listed["attachments"][0];
+        assert_eq!(entry["telescope_name"], "c925");
+        assert_eq!(entry["can_command"], true);
+        assert_eq!(entry["write_policy"], "admins");
+        assert_eq!(entry["owned_by_me"], true);
+
+        // Route a channel, set a role policy on the attachment.
         let route: serde_json::Value = client
-            .post(format!("{base}/api/telescopes/{id}/channels"))
+            .post(format!("{base}/api/attachments/{attachment_id}/channels"))
             .header("x-csrf-token", &csrf)
             .json(&serde_json::json!({ "channel_id": "555" }))
             .send()
@@ -1790,16 +2012,13 @@ mod tests {
             .json()
             .await
             .unwrap();
-        assert_eq!(route["channel_id"], "555");
         assert_eq!(route["channel_name"], "observatory");
-        assert_eq!(route["external"], false);
-
         let updated: serde_json::Value = client
-            .patch(format!("{base}/api/telescopes/{id}"))
+            .patch(format!("{base}/api/attachments/{attachment_id}"))
             .header("x-csrf-token", &csrf)
             .json(&serde_json::json!({
                 "write_policy": "roles",
-                "allowed_role_ids": ["1111", "2222"],
+                "allowed_role_ids": ["1111"],
             }))
             .send()
             .await
@@ -1808,20 +2027,21 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(updated["write_policy"], "roles");
-        assert_eq!(updated["allowed_role_ids"][0], "1111");
 
-        // The listing embeds the destinations.
-        let listing: serde_json::Value = client
-            .get(format!("{base}/api/guilds/{OWNED_GUILD}/telescopes"))
+        // The owner's view rolls everything up.
+        let mine: serde_json::Value = client
+            .get(format!("{base}/api/telescopes"))
             .send()
             .await
             .unwrap()
             .json()
             .await
             .unwrap();
-        assert_eq!(listing["telescopes"][0]["channels"][0]["channel_id"], "555");
+        let t = &mine["telescopes"][0];
+        assert_eq!(t["name"], "c925");
+        assert_eq!(t["attachments"][0]["channels"][0]["channel_id"], "555");
 
-        // Issue a pairing token; it must be consumable exactly once.
+        // Owner mints a pairing token; single use.
         let issued: serde_json::Value = client
             .post(format!("{base}/api/telescopes/{id}/pairing-token"))
             .header("x-csrf-token", &csrf)
@@ -1832,9 +2052,271 @@ mod tests {
             .await
             .unwrap();
         let token = issued["token"].as_str().unwrap();
-        assert!(token.starts_with(super::super::tenants::PAIRING_TOKEN_PREFIX));
         assert_eq!(db.consume_pairing_token(token).unwrap(), Some(id));
         assert_eq!(db.consume_pairing_token(token).unwrap(), None);
+
+        // Guild audit recorded the attach and the destination.
+        let audit: serde_json::Value = client
+            .get(format!("{base}/api/guilds/{OWNED_GUILD}/audit"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let actions: Vec<&str> = audit["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["action"].as_str().unwrap())
+            .collect();
+        assert!(actions.contains(&"telescope_attached"));
+        assert!(actions.contains(&"destination_added"));
+    }
+
+    #[tokio::test]
+    async fn attach_requires_registered_guild_and_ownership() {
+        let (base, db, client, csrf) = managed_hub(Some(Arc::new(StubChecker {
+            bot: true,
+            member: true,
+            channel: true,
+        })))
+        .await;
+        // Attaching to an unregistered guild fails.
+        let telescope: serde_json::Value = client
+            .post(format!("{base}/api/telescopes"))
+            .header("x-csrf-token", &csrf)
+            .json(&serde_json::json!({ "name": "c925" }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let id = telescope["id"].as_i64().unwrap();
+        let response = client
+            .post(format!("{base}/api/telescopes/{id}/attach"))
+            .header("x-csrf-token", &csrf)
+            .json(&serde_json::json!({ "guild_id": OWNED_GUILD }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 400);
+
+        // Someone else's telescope is untouchable.
+        db.upsert_user(&crate::hub::store::UserRow {
+            discord_user_id: 999,
+            username: "stranger".to_string(),
+            email: None,
+            email_verified: false,
+            avatar_url: None,
+        })
+        .unwrap();
+        let other = db.create_telescope(999, "not-yours").unwrap();
+        let response = client
+            .patch(format!("{base}/api/telescopes/{}", other.id))
+            .header("x-csrf-token", &csrf)
+            .json(&serde_json::json!({ "image_cooldown_seconds": 5 }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 403);
+    }
+
+    #[tokio::test]
+    async fn credential_revocation_is_owner_only() {
+        let (base, db, client, csrf) = managed_hub(Some(Arc::new(StubChecker {
+            bot: true,
+            member: true,
+            channel: true,
+        })))
+        .await;
+        let (id, _attachment_id) = create_and_attach(&client, &base, &csrf).await;
+        let credential = db.create_rig_credential(id, "node-1", "profile-1").unwrap();
+        assert!(db.lookup_rig_credential(&credential).unwrap().is_some());
+
+        let body: serde_json::Value = client
+            .delete(format!("{base}/api/telescopes/{id}/credentials"))
+            .header("x-csrf-token", &csrf)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(body["revoked"], 1);
+        assert!(db.lookup_rig_credential(&credential).unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn channel_outside_guild_rejected() {
+        // The live check says the channel is not in this guild.
+        let (base, _db, client, csrf) = managed_hub(Some(Arc::new(StubChecker {
+            bot: true,
+            member: true,
+            channel: false,
+        })))
+        .await;
+        let (_id, attachment_id) = create_and_attach(&client, &base, &csrf).await;
+        let response = client
+            .post(format!("{base}/api/attachments/{attachment_id}/channels"))
+            .header("x-csrf-token", &csrf)
+            .json(&serde_json::json!({ "channel_id": "999888777" }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 400);
+        assert!(
+            response
+                .text()
+                .await
+                .unwrap()
+                .contains("not in this server")
+        );
+    }
+
+    #[tokio::test]
+    async fn duplicate_channel_claim_rejected() {
+        let (base, _db, client, csrf) = managed_hub(Some(Arc::new(StubChecker {
+            bot: true,
+            member: true,
+            channel: true,
+        })))
+        .await;
+        let (_first, first_attachment) = create_and_attach(&client, &base, &csrf).await;
+        let second: serde_json::Value = client
+            .post(format!("{base}/api/telescopes"))
+            .header("x-csrf-token", &csrf)
+            .json(&serde_json::json!({ "name": "esprit" }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let second_id = second["id"].as_i64().unwrap();
+        let second_attachment: serde_json::Value = client
+            .post(format!("{base}/api/telescopes/{second_id}/attach"))
+            .header("x-csrf-token", &csrf)
+            .json(&serde_json::json!({ "guild_id": OWNED_GUILD }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let second_attachment = second_attachment["attachment_id"].as_i64().unwrap();
+
+        let ok = client
+            .post(format!(
+                "{base}/api/attachments/{first_attachment}/channels"
+            ))
+            .header("x-csrf-token", &csrf)
+            .json(&serde_json::json!({ "channel_id": "555" }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(ok.status(), 200);
+        let clash = client
+            .post(format!(
+                "{base}/api/attachments/{second_attachment}/channels"
+            ))
+            .header("x-csrf-token", &csrf)
+            .json(&serde_json::json!({ "channel_id": "555" }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(clash.status(), 400);
+    }
+
+    #[tokio::test]
+    async fn share_code_subscribes_another_guild_feed_only() {
+        let (base, db, client, csrf) = managed_hub(Some(Arc::new(StubChecker {
+            bot: true,
+            member: true,
+            channel: true,
+        })))
+        .await;
+        let (id, _attachment_id) = create_and_attach(&client, &base, &csrf).await;
+        let issued: serde_json::Value = client
+            .post(format!("{base}/api/telescopes/{id}/share-code"))
+            .header("x-csrf-token", &csrf)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let code = issued["code"].as_str().unwrap().to_string();
+
+        // The partner guild registers and redeems the code against one of
+        // ITS channels: a feed-only attachment.
+        client
+            .post(format!("{base}/api/guilds/{PARTNER_GUILD}/register"))
+            .header("x-csrf-token", &csrf)
+            .send()
+            .await
+            .unwrap();
+        let subscribed: serde_json::Value = client
+            .post(format!("{base}/api/guilds/{PARTNER_GUILD}/subscribe"))
+            .header("x-csrf-token", &csrf)
+            .json(&serde_json::json!({ "code": code, "channel_id": "777" }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(subscribed["telescope_name"], "c925");
+        assert_eq!(subscribed["attachment"]["can_command"], false);
+        let partner_attachment = subscribed["attachment"]["attachment_id"].as_i64().unwrap();
+
+        // Single use.
+        let replay = client
+            .post(format!("{base}/api/guilds/{PARTNER_GUILD}/subscribe"))
+            .header("x-csrf-token", &csrf)
+            .json(&serde_json::json!({ "code": code, "channel_id": "778" }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(replay.status(), 400);
+
+        // The owner sees both attachments; the partner page shows the feed.
+        let mine: serde_json::Value = client
+            .get(format!("{base}/api/telescopes"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(
+            mine["telescopes"][0]["attachments"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        let partner: serde_json::Value = client
+            .get(format!("{base}/api/guilds/{PARTNER_GUILD}/attachments"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(partner["attachments"][0]["can_command"], false);
+
+        // Detaching from the partner side removes the feed and its routes.
+        let removed = client
+            .delete(format!("{base}/api/attachments/{partner_attachment}"))
+            .header("x-csrf-token", &csrf)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(removed.status(), 200);
+        assert!(db.attachment_for(id, 400).unwrap().is_none());
+        assert!(db.telescope_by_channel(777).unwrap().is_none());
     }
 
     #[tokio::test]
@@ -1905,92 +2387,6 @@ mod tests {
         assert_eq!(response.status(), 400);
     }
 
-    #[tokio::test]
-    async fn telescope_requires_registered_guild() {
-        let (base, _db, client, csrf) = managed_hub(Some(Arc::new(StubChecker {
-            bot: true,
-            member: true,
-            channel: true,
-        })))
-        .await;
-        let response = client
-            .post(format!("{base}/api/guilds/{OWNED_GUILD}/telescopes"))
-            .header("x-csrf-token", &csrf)
-            .json(&serde_json::json!({ "name": "c925" }))
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(response.status(), 400);
-    }
-
-    #[tokio::test]
-    async fn credential_revocation_and_audit_trail() {
-        let (base, db, client, csrf) = managed_hub(Some(Arc::new(StubChecker {
-            bot: true,
-            member: true,
-            channel: true,
-        })))
-        .await;
-
-        client
-            .post(format!("{base}/api/guilds/{OWNED_GUILD}/register"))
-            .header("x-csrf-token", &csrf)
-            .send()
-            .await
-            .unwrap();
-        let telescope: serde_json::Value = client
-            .post(format!("{base}/api/guilds/{OWNED_GUILD}/telescopes"))
-            .header("x-csrf-token", &csrf)
-            .json(&serde_json::json!({ "name": "c925" }))
-            .send()
-            .await
-            .unwrap()
-            .json()
-            .await
-            .unwrap();
-        let id = telescope["id"].as_i64().unwrap();
-
-        // Pair a credential out-of-band, then revoke through the endpoint.
-        let credential = db.create_rig_credential(id, "node-1", "profile-1").unwrap();
-        assert!(db.lookup_rig_credential(&credential).unwrap().is_some());
-        let body: serde_json::Value = client
-            .delete(format!("{base}/api/telescopes/{id}/credentials"))
-            .header("x-csrf-token", &csrf)
-            .send()
-            .await
-            .unwrap()
-            .json()
-            .await
-            .unwrap();
-        assert_eq!(body["revoked"], 1);
-        assert_eq!(body["disconnected"], false);
-        assert!(db.lookup_rig_credential(&credential).unwrap().is_none());
-
-        // The audit endpoint lists the actions, newest first.
-        let audit: serde_json::Value = client
-            .get(format!("{base}/api/guilds/{OWNED_GUILD}/audit"))
-            .send()
-            .await
-            .unwrap()
-            .json()
-            .await
-            .unwrap();
-        let actions: Vec<&str> = audit["entries"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|entry| entry["action"].as_str().unwrap())
-            .collect();
-        assert_eq!(
-            actions,
-            vec![
-                "credentials_revoked",
-                "telescope_created",
-                "guild_registered"
-            ]
-        );
-    }
-
     #[test]
     fn client_ip_trust_semantics() {
         let peer: std::net::SocketAddr = "10.0.0.9:4444".parse().unwrap();
@@ -2002,28 +2398,6 @@ mod tests {
         assert_eq!(client_ip(&headers, peer, true), "5.6.7.8");
         // Trusted but absent header: peer.
         assert_eq!(client_ip(&HeaderMap::new(), peer, true), "10.0.0.9");
-    }
-
-    /// Helper: register the owned guild and create a telescope, returning
-    /// its id.
-    async fn create_telescope(client: &reqwest::Client, base: &str, csrf: &str, name: &str) -> i64 {
-        client
-            .post(format!("{base}/api/guilds/{OWNED_GUILD}/register"))
-            .header("x-csrf-token", csrf)
-            .send()
-            .await
-            .unwrap();
-        let telescope: serde_json::Value = client
-            .post(format!("{base}/api/guilds/{OWNED_GUILD}/telescopes"))
-            .header("x-csrf-token", csrf)
-            .json(&serde_json::json!({ "name": name }))
-            .send()
-            .await
-            .unwrap()
-            .json()
-            .await
-            .unwrap();
-        telescope["id"].as_i64().unwrap()
     }
 
     #[tokio::test]
@@ -2053,165 +2427,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(anonymous.status(), 401);
-    }
-
-    #[tokio::test]
-    async fn channel_outside_guild_rejected() {
-        // The live check says the channel is not in this guild.
-        let (base, _db, client, csrf) = managed_hub(Some(Arc::new(StubChecker {
-            bot: true,
-            member: true,
-            channel: false,
-        })))
-        .await;
-        let id = create_telescope(&client, &base, &csrf, "c925").await;
-        let response = client
-            .post(format!("{base}/api/telescopes/{id}/channels"))
-            .header("x-csrf-token", &csrf)
-            .json(&serde_json::json!({ "channel_id": "999888777" }))
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(response.status(), 400);
-        let body = response.text().await.unwrap();
-        assert!(body.contains("not in this server"));
-    }
-
-    #[tokio::test]
-    async fn duplicate_channel_claim_rejected() {
-        let (base, _db, client, csrf) = managed_hub(Some(Arc::new(StubChecker {
-            bot: true,
-            member: true,
-            channel: true,
-        })))
-        .await;
-        let first = create_telescope(&client, &base, &csrf, "c925").await;
-        let second_body: serde_json::Value = client
-            .post(format!("{base}/api/guilds/{OWNED_GUILD}/telescopes"))
-            .header("x-csrf-token", &csrf)
-            .json(&serde_json::json!({ "name": "esprit" }))
-            .send()
-            .await
-            .unwrap()
-            .json()
-            .await
-            .unwrap();
-        let second = second_body["id"].as_i64().unwrap();
-
-        let ok = client
-            .post(format!("{base}/api/telescopes/{first}/channels"))
-            .header("x-csrf-token", &csrf)
-            .json(&serde_json::json!({ "channel_id": "555" }))
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(ok.status(), 200);
-
-        let clash = client
-            .post(format!("{base}/api/telescopes/{second}/channels"))
-            .header("x-csrf-token", &csrf)
-            .json(&serde_json::json!({ "channel_id": "555" }))
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(clash.status(), 400);
-        assert!(
-            clash
-                .text()
-                .await
-                .unwrap()
-                .contains("already routed to a telescope")
-        );
-    }
-
-    #[tokio::test]
-    async fn share_code_subscribes_another_guild() {
-        let (base, db, client, csrf) = managed_hub(Some(Arc::new(StubChecker {
-            bot: true,
-            member: true,
-            channel: true,
-        })))
-        .await;
-        // Owning guild sets up a telescope and mints a share code.
-        let id = create_telescope(&client, &base, &csrf, "c925").await;
-        let issued: serde_json::Value = client
-            .post(format!("{base}/api/telescopes/{id}/share-code"))
-            .header("x-csrf-token", &csrf)
-            .send()
-            .await
-            .unwrap()
-            .json()
-            .await
-            .unwrap();
-        let code = issued["code"].as_str().unwrap().to_string();
-        assert!(code.starts_with(super::super::tenants::SHARE_CODE_PREFIX));
-
-        // The partner guild (also managed by this user) registers and
-        // redeems the code against one of ITS channels.
-        client
-            .post(format!("{base}/api/guilds/{PARTNER_GUILD}/register"))
-            .header("x-csrf-token", &csrf)
-            .send()
-            .await
-            .unwrap();
-        let subscribed: serde_json::Value = client
-            .post(format!("{base}/api/guilds/{PARTNER_GUILD}/subscribe"))
-            .header("x-csrf-token", &csrf)
-            .json(&serde_json::json!({ "code": code, "channel_id": "777" }))
-            .send()
-            .await
-            .unwrap()
-            .json()
-            .await
-            .unwrap();
-        assert_eq!(subscribed["telescope_name"], "c925");
-        assert_eq!(subscribed["route"]["external"], true);
-
-        // The code is single use.
-        let replay = client
-            .post(format!("{base}/api/guilds/{PARTNER_GUILD}/subscribe"))
-            .header("x-csrf-token", &csrf)
-            .json(&serde_json::json!({ "code": code, "channel_id": "778" }))
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(replay.status(), 400);
-
-        // Both sides see the share: the owner's listing shows the external
-        // destination, the partner's shows the inbound share.
-        let owner_list: serde_json::Value = client
-            .get(format!("{base}/api/guilds/{OWNED_GUILD}/telescopes"))
-            .send()
-            .await
-            .unwrap()
-            .json()
-            .await
-            .unwrap();
-        let channels = owner_list["telescopes"][0]["channels"].as_array().unwrap();
-        assert!(channels.iter().any(|r| r["external"] == true));
-
-        let partner_list: serde_json::Value = client
-            .get(format!("{base}/api/guilds/{PARTNER_GUILD}/telescopes"))
-            .send()
-            .await
-            .unwrap()
-            .json()
-            .await
-            .unwrap();
-        let shared = partner_list["shared_in"].as_array().unwrap();
-        assert_eq!(shared.len(), 1);
-        assert_eq!(shared[0]["telescope_name"], "c925");
-        let route_id = shared[0]["route_id"].as_i64().unwrap();
-
-        // The receiving side can sever the share.
-        let removed = client
-            .delete(format!("{base}/api/telescopes/{id}/channels/{route_id}"))
-            .header("x-csrf-token", &csrf)
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(removed.status(), 200);
-        assert!(db.routes_into_guild(400).unwrap().is_empty());
     }
 
     #[tokio::test]

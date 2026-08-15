@@ -478,7 +478,7 @@ mod tests {
         })
         .unwrap();
         db.register_guild(100, "g", 1).unwrap();
-        let telescope = db.create_telescope(100, "c925", 1).unwrap();
+        let telescope = db.create_telescope(1, "c925").unwrap();
         let pairing_token = db.issue_pairing_token(telescope.id, 1).unwrap();
 
         let state = HubState::build(HubConfig::default(), db.clone(), None).unwrap();

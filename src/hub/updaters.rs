@@ -176,7 +176,8 @@ mod tests {
         })
         .unwrap();
         db.register_guild(100, "g", 1).unwrap();
-        let telescope = db.create_telescope(100, "c925", 1).unwrap();
+        let telescope = db.create_telescope(1, "c925").unwrap();
+        db.attach_telescope(telescope.id, 100, true, 1).unwrap();
         let connections = Arc::new(RigConnections::default());
         let manager = UpdaterManager::new(
             db.clone(),
