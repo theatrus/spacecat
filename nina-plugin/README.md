@@ -52,7 +52,9 @@ Direct connection mode remains explicit:
 - **Remote:** select the hosted delivery option, enter the hub's HTTPS origin or
   WSS endpoint and paste a one-time pairing code. The plugin exchanges it once,
   saves the node-bound credential securely, and maintains an outbound WSS
-  connection. The hosted service owns chat credentials.
+  connection. The hosted service owns chat credentials. A stored credential
+  takes precedence over a newly pasted code; choose **Forget credential** first
+  when intentionally pairing the profile again.
 
 Remote mode never silently falls back to Local, preventing duplicate
 notifications or an unexpected second bot.

@@ -25,6 +25,12 @@ internal static class Program
         Run("Hosted pair and auth frames match the Rust contract", HostedHandshakeFramesMatchRust);
         Run("Hosted secrets are scoped to profile and hub origin", HostedSecretsAreOriginScoped);
         Run("Direct query deadlines match the hub clock-skew contract", DirectQueryDeadlinesMatchHub);
+        await RunAsync(
+            "Hosted credentials take precedence over stale pairing codes",
+            HostedCredentialTakesPrecedenceOverPairingCode);
+        await RunAsync(
+            "Hosted connection and authentication attempts time out",
+            HostedConnectionAttemptsTimeOut);
         Run("Direct source does not require Advanced API settings", DirectSourceNeedsNoAdvancedApi);
         Run("Plugin runtime bootstrap is source-explicit", PluginRuntimeBootstrapIsSourceExplicit);
         Run("Direct runtime bootstrap carries only its pipe", DirectRuntimeBootstrapCarriesOnlyPipe);
@@ -513,6 +519,70 @@ internal static class Program
         AssertTrue(graph.GetProperty("GuideSteps").GetArrayLength() >= 3);
         AssertEqual(2, graph.GetProperty("RMS").GetProperty("DataPoints").GetInt32());
         provider.Dispose();
+    }
+
+    private static async Task HostedCredentialTakesPrecedenceOverPairingCode()
+    {
+        var hello = HostedHello();
+        var socketFactory = new ScriptedHubSocketFactory(AgentHelloJson(hello));
+        var provider = new FakeDirectDataProvider();
+        provider.Start();
+        try
+        {
+            var client = new ChatstronomyHubClient(provider, socketFactory);
+            var configuration = new HubConnectionConfiguration(
+                new Uri("https://hub.example.test/"),
+                Credential: "csrc_existing",
+                PairingToken: "cspt_already_consumed",
+                hello.ProfileId);
+
+            await AssertThrowsAsync<HubDisconnectedException>(() =>
+                client.RunSingleConnectionAsync(configuration, hello, CancellationToken.None));
+
+            using var first = JsonDocument.Parse(socketFactory.Socket.SentMessages.First());
+            AssertEqual("auth", first.RootElement.GetProperty("type").GetString());
+            AssertEqual(
+                "csrc_existing",
+                first.RootElement.GetProperty("payload").GetProperty("credential").GetString());
+        }
+        finally
+        {
+            provider.Dispose();
+        }
+    }
+
+    private static async Task HostedConnectionAttemptsTimeOut()
+    {
+        foreach (var hangDuringConnect in new[] { true, false })
+        {
+            var hello = HostedHello();
+            var provider = new FakeDirectDataProvider();
+            provider.Start();
+            try
+            {
+                var socketFactory = new HangingHubSocketFactory(hangDuringConnect);
+                var client = new ChatstronomyHubClient(
+                    provider,
+                    socketFactory,
+                    connectionAttemptTimeout: TimeSpan.FromMilliseconds(25));
+                var configuration = new HubConnectionConfiguration(
+                    new Uri("https://hub.example.test/"),
+                    Credential: "csrc_existing",
+                    PairingToken: null,
+                    hello.ProfileId);
+                using var outerTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+
+                await AssertThrowsAsync<HubDisconnectedException>(() =>
+                    client.RunSingleConnectionAsync(
+                        configuration,
+                        hello,
+                        outerTimeout.Token));
+            }
+            finally
+            {
+                provider.Dispose();
+            }
+        }
     }
 
     private static async Task HostedPluginRejectsExpiredCommands()
@@ -1062,6 +1132,37 @@ internal static class Program
         {
             cancellationToken.ThrowIfCancellationRequested();
             return Task.FromResult(inboundMessages.TryDequeue(out var message) ? message : null);
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class HangingHubSocketFactory(bool hangDuringConnect)
+        : IHubSocketFactory
+    {
+        public IHubSocket Create() => new HangingHubSocket(hangDuringConnect);
+    }
+
+    private sealed class HangingHubSocket(bool hangDuringConnect) : IHubSocket
+    {
+        public async Task ConnectAsync(Uri endpoint, CancellationToken cancellationToken)
+        {
+            if (hangDuringConnect)
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            }
+        }
+
+        public Task SendTextAsync(string message, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public async Task<string?> ReceiveTextAsync(CancellationToken cancellationToken)
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return null;
         }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;

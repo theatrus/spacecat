@@ -9,8 +9,6 @@ internal sealed record HubConnectionConfiguration(
     Guid ProfileId,
     bool AllowInsecureLoopback = false)
 {
-    internal bool UsesPairingToken => !string.IsNullOrWhiteSpace(PairingToken);
-
     internal Uri WebSocketUrl => BuildWebSocketUrl(ServiceUrl, AllowInsecureLoopback);
 
     internal void Validate()

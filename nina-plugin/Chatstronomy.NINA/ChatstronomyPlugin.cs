@@ -45,6 +45,7 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
     private readonly SemaphoreSlim lifecycleGate = new(1, 1);
     private readonly Guid nodeId = NodeIdentityStore.LoadOrCreate();
     private readonly Guid sessionId = Guid.NewGuid();
+    private string? hostedOperationError;
     private bool initialized;
 
     [ImportingConstructor]
@@ -95,7 +96,7 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
             () => hubClient.IsRunning);
         forgetHostedCredentialCommand = new AsyncCommand(
             ForgetHostedCredentialAsync,
-            () => UseHostedService && HasHostedCredential());
+            CanForgetHostedCredential);
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -254,6 +255,7 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
         set
         {
             settings.HostedServiceUrl = value;
+            ClearHostedOperationError();
             RaisePropertyChanged();
             RaisePropertyChanged(nameof(HostedCredentialStatus));
             RefreshStatus();
@@ -276,19 +278,28 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
                     profileService.ActiveProfile.Id,
                     serviceUrl);
             }
-            catch (InvalidOperationException)
+            catch (Exception exception) when (IsHostedConfigurationException(exception))
             {
                 return string.Empty;
             }
         }
         set
         {
-            var serviceUrl = ChatstronomyConfigurationValidator.RequireHostedUrl(
-                HostedServiceUrl);
-            settings.WriteHostedPairingToken(
-                profileService.ActiveProfile.Id,
-                serviceUrl,
-                value);
+            try
+            {
+                var serviceUrl = ChatstronomyConfigurationValidator.RequireHostedUrl(
+                    HostedServiceUrl);
+                settings.WriteHostedPairingToken(
+                    profileService.ActiveProfile.Id,
+                    serviceUrl,
+                    value);
+                ClearHostedOperationError();
+            }
+            catch (Exception exception) when (IsHostedConfigurationException(exception))
+            {
+                SetHostedOperationError("Could not store the hosted pairing code", exception);
+                return;
+            }
             RaisePropertyChanged();
             RaisePropertyChanged(nameof(HostedCredentialStatus));
             RefreshStatus();
@@ -299,19 +310,28 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
     {
         get
         {
-            if (!string.IsNullOrWhiteSpace(HostedPairingToken))
-            {
-                return "A one-time pairing code is ready. Choose Pair / reconnect.";
-            }
             try
             {
-                return HasHostedCredential()
-                    ? "A secure hub credential is stored for this profile and service."
+                var serviceUrl = ChatstronomyConfigurationValidator.RequireHostedUrl(
+                    HostedServiceUrl);
+                var profileId = profileService.ActiveProfile.Id;
+                var hasCredential = !string.IsNullOrWhiteSpace(
+                    settings.ReadHostedCredential(profileId, serviceUrl));
+                var hasPairingToken = !string.IsNullOrWhiteSpace(
+                    settings.ReadHostedPairingToken(profileId, serviceUrl));
+                if (hasCredential)
+                {
+                    return hasPairingToken
+                        ? "A secure credential is stored and will be used. Choose Forget credential before pairing with the new code."
+                        : "A secure hub credential is stored for this profile and service.";
+                }
+                return hasPairingToken
+                    ? "A one-time pairing code is ready. Choose Pair / reconnect."
                     : "Not paired. Paste the one-time code from the Chatstronomy hub.";
             }
-            catch (InvalidOperationException exception)
+            catch (Exception exception) when (IsHostedConfigurationException(exception))
             {
-                return exception.Message;
+                return HostedErrorMessage("Hosted credential status is unavailable", exception);
             }
         }
     }
@@ -420,7 +440,7 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
                 _ = BuildConfiguration();
                 return true;
             }
-            catch (InvalidOperationException)
+            catch (Exception exception) when (IsHostedConfigurationException(exception))
             {
                 return false;
             }
@@ -434,17 +454,18 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
             try
             {
                 _ = BuildConfiguration();
+                var hostedError = Volatile.Read(ref hostedOperationError);
                 return UseHostedService
-                    ? hubClient.StatusMessage
+                    ? hostedError ?? hubClient.StatusMessage
                     : runtimeController.IsRunning
                         ? runtimeController.StatusMessage
                         : StartLocalRuntime
                             ? $"Configuration is ready. {runtimeController.StatusMessage}"
                             : "Configuration is ready; Chatstronomy must already be running locally.";
             }
-            catch (InvalidOperationException exception)
+            catch (Exception exception) when (IsHostedConfigurationException(exception))
             {
-                return exception.Message;
+                return HostedErrorMessage("Configuration is not ready", exception);
             }
         }
     }
@@ -595,6 +616,7 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
         }
 
         settings.DeliveryMode = mode;
+        ClearHostedOperationError();
         RefreshAllProperties();
         if (initialized)
         {
@@ -653,6 +675,7 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
     {
         if (UseHostedService)
         {
+            ClearHostedOperationError();
             if (runtimeController.IsRunning)
             {
                 await runtimeController.StopAsync(cancellationToken);
@@ -734,12 +757,13 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
         await lifecycleGate.WaitAsync(CancellationToken.None);
         try
         {
+            ClearHostedOperationError();
             await hubClient.StopAsync(CancellationToken.None);
             await StartHostedCoreAsync(CancellationToken.None);
         }
-        catch
+        catch (Exception exception)
         {
-            // The validation or hub status is displayed in ConfigurationStatus.
+            SetHostedOperationError("Could not start the hosted connection", exception);
         }
         finally
         {
@@ -753,7 +777,12 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
         await lifecycleGate.WaitAsync(CancellationToken.None);
         try
         {
+            ClearHostedOperationError();
             await hubClient.StopAsync(CancellationToken.None);
+        }
+        catch (Exception exception)
+        {
+            SetHostedOperationError("Could not stop the hosted connection", exception);
         }
         finally
         {
@@ -779,6 +808,7 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
         await lifecycleGate.WaitAsync(CancellationToken.None);
         try
         {
+            ClearHostedOperationError();
             await hubClient.StopAsync(CancellationToken.None);
             var serviceUrl = ChatstronomyConfigurationValidator.RequireHostedUrl(
                 HostedServiceUrl);
@@ -786,6 +816,10 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
                 profileService.ActiveProfile.Id,
                 serviceUrl,
                 credential: null);
+        }
+        catch (Exception exception)
+        {
+            SetHostedOperationError("Could not forget the hosted credential", exception);
         }
         finally
         {
@@ -813,11 +847,32 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
         object? sender,
         HubCredentialIssuedEventArgs args)
     {
-        settings.WriteHostedCredential(args.ProfileId, args.ServiceUrl, args.Credential);
-        settings.WriteHostedPairingToken(
-            args.ProfileId,
-            args.ServiceUrl,
-            pairingToken: null);
+        var credentialStored = false;
+        try
+        {
+            // Store the durable credential before removing the one-time token.
+            // If token deletion fails, credential-first authentication still
+            // makes the next restart safe.
+            settings.WriteHostedCredential(args.ProfileId, args.ServiceUrl, args.Credential);
+            credentialStored = true;
+            settings.WriteHostedPairingToken(
+                args.ProfileId,
+                args.ServiceUrl,
+                pairingToken: null);
+            ClearHostedOperationError();
+        }
+        catch (Exception exception)
+        {
+            // Pairing has already completed at the hub, so keep the current
+            // authenticated connection alive and make the persistence problem
+            // visible instead of throwing through the WebSocket receive loop.
+            SetHostedOperationError(
+                credentialStored
+                    ? "Connected and the credential was saved, but the one-time pairing code could not be cleared"
+                    : "Connected, but the hosted credential could not be saved securely; generate a new pairing code before restarting N.I.N.A.",
+                exception);
+            return;
+        }
         var dispatcher = System.Windows.Application.Current?.Dispatcher;
         if (dispatcher is not null && !dispatcher.CheckAccess())
         {
@@ -851,6 +906,44 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
         return !string.IsNullOrWhiteSpace(
             settings.ReadHostedCredential(profileService.ActiveProfile.Id, serviceUrl));
     }
+
+    private bool CanForgetHostedCredential()
+    {
+        if (!UseHostedService)
+        {
+            return false;
+        }
+        try
+        {
+            return HasHostedCredential();
+        }
+        catch (Exception exception) when (IsHostedConfigurationException(exception))
+        {
+            return false;
+        }
+    }
+
+    private static bool IsHostedConfigurationException(Exception exception) =>
+        exception is InvalidOperationException or Win32Exception;
+
+    private static string HostedErrorMessage(string context, Exception exception)
+    {
+        var message = string.IsNullOrWhiteSpace(exception.Message)
+            ? exception.GetType().Name
+            : exception.Message.Replace('\r', ' ').Replace('\n', ' ');
+        return $"{context}: {message}";
+    }
+
+    private void SetHostedOperationError(string context, Exception exception)
+    {
+        Volatile.Write(
+            ref hostedOperationError,
+            HostedErrorMessage(context, exception));
+        DispatchRefreshStatus();
+    }
+
+    private void ClearHostedOperationError() =>
+        Volatile.Write(ref hostedOperationError, null);
 
     private void RefreshAllProperties()
     {

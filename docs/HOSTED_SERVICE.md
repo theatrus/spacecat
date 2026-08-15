@@ -92,7 +92,9 @@ Commands that arrive after their expiry plus the protocol's clock-skew grace are
 rejected before reaching N.I.N.A. The connection sends heartbeats, reconnects
 with bounded exponential backoff after transient failures, and stops for fatal
 authentication errors so the N.I.N.A. options page can direct the user to repair
-or forget the credential.
+or forget the credential. Connection and authentication attempts have bounded
+deadlines, and a stored credential takes precedence over any leftover one-time
+code so a failed token cleanup cannot break the next restart.
 
 ## Schema sketch
 

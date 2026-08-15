@@ -10,8 +10,10 @@ internal sealed class ChatstronomyHubClient
     private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan InitialReconnectDelay = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan MaximumReconnectDelay = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan DefaultConnectionAttemptTimeout = TimeSpan.FromSeconds(15);
     private readonly INinaDirectDataProvider provider;
     private readonly IHubSocketFactory socketFactory;
+    private readonly TimeSpan connectionAttemptTimeout;
     private readonly object stateGate = new();
     private CancellationTokenSource? stopping;
     private Task? runTask;
@@ -20,10 +22,19 @@ internal sealed class ChatstronomyHubClient
 
     internal ChatstronomyHubClient(
         INinaDirectDataProvider provider,
-        IHubSocketFactory? socketFactory = null)
+        IHubSocketFactory? socketFactory = null,
+        TimeSpan? connectionAttemptTimeout = null)
     {
         this.provider = provider;
         this.socketFactory = socketFactory ?? new ClientWebSocketFactory();
+        this.connectionAttemptTimeout = connectionAttemptTimeout
+            ?? DefaultConnectionAttemptTimeout;
+        if (this.connectionAttemptTimeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(connectionAttemptTimeout),
+                "Hosted connection timeout must be greater than zero.");
+        }
     }
 
     internal event EventHandler? StateChanged;
@@ -193,18 +204,25 @@ internal sealed class ChatstronomyHubClient
     {
         SetState(false, $"Connecting securely to {configuration.ServiceUrl.Host}...");
         await using var socket = socketFactory.Create();
-        await socket.ConnectAsync(configuration.WebSocketUrl, cancellationToken)
-            .ConfigureAwait(false);
+        await ConnectWithTimeoutAsync(
+            socket,
+            configuration.WebSocketUrl,
+            cancellationToken).ConfigureAwait(false);
 
-        var firstMessage = !string.IsNullOrWhiteSpace(authentication.PairingToken)
-            ? DirectProtocol.SerializePair(authentication.PairingToken, hello)
-            : DirectProtocol.SerializeAuth(
-                authentication.Credential
+        // A durable credential always wins over a leftover one-time token. This
+        // matches the Rust relay and prevents a token that could not be cleared
+        // after pairing from overriding the credential on the next restart.
+        var firstMessage = !string.IsNullOrWhiteSpace(authentication.Credential)
+            ? DirectProtocol.SerializeAuth(authentication.Credential, hello)
+            : DirectProtocol.SerializePair(
+                authentication.PairingToken
                     ?? throw new HubFatalException("No hosted credential or pairing code is available."),
                 hello);
-        await socket.SendTextAsync(firstMessage, cancellationToken).ConfigureAwait(false);
 
-        var handshakeJson = await socket.ReceiveTextAsync(cancellationToken).ConfigureAwait(false)
+        var handshakeJson = await ExchangeHandshakeWithTimeoutAsync(
+            socket,
+            firstMessage,
+            cancellationToken).ConfigureAwait(false)
             ?? throw new HubDisconnectedException("The hub closed during authentication.");
         var handshake = DirectProtocol.ParseHubMessage(handshakeJson);
         AgentHello serverHello;
@@ -338,6 +356,47 @@ internal sealed class ChatstronomyHubClient
         finally
         {
             sendGate.Release();
+        }
+    }
+
+    private async Task ConnectWithTimeoutAsync(
+        IHubSocket socket,
+        Uri endpoint,
+        CancellationToken cancellationToken)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(connectionAttemptTimeout);
+        try
+        {
+            await socket.ConnectAsync(endpoint, timeout.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (
+            !cancellationToken.IsCancellationRequested
+            && timeout.IsCancellationRequested)
+        {
+            throw new HubDisconnectedException(
+                $"Timed out connecting to {endpoint.Host}.");
+        }
+    }
+
+    private async Task<string?> ExchangeHandshakeWithTimeoutAsync(
+        IHubSocket socket,
+        string firstMessage,
+        CancellationToken cancellationToken)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(connectionAttemptTimeout);
+        try
+        {
+            await socket.SendTextAsync(firstMessage, timeout.Token).ConfigureAwait(false);
+            return await socket.ReceiveTextAsync(timeout.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (
+            !cancellationToken.IsCancellationRequested
+            && timeout.IsCancellationRequested)
+        {
+            throw new HubDisconnectedException(
+                "Timed out waiting for the hub authentication response.");
         }
     }
 
