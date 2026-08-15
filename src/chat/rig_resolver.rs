@@ -31,6 +31,21 @@ pub trait RigResolver: Send + Sync {
     /// May this user run write commands against this telescope? The error is
     /// a user-facing message.
     fn write_allowed(&self, invocation: &CommandContext, telescope: &str) -> Result<(), String>;
+
+    /// Resolve a telescope and authorize a write against it in one step.
+    /// Implementations must guarantee the authorization decision applies to
+    /// the exact rig the command will actuate — resolving by channel and
+    /// authorizing by name against a different row is how cross-tenant
+    /// writes happen.
+    fn resolve_for_write(
+        &self,
+        invocation: &CommandContext,
+        override_name: Option<&str>,
+    ) -> Result<(String, SharedRigSource), String> {
+        let resolved = self.resolve(invocation, override_name)?;
+        self.write_allowed(invocation, &resolved.0)?;
+        Ok(resolved)
+    }
 }
 
 /// Config-file-backed resolver used by the self-hosted bot: fixed telescope

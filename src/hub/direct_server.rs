@@ -31,7 +31,6 @@ pub const QUERY_TIMEOUT: Duration = Duration::from_secs(20);
 /// One live, authenticated rig connection.
 pub struct RigConnection {
     pub telescope_id: i64,
-    pub rig_id: RigId,
     pub session_id: Uuid,
     pub capabilities: RigCapabilities,
     pub profile_name: String,
@@ -92,11 +91,13 @@ impl RigConnection {
     }
 
     /// Ask the write loop to send a final error frame and close the socket.
-    pub(crate) fn request_close(&self, reason: &str) {
+    /// `retryable` tells the client whether reconnecting can help.
+    pub(crate) fn request_close(&self, reason: &str, retryable: bool) {
         self.close_requested
             .store(true, std::sync::atomic::Ordering::SeqCst);
         self.send(DirectMessage::Error {
             message: reason.to_string(),
+            retryable,
         });
     }
 
@@ -117,10 +118,6 @@ impl RigConnection {
         (
             Arc::new(RigConnection {
                 telescope_id,
-                rig_id: RigId {
-                    node_id: Uuid::new_v4(),
-                    profile_id: Uuid::new_v4(),
-                },
                 session_id,
                 capabilities: crate::source::RigCapabilities::advanced_api(),
                 profile_name: format!("stub-{telescope_id}"),
@@ -185,7 +182,7 @@ pub async fn direct_ws(
     headers: axum::http::HeaderMap,
     upgrade: WebSocketUpgrade,
 ) -> Response {
-    let ip = crate::hub::server::client_ip(&headers, peer);
+    let ip = crate::hub::server::client_ip(&headers, peer, state.config.trust_x_forwarded_for);
     upgrade.on_upgrade(move |socket| handle_socket(state, socket, ip))
 }
 
@@ -210,24 +207,32 @@ async fn send_message(socket: &mut WebSocket, message: &DirectMessage) -> bool {
     socket.send(Message::Text(json.into())).await.is_ok()
 }
 
-async fn reject(mut socket: WebSocket, message: &str) {
+async fn reject(mut socket: WebSocket, message: &str, retryable: bool) {
     let _ = send_message(
         &mut socket,
         &DirectMessage::Error {
             message: message.to_string(),
+            retryable,
         },
     )
     .await;
     let _ = socket.send(Message::Close(None)).await;
 }
 
+/// What to undo if the PairResult carrying the freshly minted credential
+/// never reaches the client: restore the token, drop the orphan credential.
+struct PairRollback {
+    token: String,
+    credential: String,
+}
+
 /// Authenticate the first frame: either a pairing exchange or a credential
-/// presentation. Returns the telescope and hello on success, and the
-/// response to send.
+/// presentation. Returns the telescope, the hello, the response to send,
+/// and — for pairing — the rollback data for a failed delivery.
 fn authenticate(
     state: &HubState,
     first: &DirectMessage,
-) -> Result<(i64, ClientHello, DirectMessage), String> {
+) -> Result<(i64, ClientHello, DirectMessage, Option<PairRollback>), String> {
     match first {
         DirectMessage::Pair(PairRequest {
             pairing_token,
@@ -239,6 +244,15 @@ fn authenticate(
                 .consume_pairing_token(pairing_token)
                 .map_err(|e| format!("database error: {e}"))?
                 .ok_or("pairing token is unknown, expired, or already used")?;
+            // Pairing rotates: earlier credentials die so a retired install
+            // can never reconnect and displace the new rig.
+            if let Ok(revoked) = state.db.revoke_rig_credentials(telescope_id)
+                && revoked > 0
+            {
+                println!(
+                    "Pairing for telescope {telescope_id} revoked {revoked} earlier credential(s)"
+                );
+            }
             let credential = state
                 .db
                 .create_rig_credential(
@@ -248,10 +262,18 @@ fn authenticate(
                 )
                 .map_err(|e| format!("database error: {e}"))?;
             let response = DirectMessage::PairResult(crate::direct::protocol::PairResult {
-                credential,
+                credential: credential.clone(),
                 agent_hello: agent_hello(hello),
             });
-            Ok((telescope_id, hello.clone(), response))
+            Ok((
+                telescope_id,
+                hello.clone(),
+                response,
+                Some(PairRollback {
+                    token: pairing_token.clone(),
+                    credential,
+                }),
+            ))
         }
         DirectMessage::Auth(AuthRequest { credential, hello }) => {
             check_hello(hello)?;
@@ -265,7 +287,7 @@ fn authenticate(
                 return Err("credential is bound to a different node".to_string());
             }
             let response = DirectMessage::AgentHello(agent_hello(hello));
-            Ok((row.telescope_id, hello.clone(), response))
+            Ok((row.telescope_id, hello.clone(), response, None))
         }
         _ => Err("first frame must be pair or auth".to_string()),
     }
@@ -296,37 +318,46 @@ async fn handle_socket(state: HubState, mut socket: WebSocket, client_ip: String
     // Token/credential guessing protection: an IP with too many recent
     // failures is refused before any database work.
     if state.limits.direct_auth.blocked(&client_ip) {
-        reject(socket, "too many failed attempts; try again in a minute").await;
+        reject(
+            socket,
+            "too many failed attempts; try again in a minute",
+            true,
+        )
+        .await;
         return;
     }
 
     let first = match tokio::time::timeout(HANDSHAKE_TIMEOUT, recv_message(&mut socket)).await {
         Ok(Some(message)) => message,
         _ => {
-            reject(socket, "expected an authentication frame").await;
+            reject(socket, "expected an authentication frame", true).await;
             return;
         }
     };
 
-    let (telescope_id, hello, response) = match authenticate(&state, &first) {
+    let (telescope_id, hello, response, pair_rollback) = match authenticate(&state, &first) {
         Ok(ok) => ok,
         Err(message) => {
             state.limits.direct_auth.check(&client_ip);
-            reject(socket, &message).await;
+            reject(socket, &message, false).await;
             return;
         }
     };
     if !send_message(&mut socket, &response).await {
+        // A pairing reply that never arrived means the client still has no
+        // credential: give the token back and drop the orphan credential so
+        // the client's retry with the same token works.
+        if let Some(rollback) = pair_rollback {
+            let _ = state.db.delete_rig_credential(&rollback.credential);
+            let _ = state.db.restore_pairing_token(&rollback.token);
+            println!("Pairing reply for telescope {telescope_id} was not delivered; rolled back");
+        }
         return;
     }
 
     let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel();
     let connection = Arc::new(RigConnection {
         telescope_id,
-        rig_id: RigId {
-            node_id: hello.node_id,
-            profile_id: hello.profile_id,
-        },
         session_id: hello.session_id,
         capabilities: hello.capabilities,
         profile_name: hello.profile_name.clone(),
@@ -334,9 +365,11 @@ async fn handle_socket(state: HubState, mut socket: WebSocket, client_ip: String
         pending: Mutex::new(HashMap::new()),
         close_requested: std::sync::atomic::AtomicBool::new(false),
     });
-    // A newer connection for the same telescope replaces the older one; the
-    // replaced connection's outgoing channel closes, ending its write loop.
-    if state.rig_connections.insert(connection.clone()).is_some() {
+    // A newer connection for the same telescope replaces the older one. The
+    // old session is told to close — its own task holds an Arc of its
+    // connection, so only an explicit close ends its write loop.
+    if let Some(replaced) = state.rig_connections.insert(connection.clone()) {
+        replaced.request_close("replaced by a newer connection for this telescope", true);
         println!("Rig for telescope {telescope_id} reconnected; replacing previous session");
     } else {
         println!(
@@ -448,14 +481,7 @@ mod tests {
         let telescope = db.create_telescope(100, "c925", 1).unwrap();
         let pairing_token = db.issue_pairing_token(telescope.id, 1).unwrap();
 
-        let state = HubState {
-            db: db.clone(),
-            config: Arc::new(HubConfig::default()),
-            oauth: None,
-            guild_checker: None,
-            rig_connections: Arc::new(RigConnections::default()),
-            limits: Arc::new(crate::hub::server::HubLimits::default()),
-        };
+        let state = HubState::build(HubConfig::default(), db.clone(), None).unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let router = crate::hub::server::router(state.clone());
@@ -548,7 +574,10 @@ mod tests {
         // Read path: event history proxied from the stub NINA API.
         let events = source.get_event_history().await.unwrap();
         assert_eq!(events.response.len(), 2);
-        assert_eq!(events.response[0].event, "IMAGE-SAVE");
+        assert_eq!(
+            events.response[0].event,
+            crate::events::event_types::IMAGE_SAVE
+        );
 
         // Command path.
         let result = source
@@ -648,12 +677,12 @@ mod tests {
         connections.insert(connection);
 
         let removed = connections.remove(7).expect("connection present");
-        removed.request_close("credentials revoked");
+        removed.request_close("credentials revoked", false);
         assert!(connections.get(7).is_none());
         assert!(removed.close_requested());
 
         let frame = rx.recv().await.expect("close error frame");
-        let DirectMessage::Error { message } = frame else {
+        let DirectMessage::Error { message, .. } = frame else {
             panic!("expected an error frame, got {frame:?}");
         };
         assert!(message.contains("revoked"));

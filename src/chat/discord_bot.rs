@@ -423,28 +423,24 @@ async fn resolve_write_or_reply<'a>(
     telescope: Option<String>,
 ) -> Result<(String, SharedRigSource), BotError> {
     let invocation = command_context(ctx).await;
-    let resolved = match ctx
+    // One resolver call so the authorization decision provably applies to
+    // the rig the command will actuate.
+    match ctx
         .data()
         .resolver
-        .resolve(&invocation, telescope.as_deref())
+        .resolve_for_write(&invocation, telescope.as_deref())
     {
-        Ok(v) => v,
+        Ok(v) => Ok(v),
         Err(msg) => {
-            ctx.send(poise::CreateReply::default().content(msg).ephemeral(true))
-                .await?;
-            return Err("telescope resolution failed".into());
+            ctx.send(
+                poise::CreateReply::default()
+                    .content(format!("❌ {msg}"))
+                    .ephemeral(true),
+            )
+            .await?;
+            Err("write resolution or authorization failed".into())
         }
-    };
-    if let Err(msg) = ctx.data().resolver.write_allowed(&invocation, &resolved.0) {
-        ctx.send(
-            poise::CreateReply::default()
-                .content(format!("❌ {msg}"))
-                .ephemeral(true),
-        )
-        .await?;
-        return Err("user not authorized for write commands".into());
     }
-    Ok(resolved)
 }
 
 /// One-page summary embed: target + mount + sequence + filter.

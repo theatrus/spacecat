@@ -140,6 +140,7 @@ pub async fn run_relay(telescope: &TelescopeConfig) -> Result<(), RelayError> {
     let max = Duration::from_secs(telescope.reconnect.max_seconds);
     let mut backoff = initial;
     loop {
+        let attempt_started = std::time::Instant::now();
         match run_connection(relay, telescope, &api, &mut state, &state_path).await {
             Err(RelayError::Rejected(message)) => {
                 return Err(RelayError::Rejected(message));
@@ -150,6 +151,11 @@ pub async fn run_relay(telescope: &TelescopeConfig) -> Result<(), RelayError> {
             Ok(()) => {
                 eprintln!("Relay connection closed; reconnecting in {backoff:?}");
             }
+        }
+        // A connection that stayed up counts as healthy: start the backoff
+        // schedule over instead of ratcheting toward max forever.
+        if attempt_started.elapsed() > Duration::from_secs(60) {
+            backoff = initial;
         }
         tokio::time::sleep(backoff).await;
         backoff = (backoff * 2).min(max);
@@ -205,7 +211,16 @@ pub async fn run_connection(
             println!("Paired with hub; credential saved to {state_path}");
         }
         DirectMessage::AgentHello(_) => {}
-        DirectMessage::Error { message } => return Err(RelayError::Rejected(message)),
+        DirectMessage::Error { message, retryable } => {
+            // Transient rejections (rate limit, replaced session) retry with
+            // backoff; only genuinely fatal ones stop the relay.
+            return Err(if retryable {
+                eprintln!("Hub asked us to retry later: {message}");
+                RelayError::Disconnected
+            } else {
+                RelayError::Rejected(message)
+            });
+        }
         _ => {
             return Err(RelayError::Rejected(
                 "unexpected handshake reply".to_string(),
@@ -240,11 +255,7 @@ pub async fn run_connection(
                     Message::Text(text) => {
                         match serde_json::from_str::<DirectMessage>(&text) {
                             Ok(DirectMessage::Query(query)) => {
-                                let now = std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .map(|d| d.as_secs() as i64)
-                                    .unwrap_or(0);
-                                if query.expired_at(now) {
+                                if query.expired_at(crate::direct::protocol::unix_now()) {
                                     // Never run stale work — especially
                                     // commands — after a hang or reconnect.
                                     let _ = out_tx.send(DirectMessage::QueryResult(QueryResult {
@@ -263,8 +274,13 @@ pub async fn run_connection(
                                 });
                             }
                             Ok(DirectMessage::HeartbeatAck { .. }) => {}
-                            Ok(DirectMessage::Error { message }) => {
-                                return Err(RelayError::Rejected(message));
+                            Ok(DirectMessage::Error { message, retryable }) => {
+                                return Err(if retryable {
+                                    eprintln!("Hub closed the connection: {message}");
+                                    RelayError::Disconnected
+                                } else {
+                                    RelayError::Rejected(message)
+                                });
                             }
                             Ok(_) | Err(_) => {}
                         }
@@ -349,6 +365,18 @@ pub async fn answer_query(api: &ChatstronomyApiClient, query: QueryRequest) -> Q
         QueryKind::RotatorInfo => to_result(id, api.get_rotator_info().await),
         QueryKind::FocuserInfo => to_result(id, api.get_focuser_info().await),
         QueryKind::Command { endpoint, params } => {
+            // The rig-side allowlist is the backstop: whatever the hub says,
+            // only the enumerated write endpoints ever execute here.
+            if !crate::direct::protocol::command_endpoint_allowed(&endpoint) {
+                return QueryResult {
+                    id,
+                    ok: false,
+                    payload: serde_json::Value::Null,
+                    error: Some(format!(
+                        "endpoint '{endpoint}' is not in the relay allowlist"
+                    )),
+                };
+            }
             let borrowed: Vec<(&str, &str)> = params
                 .iter()
                 .map(|(k, v)| (k.as_str(), v.as_str()))

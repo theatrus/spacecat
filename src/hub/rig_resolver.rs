@@ -86,30 +86,56 @@ impl RigResolver for HubRigResolver {
         Ok((row.name, source))
     }
 
+    /// One lookup: the row that authorizes is the row that actuates. The
+    /// default trait impl would re-resolve by name scoped to the invoker's
+    /// guild, which can be a different telescope than the channel routed to.
+    fn resolve_for_write(
+        &self,
+        invocation: &CommandContext,
+        override_name: Option<&str>,
+    ) -> Result<(String, SharedRigSource), String> {
+        let row = self.find_telescope(invocation, override_name)?;
+        check_write_policy(&row, invocation)?;
+        let Some(connection) = self.connections.get(row.id) else {
+            return Err(format!(
+                "Telescope '{}' is not connected to the hub right now.",
+                row.name
+            ));
+        };
+        let source: SharedRigSource = Arc::new(DirectRigSource::new(connection));
+        Ok((row.name, source))
+    }
+
     fn write_allowed(&self, invocation: &CommandContext, telescope: &str) -> Result<(), String> {
         let row = self.find_telescope(invocation, Some(telescope))?;
-        match row.write_policy.as_str() {
-            "roles" => {
-                let allowed = row
-                    .allowed_role_ids
-                    .iter()
-                    .any(|role| invocation.role_ids.contains(&(*role as u64)));
-                if allowed {
-                    Ok(())
-                } else {
-                    Err(
-                        "You are not authorized to run write commands for this telescope. \
+        check_write_policy(&row, invocation)
+    }
+}
+
+/// Per-telescope write policy: disabled, or a role allowlist matched against
+/// the invoking member's roles.
+fn check_write_policy(row: &TelescopeRow, invocation: &CommandContext) -> Result<(), String> {
+    match row.write_policy.as_str() {
+        "roles" => {
+            let allowed = row
+                .allowed_role_ids
+                .iter()
+                .any(|role| invocation.role_ids.contains(&(*role as u64)));
+            if allowed {
+                Ok(())
+            } else {
+                Err(
+                    "You are not authorized to run write commands for this telescope. \
                          Ask a server admin to grant your role in the hub settings."
-                            .to_string(),
-                    )
-                }
+                        .to_string(),
+                )
             }
-            _ => Err(
-                "Write commands are disabled for this telescope. A server admin can \
-                 enable them in the hub settings."
-                    .to_string(),
-            ),
         }
+        _ => Err(
+            "Write commands are disabled for this telescope. A server admin can \
+                 enable them in the hub settings."
+                .to_string(),
+        ),
     }
 }
 
@@ -212,6 +238,33 @@ mod tests {
             .err()
             .unwrap();
         assert!(err.contains("disabled"));
+    }
+
+    #[test]
+    fn write_auth_applies_to_the_channel_routed_telescope() {
+        // Guild 100 owns channel 42 (writes disabled). Guild 200 has a
+        // same-named telescope with a permissive role policy. A guild-200
+        // member invoking in channel 42 must be judged by guild 100's
+        // policy — the rig the command actuates — not their own guild's.
+        let (db, connections, resolver, id) = setup();
+        connect(&connections, id);
+        db.register_guild(200, "other", 1).unwrap();
+        let other = db.create_telescope(200, "c925", 1).unwrap();
+        db.update_telescope(
+            other.id,
+            &TelescopeUpdate {
+                write_policy: Some("roles".to_string()),
+                allowed_role_ids: Some(vec![9]),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let err = resolver
+            .resolve_for_write(&invocation(200, 42, vec![9]), None)
+            .err()
+            .unwrap();
+        assert!(err.contains("disabled"), "got: {err}");
     }
 
     #[test]
