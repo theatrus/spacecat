@@ -1,6 +1,8 @@
 //! Service wrapper abstraction for running Chatstronomy as CLI or background service
 
-use crate::chat::{ChatServiceManager, DiscordChatService, MatrixChatService, run_bot};
+use crate::chat::{
+    ChatServiceManager, DiscordChatService, MatrixChatService, StaticRigResolver, run_bot,
+};
 use crate::chat_updater::ChatUpdater;
 use crate::config::{Config, TelescopeConfig};
 use crate::error::{ChatError, ChatstronomyError, ServiceError, ServiceResult};
@@ -146,7 +148,12 @@ pub async fn build_shared_chat_manager(
             }
         }
 
-        let (service, join) = run_bot(bot_config, rig_sources, channel_to_telescope)
+        let resolver = Arc::new(StaticRigResolver {
+            rig_sources,
+            channel_to_telescope,
+            write_acl: bot_config.write_acl.iter().copied().collect(),
+        });
+        let (service, join) = run_bot(bot_config, resolver)
             .await
             .map_err(ChatstronomyError::Chat)?;
         manager.add_service(Box::new(service));

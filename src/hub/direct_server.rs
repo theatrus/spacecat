@@ -83,6 +83,32 @@ impl RigConnection {
     fn send(&self, message: DirectMessage) {
         let _ = self.outgoing.send(message);
     }
+
+    /// Test-only connection with no live socket behind it. The receiver end
+    /// of the outgoing channel is returned so tests can observe (or ignore)
+    /// query traffic.
+    #[cfg(test)]
+    pub(crate) fn stub(
+        telescope_id: i64,
+        session_id: Uuid,
+    ) -> (Arc<RigConnection>, mpsc::UnboundedReceiver<DirectMessage>) {
+        let (outgoing, rx) = mpsc::unbounded_channel();
+        (
+            Arc::new(RigConnection {
+                telescope_id,
+                rig_id: RigId {
+                    node_id: Uuid::new_v4(),
+                    profile_id: Uuid::new_v4(),
+                },
+                session_id,
+                capabilities: crate::source::RigCapabilities::advanced_api(),
+                profile_name: format!("stub-{telescope_id}"),
+                outgoing,
+                pending: Mutex::new(HashMap::new()),
+            }),
+            rx,
+        )
+    }
 }
 
 /// Live connections by telescope. Shared between the WebSocket handler and
@@ -105,7 +131,7 @@ impl RigConnections {
     }
 
     /// Insert a connection, returning the one it replaced (if any).
-    fn insert(&self, connection: Arc<RigConnection>) -> Option<Arc<RigConnection>> {
+    pub(crate) fn insert(&self, connection: Arc<RigConnection>) -> Option<Arc<RigConnection>> {
         self.inner
             .lock()
             .ok()?
@@ -114,7 +140,7 @@ impl RigConnections {
 
     /// Remove a connection, but only if this exact session still owns the
     /// slot — a replaced connection must not evict its replacement.
-    fn remove_if_current(&self, telescope_id: i64, session_id: Uuid) {
+    pub(crate) fn remove_if_current(&self, telescope_id: i64, session_id: Uuid) {
         if let Ok(mut map) = self.inner.lock()
             && map
                 .get(&telescope_id)

@@ -27,6 +27,8 @@ pub enum HubError {
     Io(#[from] std::io::Error),
     #[error("hub Discord client error: {0}")]
     Discord(#[from] super::discord_api::DiscordApiError),
+    #[error("hub chat error: {0}")]
+    Chat(#[from] crate::error::ChatError),
 }
 
 /// Shared state handed to every request handler.
@@ -439,7 +441,15 @@ async fn api_list_telescopes(
     }
     match state.db.guild_telescopes(guild_id) {
         Ok(telescopes) => Json(serde_json::json!({
-            "telescopes": telescopes.iter().map(telescope_json).collect::<Vec<_>>(),
+            "telescopes": telescopes
+                .iter()
+                .map(|t| {
+                    let mut value = telescope_json(t);
+                    value["connected"] =
+                        serde_json::Value::from(state.rig_connections.get(t.id).is_some());
+                    value
+                })
+                .collect::<Vec<_>>(),
         }))
         .into_response(),
         Err(e) => internal_error(e),
@@ -711,12 +721,43 @@ pub async fn serve(
             SerenityGuildChecker::new(&config.discord.bot_token),
         )))
     };
+    let rig_connections = Arc::new(super::direct_server::RigConnections::default());
+
+    // With a bot token, run the central Discord bot and the per-rig chat
+    // updater manager alongside the web server.
+    if !config.discord.bot_token.is_empty() {
+        let bot_config = crate::chat::DiscordBotConfig {
+            enabled: true,
+            token: config.discord.bot_token.clone(),
+            application_id: None,
+            public_key: None,
+            default_channel_id: None,
+            live_status: false,
+            state_file: "chatstronomy-hub-state.json".to_string(),
+            write_acl: Vec::new(),
+        };
+        let resolver = Arc::new(super::rig_resolver::HubRigResolver::new(
+            db.clone(),
+            rig_connections.clone(),
+        ));
+        let (service, _gateway) = crate::chat::run_bot(&bot_config, resolver).await?;
+        let mut manager = crate::chat::ChatServiceManager::new();
+        manager.add_service(Box::new(service));
+        let updaters = Arc::new(super::updaters::UpdaterManager::new(
+            db.clone(),
+            rig_connections.clone(),
+            Arc::new(manager),
+        ));
+        tokio::spawn(updaters.run());
+        println!("Central Discord bot and chat updater manager started");
+    }
+
     let state = HubState {
         db,
         config: Arc::new(config),
         oauth,
         guild_checker,
-        rig_connections: Arc::new(super::direct_server::RigConnections::default()),
+        rig_connections,
     };
     axum::serve(listener, router(state))
         .with_graceful_shutdown(shutdown_signal())
