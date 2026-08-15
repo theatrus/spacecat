@@ -37,6 +37,9 @@ pub struct RigConnection {
     pub profile_name: String,
     outgoing: mpsc::UnboundedSender<DirectMessage>,
     pending: Mutex<HashMap<Uuid, oneshot::Sender<QueryResult>>>,
+    /// Set when the hub wants this socket closed (e.g. credentials
+    /// revoked). The write loop checks it after every frame.
+    close_requested: std::sync::atomic::AtomicBool,
 }
 
 impl RigConnection {
@@ -49,9 +52,13 @@ impl RigConnection {
             let mut pending = self.pending.lock().map_err(|_| "connection poisoned")?;
             pending.insert(id, tx);
         }
-        let sent = self
-            .outgoing
-            .send(DirectMessage::Query(QueryRequest { id, kind }));
+        // The rig must not execute this after the hub has stopped waiting.
+        let expires_at = Some(crate::hub::db::unix_now() + timeout.as_secs() as i64);
+        let sent = self.outgoing.send(DirectMessage::Query(QueryRequest {
+            id,
+            expires_at,
+            kind,
+        }));
         if sent.is_err() {
             self.remove_pending(&id);
             return Err("rig connection is closed".to_string());
@@ -84,6 +91,20 @@ impl RigConnection {
         let _ = self.outgoing.send(message);
     }
 
+    /// Ask the write loop to send a final error frame and close the socket.
+    pub(crate) fn request_close(&self, reason: &str) {
+        self.close_requested
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        self.send(DirectMessage::Error {
+            message: reason.to_string(),
+        });
+    }
+
+    fn close_requested(&self) -> bool {
+        self.close_requested
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     /// Test-only connection with no live socket behind it. The receiver end
     /// of the outgoing channel is returned so tests can observe (or ignore)
     /// query traffic.
@@ -105,6 +126,7 @@ impl RigConnection {
                 profile_name: format!("stub-{telescope_id}"),
                 outgoing,
                 pending: Mutex::new(HashMap::new()),
+                close_requested: std::sync::atomic::AtomicBool::new(false),
             }),
             rx,
         )
@@ -138,6 +160,12 @@ impl RigConnections {
             .insert(connection.telescope_id, connection)
     }
 
+    /// Force-remove a telescope's connection (e.g. credentials revoked) and
+    /// return it so the caller can close the socket.
+    pub(crate) fn remove(&self, telescope_id: i64) -> Option<Arc<RigConnection>> {
+        self.inner.lock().ok()?.remove(&telescope_id)
+    }
+
     /// Remove a connection, but only if this exact session still owns the
     /// slot — a replaced connection must not evict its replacement.
     pub(crate) fn remove_if_current(&self, telescope_id: i64, session_id: Uuid) {
@@ -151,8 +179,14 @@ impl RigConnections {
     }
 }
 
-pub async fn direct_ws(State(state): State<HubState>, upgrade: WebSocketUpgrade) -> Response {
-    upgrade.on_upgrade(move |socket| handle_socket(state, socket))
+pub async fn direct_ws(
+    State(state): State<HubState>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: axum::http::HeaderMap,
+    upgrade: WebSocketUpgrade,
+) -> Response {
+    let ip = crate::hub::server::client_ip(&headers, peer);
+    upgrade.on_upgrade(move |socket| handle_socket(state, socket, ip))
 }
 
 async fn recv_message(socket: &mut WebSocket) -> Option<DirectMessage> {
@@ -258,7 +292,14 @@ fn agent_hello(hello: &ClientHello) -> AgentHello {
     }
 }
 
-async fn handle_socket(state: HubState, mut socket: WebSocket) {
+async fn handle_socket(state: HubState, mut socket: WebSocket, client_ip: String) {
+    // Token/credential guessing protection: an IP with too many recent
+    // failures is refused before any database work.
+    if state.limits.direct_auth.blocked(&client_ip) {
+        reject(socket, "too many failed attempts; try again in a minute").await;
+        return;
+    }
+
     let first = match tokio::time::timeout(HANDSHAKE_TIMEOUT, recv_message(&mut socket)).await {
         Ok(Some(message)) => message,
         _ => {
@@ -270,6 +311,7 @@ async fn handle_socket(state: HubState, mut socket: WebSocket) {
     let (telescope_id, hello, response) = match authenticate(&state, &first) {
         Ok(ok) => ok,
         Err(message) => {
+            state.limits.direct_auth.check(&client_ip);
             reject(socket, &message).await;
             return;
         }
@@ -290,6 +332,7 @@ async fn handle_socket(state: HubState, mut socket: WebSocket) {
         profile_name: hello.profile_name.clone(),
         outgoing: outgoing_tx,
         pending: Mutex::new(HashMap::new()),
+        close_requested: std::sync::atomic::AtomicBool::new(false),
     });
     // A newer connection for the same telescope replaces the older one; the
     // replaced connection's outgoing channel closes, ending its write loop.
@@ -309,6 +352,10 @@ async fn handle_socket(state: HubState, mut socket: WebSocket) {
                 match outbound {
                     Some(message) => {
                         if !send_message(&mut socket, &message).await {
+                            break;
+                        }
+                        if connection.close_requested() {
+                            let _ = socket.send(Message::Close(None)).await;
                             break;
                         }
                     }
@@ -407,11 +454,19 @@ mod tests {
             oauth: None,
             guild_checker: None,
             rig_connections: Arc::new(RigConnections::default()),
+            limits: Arc::new(crate::hub::server::HubLimits::default()),
         };
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let router = crate::hub::server::router(state.clone());
-        tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            .unwrap()
+        });
         (
             format!("http://{addr}"),
             db,
@@ -584,6 +639,24 @@ mod tests {
             .unwrap();
         assert!(!credential_row.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn request_close_sends_final_error_frame() {
+        let connections = RigConnections::default();
+        let (connection, mut rx) = RigConnection::stub(7, Uuid::new_v4());
+        connections.insert(connection);
+
+        let removed = connections.remove(7).expect("connection present");
+        removed.request_close("credentials revoked");
+        assert!(connections.get(7).is_none());
+        assert!(removed.close_requested());
+
+        let frame = rx.recv().await.expect("close error frame");
+        let DirectMessage::Error { message } = frame else {
+            panic!("expected an error frame, got {frame:?}");
+        };
+        assert!(message.contains("revoked"));
     }
 
     #[tokio::test]
