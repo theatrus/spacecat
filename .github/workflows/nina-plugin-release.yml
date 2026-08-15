@@ -31,7 +31,12 @@ jobs:
         || github.event_name == 'workflow_dispatch')
         && vars.AZURE_CLIENT_ID != ''
         && 'true' || 'false' }}
-    timeout-minutes: 20
+    # 20 was not enough: this job builds the Rust runtime AND the .NET plugin
+    # from cold, and a release cargo build of this crate on a Windows runner
+    # takes most of twenty minutes by itself. The job was killed mid-build, and
+    # a timeout is reported as "cancelled" -- which reads like someone pressed
+    # the button rather than a budget being too small.
+    timeout-minutes: 45
     steps:
       - name: Check out source
         uses: actions/checkout@v7
@@ -43,6 +48,21 @@ jobs:
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
+
+      # The main release workflow caches cargo; this one did not, so every run
+      # paid for a cold build of the same crate.
+      - name: Cache cargo dependencies
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-plugin-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-plugin-
+            ${{ runner.os }}-cargo-
 
       - name: Resolve and validate version
         id: version

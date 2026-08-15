@@ -314,8 +314,14 @@ jobs:
           if ($version -notmatch '^\d+\.\d+\.\d+$') {
             throw "Expected a three-part version. Got: $version"
           }
-          echo "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          echo "version=$version" >> $GITHUB_OUTPUT
+          # Both must use $env:. `>> $GITHUB_OUTPUT` is a pwsh variable that does
+          # not exist, so it expands to empty and the redirect goes nowhere --
+          # the step succeeds and the output is silently never set. Every later
+          # reference to steps.get_version.outputs.version then interpolates to
+          # nothing, which showed up as SignTool looking for
+          # "Chatstronomy--x64.msi". The tag path had the same hole.
+          "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: Build MSI package
         run: |
@@ -339,7 +345,7 @@ jobs:
           endpoint: ${{ vars.SIGNING_ENDPOINT }}
           trusted-signing-account-name: ${{ vars.SIGNING_ACCOUNT }}
           certificate-profile-name: ${{ vars.SIGNING_PROFILE }}
-          files: ${{ github.workspace }}\installer\output\Chatstronomy-${{ steps.get_version.outputs.version }}-x64.msi
+          files: ${{ github.workspace }}\installer\output\Chatstronomy-${{ env.VERSION }}-x64.msi
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
