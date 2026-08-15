@@ -25,9 +25,9 @@ const UPDATER_POLL_INTERVAL: Duration = Duration::from_secs(5);
 struct RunningUpdater {
     session_id: Uuid,
     /// The config the updater was built with. A change in the database
-    /// (channel rerouted, cooldown adjusted) restarts the updater, which
-    /// otherwise freezes its config at construction.
-    channel_id: i64,
+    /// (destinations added or removed, cooldown adjusted) restarts the
+    /// updater, which otherwise freezes its config at construction.
+    channels: Vec<i64>,
     image_cooldown_seconds: i64,
     handle: tokio::task::JoinHandle<()>,
 }
@@ -53,6 +53,17 @@ impl UpdaterManager {
         }
     }
 
+    /// This telescope's destination channels, sorted for comparison.
+    fn route_channels(&self, telescope_id: i64) -> Vec<i64> {
+        let mut channels: Vec<i64> = self
+            .db
+            .telescope_routes(telescope_id)
+            .map(|routes| routes.iter().map(|r| r.channel_id).collect())
+            .unwrap_or_default();
+        channels.sort_unstable();
+        channels
+    }
+
     /// One reconcile pass. Returns (started, stopped) counts.
     pub fn reconcile_once(&self) -> (usize, usize) {
         let mut started = 0;
@@ -70,10 +81,8 @@ impl UpdaterManager {
                 .is_some_and(|c| c.session_id == updater.session_id);
             let config_current = matches!(
                 self.db.get_telescope(*telescope_id),
-                Ok(Some(row))
-                    if row.discord_channel_id == Some(updater.channel_id)
-                        && row.image_cooldown_seconds == updater.image_cooldown_seconds
-            );
+                Ok(Some(row)) if row.image_cooldown_seconds == updater.image_cooldown_seconds
+            ) && self.route_channels(*telescope_id) == updater.channels;
             let keep = connection_current && config_current;
             if !keep {
                 updater.handle.abort();
@@ -95,17 +104,19 @@ impl UpdaterManager {
                 Ok(Some(row)) => row,
                 _ => continue,
             };
-            let Some(channel_id) = telescope.discord_channel_id else {
-                // No channel routed yet; nothing to post to.
+            let channels = self.route_channels(telescope_id);
+            if channels.is_empty() {
+                // No destinations yet; nothing to post to.
                 continue;
-            };
+            }
 
             let session_id = connection.session_id;
             let source = Arc::new(DirectRigSource::new(connection));
             let target = ChatTarget {
                 discord_webhook_url: None,
                 matrix_room_id: None,
-                discord_channel_id: Some(channel_id as u64),
+                discord_channel_id: None,
+                discord_channel_ids: channels.iter().map(|c| *c as u64).collect(),
             };
             let mut updater = ChatUpdater::new(
                 source,
@@ -121,7 +132,7 @@ impl UpdaterManager {
                 telescope_id,
                 RunningUpdater {
                     session_id,
-                    channel_id,
+                    channels,
                     image_cooldown_seconds: telescope.image_cooldown_seconds,
                     handle,
                 },
@@ -153,7 +164,6 @@ mod tests {
     use super::*;
     use crate::hub::direct_server::RigConnection;
     use crate::hub::store::UserRow;
-    use crate::hub::tenants::TelescopeUpdate;
 
     fn setup() -> (Db, Arc<RigConnections>, UpdaterManager, i64) {
         let db = Db::open_in_memory().unwrap();
@@ -195,14 +205,7 @@ mod tests {
     #[tokio::test]
     async fn updater_started_and_stopped_with_connection() {
         let (db, connections, manager, id) = setup();
-        db.update_telescope(
-            id,
-            &TelescopeUpdate {
-                discord_channel_id: Some(Some(42)),
-                ..Default::default()
-            },
-        )
-        .unwrap();
+        db.add_channel_route(id, 100, 42, "obs", "g", 1).unwrap();
 
         connect(&connections, id);
         assert_eq!(manager.reconcile_once(), (1, 0));
@@ -218,39 +221,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn config_change_restarts_updater() {
+    async fn destination_changes_restart_updater() {
         let (db, connections, manager, id) = setup();
-        db.update_telescope(
-            id,
-            &TelescopeUpdate {
-                discord_channel_id: Some(Some(42)),
-                ..Default::default()
-            },
-        )
-        .unwrap();
+        let first = db.add_channel_route(id, 100, 42, "obs", "g", 1).unwrap();
         connect(&connections, id);
         assert_eq!(manager.reconcile_once(), (1, 0));
 
-        // Rerouting the channel restarts the updater with the new config.
-        db.update_telescope(
-            id,
-            &TelescopeUpdate {
-                discord_channel_id: Some(Some(43)),
-                ..Default::default()
-            },
-        )
-        .unwrap();
+        // Adding a second destination restarts the updater with both.
+        let second = db.add_channel_route(id, 100, 43, "alerts", "g", 1).unwrap();
         assert_eq!(manager.reconcile_once(), (1, 1));
 
-        // Clearing the channel stops it without a replacement.
-        db.update_telescope(
-            id,
-            &TelescopeUpdate {
-                discord_channel_id: Some(None),
-                ..Default::default()
-            },
-        )
-        .unwrap();
+        // Removing one destination restarts again.
+        db.delete_route(second.id).unwrap();
+        assert_eq!(manager.reconcile_once(), (1, 1));
+
+        // Removing the last destination stops it without a replacement.
+        db.delete_route(first.id).unwrap();
         assert_eq!(manager.reconcile_once(), (0, 1));
         assert_eq!(manager.running_count(), 0);
     }
@@ -258,14 +244,7 @@ mod tests {
     #[tokio::test]
     async fn reconnect_replaces_updater() {
         let (db, connections, manager, id) = setup();
-        db.update_telescope(
-            id,
-            &TelescopeUpdate {
-                discord_channel_id: Some(Some(42)),
-                ..Default::default()
-            },
-        )
-        .unwrap();
+        db.add_channel_route(id, 100, 42, "obs", "g", 1).unwrap();
 
         connect(&connections, id);
         assert_eq!(manager.reconcile_once(), (1, 0));

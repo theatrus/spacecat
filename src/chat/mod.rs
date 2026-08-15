@@ -76,6 +76,23 @@ pub struct ChatTarget {
     pub discord_webhook_url: Option<String>,
     pub matrix_room_id: Option<String>,
     pub discord_channel_id: Option<u64>,
+    /// Additional Discord channels this telescope posts to (multi-channel
+    /// and cross-server destinations on the hub). The bot fans out to
+    /// `discord_channel_id` plus all of these, deduplicated.
+    pub discord_channel_ids: Vec<u64>,
+}
+
+impl ChatTarget {
+    /// Every Discord channel this target posts to, deduplicated, in order.
+    pub fn all_discord_channels(&self) -> Vec<u64> {
+        let mut seen = std::collections::HashSet::new();
+        self.discord_channel_id
+            .iter()
+            .chain(self.discord_channel_ids.iter())
+            .copied()
+            .filter(|id| seen.insert(*id))
+            .collect()
+    }
 }
 
 /// Shared Discord configuration. The webhook here is the fallback destination
@@ -187,6 +204,7 @@ impl TelescopeChatOverrides {
             discord_webhook_url: self.discord_webhook_url.clone(),
             matrix_room_id: self.matrix_room_id.clone(),
             discord_channel_id: self.discord_channel_id,
+            discord_channel_ids: Vec::new(),
         }
     }
 }
