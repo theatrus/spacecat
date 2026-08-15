@@ -147,6 +147,17 @@ enum Commands {
         #[arg(long)]
         autofocus_output: Option<String>,
     },
+    /// Internal cross-process probe for the N.I.N.A. hosted WebSocket client
+    #[cfg(all(windows, feature = "hub"))]
+    #[command(name = "direct-hub-probe", hide = true)]
+    DirectHubProbe {
+        /// PNG file to render from the plugin's guider payload through the hub
+        #[arg(long)]
+        guider_output: String,
+        /// PNG file to render from the plugin's autofocus payload through the hub
+        #[arg(long)]
+        autofocus_output: String,
+    },
     /// Windows service management commands
     #[cfg(windows)]
     WindowsService {
@@ -310,6 +321,16 @@ async fn main() {
                 std::process::exit(1);
             }
         }
+        #[cfg(all(windows, feature = "hub"))]
+        Commands::DirectHubProbe {
+            guider_output,
+            autofocus_output,
+        } => {
+            if let Err(error) = cmd_direct_hub_probe(&guider_output, &autofocus_output).await {
+                eprintln!("Direct hub probe failed: {error}");
+                std::process::exit(1);
+            }
+        }
         #[cfg(windows)]
         Commands::WindowsService { action } => {
             if let Err(e) = cmd_windows_service(action, config_path).await {
@@ -358,6 +379,77 @@ async fn cmd_hub(config_path: &str, init: bool) -> Result<(), Box<dyn std::error
     })?;
     config.validate()?;
     server::run(config).await?;
+    Ok(())
+}
+
+#[cfg(all(windows, feature = "hub"))]
+async fn cmd_direct_hub_probe(
+    guider_output: &str,
+    autofocus_output: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use chatstronomy::hub::{
+        config::HubConfig,
+        db::Db,
+        direct_source::DirectRigSource,
+        server::{self, HubState},
+        store::UserRow,
+    };
+    use std::io::Write;
+
+    let db = Db::open_in_memory()?;
+    db.upsert_user(&UserRow {
+        discord_user_id: 1,
+        username: "N.I.N.A. probe".to_string(),
+        email: None,
+        email_verified: false,
+        avatar_url: None,
+    })?;
+    db.register_guild(100, "Probe observatory", 1)?;
+    let telescope = db.create_telescope(100, "N.I.N.A. hosted probe", 1)?;
+    let pairing_token = db.issue_pairing_token(telescope.id, 1)?;
+    let state = HubState::build(HubConfig::default(), db, None)?;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let router = server::router(state.clone());
+    let server_task = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await
+    });
+
+    println!(
+        "{}",
+        serde_json::json!({
+            "probe": "direct_hub_ready",
+            "hub_url": format!("http://{address}"),
+            "pairing_token": pairing_token,
+        })
+    );
+    std::io::stdout().flush()?;
+
+    let connection = tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            if let Some(connection) = state.rig_connections.get(telescope.id) {
+                break connection;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .map_err(|_| "N.I.N.A. plugin did not connect to the hub probe")?;
+    let source = DirectRigSource::new(connection);
+    let guider = source.get_guider_graph().await?;
+    let guider_png = chatstronomy::charts::render_guider_graph_png(&guider.response)?;
+    std::fs::write(guider_output, guider_png)?;
+    let autofocus = source.get_last_autofocus().await?;
+    let autofocus_png = chatstronomy::charts::render_autofocus_graph_png(&autofocus.response)?;
+    std::fs::write(autofocus_output, autofocus_png)?;
+
+    println!("{}", serde_json::json!({"probe": "direct_hub_complete"}));
+    std::io::stdout().flush()?;
+    server_task.abort();
     Ok(())
 }
 

@@ -1,6 +1,7 @@
 using Chatstronomy.NINA.Configuration;
 using Chatstronomy.NINA.Direct;
 using Chatstronomy.NINA.Protocol;
+using Chatstronomy.NINA.Remote;
 using Chatstronomy.NINA.Runtime;
 using Chatstronomy.NINA.Settings;
 using System.Collections.Concurrent;
@@ -20,6 +21,10 @@ internal static class Program
         Run("Discord rejects incomplete webhook URLs", DiscordRejectsIncompleteWebhookUrls);
         Run("Discord application ID is optional", DiscordApplicationIdIsOptional);
         Run("Advanced API polling settings are validated", AdvancedApiPollingIsValidated);
+        Run("Hosted hub URLs require TLS and map to Direct WSS", HostedHubUrlsAreSecure);
+        Run("Hosted pair and auth frames match the Rust contract", HostedHandshakeFramesMatchRust);
+        Run("Hosted secrets are scoped to profile and hub origin", HostedSecretsAreOriginScoped);
+        Run("Direct query deadlines match the hub clock-skew contract", DirectQueryDeadlinesMatchHub);
         Run("Direct source does not require Advanced API settings", DirectSourceNeedsNoAdvancedApi);
         Run("Plugin runtime bootstrap is source-explicit", PluginRuntimeBootstrapIsSourceExplicit);
         Run("Direct runtime bootstrap carries only its pipe", DirectRuntimeBootstrapCarriesOnlyPipe);
@@ -27,6 +32,12 @@ internal static class Program
         Run("Direct guider payload matches the Rust chart contract", DirectGuiderPayloadMatchesRustChart);
         Run("Direct query results match Rust envelope", DirectQueryResultsMatchRustEnvelope);
         Run("Direct histories stay insertion ordered and bounded", DirectHistoriesAreBounded);
+        await RunAsync(
+            "Hosted plugin pairs and serves native guider graphs",
+            HostedPluginPairsAndServesGuiderGraphs);
+        await RunAsync(
+            "Hosted plugin rejects expired commands before N.I.N.A.",
+            HostedPluginRejectsExpiredCommands);
 
         var runtimePath = Environment.GetEnvironmentVariable("CHATSTRONOMY_RUNTIME_EXE");
         if (!string.IsNullOrWhiteSpace(runtimePath) && File.Exists(runtimePath))
@@ -48,6 +59,19 @@ internal static class Program
         {
             Console.WriteLine(
                 "SKIP: Plugin runtime process integration (CHATSTRONOMY_RUNTIME_EXE is not set).");
+        }
+
+        var hubRuntimePath = Environment.GetEnvironmentVariable("CHATSTRONOMY_HUB_EXE");
+        if (!string.IsNullOrWhiteSpace(hubRuntimePath) && File.Exists(hubRuntimePath))
+        {
+            await RunAsync(
+                "Release hub pairs the N.I.N.A. plugin and renders remote charts",
+                () => HostedPluginUsesRustHub(hubRuntimePath));
+        }
+        else
+        {
+            Console.WriteLine(
+                "SKIP: Hosted hub process integration (CHATSTRONOMY_HUB_EXE is not set).");
         }
 
         if (failures == 0)
@@ -111,6 +135,92 @@ internal static class Program
             ChatstronomyConfigurationValidator.OptionalDiscordSnowflake(
                 "not-a-number",
                 "Discord application ID"));
+    }
+
+    private static void HostedHubUrlsAreSecure()
+    {
+        var https = ChatstronomyConfigurationValidator.RequireHostedUrl(
+            "https://hub.example.test:8443/");
+        var wss = ChatstronomyConfigurationValidator.RequireHostedUrl(
+            "wss://hub.example.test/v1/direct");
+
+        AssertEqual(
+            "wss://hub.example.test:8443/v1/direct",
+            HubConnectionConfiguration.BuildWebSocketUrl(https).AbsoluteUri);
+        AssertEqual(
+            "wss://hub.example.test/v1/direct",
+            HubConnectionConfiguration.BuildWebSocketUrl(wss).AbsoluteUri);
+        AssertThrows<InvalidOperationException>(() =>
+            ChatstronomyConfigurationValidator.RequireHostedUrl(
+                "http://hub.example.test/"));
+        AssertThrows<InvalidOperationException>(() =>
+            HubConnectionConfiguration.BuildWebSocketUrl(
+                new Uri("https://user:secret@hub.example.test/")));
+        AssertThrows<InvalidOperationException>(() =>
+            HubConnectionConfiguration.BuildWebSocketUrl(
+                new Uri("https://hub.example.test/unexpected")));
+    }
+
+    private static void HostedHandshakeFramesMatchRust()
+    {
+        var hello = HostedHello();
+        using var pair = JsonDocument.Parse(
+            DirectProtocol.SerializePair("cspt_once", hello));
+        AssertEqual("pair", pair.RootElement.GetProperty("type").GetString());
+        AssertEqual(
+            "cspt_once",
+            pair.RootElement.GetProperty("payload").GetProperty("pairing_token").GetString());
+        AssertEqual(
+            hello.NodeId,
+            pair.RootElement.GetProperty("payload").GetProperty("hello")
+                .GetProperty("node_id").GetGuid());
+
+        using var auth = JsonDocument.Parse(
+            DirectProtocol.SerializeAuth("csrc_durable", hello));
+        AssertEqual("auth", auth.RootElement.GetProperty("type").GetString());
+        AssertEqual(
+            "csrc_durable",
+            auth.RootElement.GetProperty("payload").GetProperty("credential").GetString());
+    }
+
+    private static void HostedSecretsAreOriginScoped()
+    {
+        var profile = Guid.Parse("460a8c62-28ce-4781-92e5-ab2440982175");
+        var https = ChatstronomySettings.HostedSecretTarget(
+            profile,
+            new Uri("https://hub.example.test/"),
+            "hosted-rig-credential");
+        var wss = ChatstronomySettings.HostedSecretTarget(
+            profile,
+            new Uri("wss://hub.example.test/v1/direct"),
+            "hosted-rig-credential");
+        var otherHub = ChatstronomySettings.HostedSecretTarget(
+            profile,
+            new Uri("https://other.example.test/"),
+            "hosted-rig-credential");
+        var otherProfile = ChatstronomySettings.HostedSecretTarget(
+            Guid.NewGuid(),
+            new Uri("https://hub.example.test/"),
+            "hosted-rig-credential");
+
+        AssertEqual(https, wss);
+        AssertFalse(https == otherHub);
+        AssertFalse(https == otherProfile);
+        AssertFalse(https.Contains("hub.example.test", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static void DirectQueryDeadlinesMatchHub()
+    {
+        var id = Guid.NewGuid();
+        var query = DirectProtocol.ParseQuery(
+            QueryJson(id, "event_history", expiresAt: 100));
+        AssertFalse(query.IsExpiredAt(100));
+        AssertFalse(query.IsExpiredAt(220));
+        AssertTrue(query.IsExpiredAt(221));
+
+        var noDeadline = DirectProtocol.ParseQuery(
+            QueryJson(id, "guider_graph"));
+        AssertFalse(noDeadline.IsExpiredAt(long.MaxValue));
     }
 
     private static void AdvancedApiPollingIsValidated()
@@ -355,6 +465,140 @@ internal static class Program
         AssertEqual(0, history.Count);
     }
 
+    private static async Task HostedPluginPairsAndServesGuiderGraphs()
+    {
+        var hello = HostedHello();
+        var queryId = Guid.NewGuid();
+        var socketFactory = new ScriptedHubSocketFactory(
+            PairResultJson(hello, "csrc_saved"),
+            QueryJson(queryId, "guider_graph", expiresAt: 4_102_444_800));
+        var provider = new FakeDirectDataProvider();
+        provider.Start();
+        var client = new ChatstronomyHubClient(provider, socketFactory);
+        HubCredentialIssuedEventArgs? issued = null;
+        client.CredentialIssued += (_, args) => issued = args;
+        var configuration = new HubConnectionConfiguration(
+            new Uri("https://hub.example.test/"),
+            Credential: null,
+            PairingToken: "cspt_once",
+            hello.ProfileId);
+
+        await AssertThrowsAsync<HubDisconnectedException>(() =>
+            client.RunSingleConnectionAsync(configuration, hello, CancellationToken.None));
+
+        AssertEqual("wss://hub.example.test/v1/direct", socketFactory.Socket.Endpoint!.AbsoluteUri);
+        AssertEqual("csrc_saved", issued!.Credential);
+        AssertEqual(hello.ProfileId, issued.ProfileId);
+        AssertTrue(provider.QueriedKinds.Contains(DirectQueryKind.GuiderGraph));
+
+        var sent = socketFactory.Socket.SentMessages.ToArray();
+        AssertTrue(sent.Length >= 3);
+        using var pair = JsonDocument.Parse(sent[0]);
+        AssertEqual("pair", pair.RootElement.GetProperty("type").GetString());
+        AssertTrue(sent.Any(message =>
+        {
+            using var document = JsonDocument.Parse(message);
+            return document.RootElement.GetProperty("type").GetString() == "heartbeat";
+        }));
+        var resultJson = sent.Single(message =>
+        {
+            using var document = JsonDocument.Parse(message);
+            return document.RootElement.GetProperty("type").GetString() == "query_result";
+        });
+        using var result = JsonDocument.Parse(resultJson);
+        var payload = result.RootElement.GetProperty("payload");
+        AssertEqual(queryId, payload.GetProperty("id").GetGuid());
+        AssertTrue(payload.GetProperty("ok").GetBoolean());
+        var graph = payload.GetProperty("payload").GetProperty("Response");
+        AssertTrue(graph.GetProperty("GuideSteps").GetArrayLength() >= 3);
+        AssertEqual(2, graph.GetProperty("RMS").GetProperty("DataPoints").GetInt32());
+        provider.Dispose();
+    }
+
+    private static async Task HostedPluginRejectsExpiredCommands()
+    {
+        var hello = HostedHello();
+        var queryId = Guid.NewGuid();
+        var socketFactory = new ScriptedHubSocketFactory(
+            AgentHelloJson(hello),
+            CommandQueryJson(queryId, expiresAt: 1, commandKind: "unpark_mount"));
+        var provider = new FakeDirectDataProvider();
+        provider.Start();
+        var client = new ChatstronomyHubClient(provider, socketFactory);
+        var configuration = new HubConnectionConfiguration(
+            new Uri("wss://hub.example.test/v1/direct"),
+            Credential: "csrc_existing",
+            PairingToken: null,
+            hello.ProfileId);
+
+        await AssertThrowsAsync<HubDisconnectedException>(() =>
+            client.RunSingleConnectionAsync(configuration, hello, CancellationToken.None));
+
+        AssertEqual(0, provider.QueryCount);
+        using var first = JsonDocument.Parse(socketFactory.Socket.SentMessages.First());
+        AssertEqual("auth", first.RootElement.GetProperty("type").GetString());
+        var resultJson = socketFactory.Socket.SentMessages.Single(message =>
+        {
+            using var document = JsonDocument.Parse(message);
+            return document.RootElement.GetProperty("type").GetString() == "query_result";
+        });
+        using var result = JsonDocument.Parse(resultJson);
+        var payload = result.RootElement.GetProperty("payload");
+        AssertFalse(payload.GetProperty("ok").GetBoolean());
+        AssertTrue(payload.GetProperty("error").GetString()!.Contains("expired"));
+        provider.Dispose();
+    }
+
+    private static ClientHello HostedHello() => new(
+        DirectProtocol.CurrentVersion,
+        Guid.Parse("363db028-9d79-4fdc-8940-1b1ff52b9e8d"),
+        Guid.Parse("7afcde18-b5a8-46fd-ad1f-ed54cf3bbc4e"),
+        4242,
+        Guid.Parse("460a8c62-28ce-4781-92e5-ab2440982175"),
+        "North Rig",
+        "0.1.0.0",
+        "3.2.0.9001",
+        new DirectCapabilities(true, true, true, true, true, true, true, true));
+
+    private static string QueryJson(Guid id, string kind, long? expiresAt = null) =>
+        JsonSerializer.Serialize(
+            new
+            {
+                type = "query",
+                payload = new { id, expires_at = expiresAt, kind },
+            },
+            DirectProtocol.JsonOptions);
+
+    private static string CommandQueryJson(Guid id, long expiresAt, string commandKind) =>
+        JsonSerializer.Serialize(new
+        {
+            type = "query",
+            payload = new
+            {
+                id,
+                expires_at = expiresAt,
+                kind = "command",
+                command = new { kind = commandKind },
+            },
+        });
+
+    private static string PairResultJson(ClientHello hello, string credential) =>
+        JsonSerializer.Serialize(new
+        {
+            type = "pair_result",
+            payload = new { credential, agent_hello = AgentHelloPayload(hello) },
+        });
+
+    private static string AgentHelloJson(ClientHello hello) =>
+        JsonSerializer.Serialize(new { type = "agent_hello", payload = AgentHelloPayload(hello) });
+
+    private static object AgentHelloPayload(ClientHello hello) => new
+    {
+        protocol_version = 1,
+        connection_id = Guid.Parse("6dd05107-5b90-4d46-99c8-eb9a17489e81"),
+        rig_id = new { node_id = hello.NodeId, profile_id = hello.ProfileId },
+    };
+
     private static async Task PluginRuntimeStartsAndStops(string runtimePath)
     {
         var controller = new ChatstronomyRuntimeController();
@@ -542,6 +786,132 @@ internal static class Program
         }
     }
 
+    private static async Task HostedPluginUsesRustHub(string runtimePath)
+    {
+        var artifactDirectory = Environment.GetEnvironmentVariable(
+            "CHATSTRONOMY_CHART_ARTIFACT_DIRECTORY");
+        var outputDirectory = string.IsNullOrWhiteSpace(artifactDirectory)
+            ? Path.GetTempPath()
+            : Path.GetFullPath(artifactDirectory);
+        Directory.CreateDirectory(outputDirectory);
+        var suffix = string.IsNullOrWhiteSpace(artifactDirectory)
+            ? $"-{Guid.NewGuid():N}"
+            : string.Empty;
+        var guiderOutputPath = Path.Combine(
+            outputDirectory,
+            $"chatstronomy-hosted-guider{suffix}.png");
+        var autofocusOutputPath = Path.Combine(
+            outputDirectory,
+            $"chatstronomy-hosted-autofocus{suffix}.png");
+        var startInfo = new System.Diagnostics.ProcessStartInfo(runtimePath)
+        {
+            CreateNoWindow = true,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        startInfo.ArgumentList.Add("direct-hub-probe");
+        startInfo.ArgumentList.Add("--guider-output");
+        startInfo.ArgumentList.Add(guiderOutputPath);
+        startInfo.ArgumentList.Add("--autofocus-output");
+        startInfo.ArgumentList.Add(autofocusOutputPath);
+        using var process = System.Diagnostics.Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Could not start the Direct hub probe.");
+        var provider = new FakeDirectDataProvider();
+        provider.Start();
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            JsonElement? ready = null;
+            while (!process.HasExited)
+            {
+                var line = await process.StandardOutput.ReadLineAsync(timeout.Token);
+                if (line is null)
+                {
+                    break;
+                }
+                try
+                {
+                    using var document = JsonDocument.Parse(line);
+                    if (document.RootElement.TryGetProperty("probe", out var probe)
+                        && probe.GetString() == "direct_hub_ready")
+                    {
+                        ready = document.RootElement.Clone();
+                        break;
+                    }
+                }
+                catch (JsonException)
+                {
+                    // The normal CLI banner precedes the probe's JSON line.
+                }
+            }
+            AssertTrue(ready.HasValue);
+
+            var hello = HostedHello();
+            var client = new ChatstronomyHubClient(provider);
+            HubCredentialIssuedEventArgs? issued = null;
+            client.CredentialIssued += (_, args) => issued = args;
+            var configuration = new HubConnectionConfiguration(
+                new Uri(ready!.Value.GetProperty("hub_url").GetString()!),
+                Credential: null,
+                PairingToken: ready.Value.GetProperty("pairing_token").GetString(),
+                hello.ProfileId,
+                AllowInsecureLoopback: true);
+            var connectionTask = client.RunSingleConnectionAsync(
+                configuration,
+                hello,
+                timeout.Token);
+
+            await process.WaitForExitAsync(timeout.Token);
+            try
+            {
+                await connectionTask;
+            }
+            catch (HubDisconnectedException)
+            {
+                // The diagnostic hub exits after it receives both chart payloads.
+            }
+            catch (System.Net.WebSockets.WebSocketException) when (process.HasExited)
+            {
+                // Axum is aborted after the two successful requests, so the
+                // diagnostic socket need not complete a graceful close.
+            }
+            var standardError = await process.StandardError.ReadToEndAsync(timeout.Token);
+            AssertEqual(0, process.ExitCode);
+            AssertTrue(string.IsNullOrWhiteSpace(standardError));
+            AssertTrue(issued?.Credential.StartsWith("csrc_", StringComparison.Ordinal) == true);
+            AssertTrue(provider.QueriedKinds.Contains(DirectQueryKind.GuiderGraph));
+            AssertTrue(provider.QueriedKinds.Contains(DirectQueryKind.LastAutofocus));
+
+            foreach (var outputPath in new[] { guiderOutputPath, autofocusOutputPath })
+            {
+                var png = await File.ReadAllBytesAsync(outputPath, timeout.Token);
+                AssertTrue(png.Length > 1_000);
+                AssertTrue(png.AsSpan(0, 8).SequenceEqual(
+                    new byte[] { 0x89, (byte)'P', (byte)'N', (byte)'G', 0x0d, 0x0a, 0x1a, 0x0a }));
+            }
+        }
+        finally
+        {
+            provider.Dispose();
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync();
+            }
+            if (string.IsNullOrWhiteSpace(artifactDirectory))
+            {
+                foreach (var outputPath in new[] { guiderOutputPath, autofocusOutputPath })
+                {
+                    if (File.Exists(outputPath))
+                    {
+                        File.Delete(outputPath);
+                    }
+                }
+            }
+        }
+    }
+
     private static ChatstronomyConfiguration BuildRuntimeConfiguration(
         string runtimePath,
         bool stopWithNina = true) =>
@@ -640,6 +1010,61 @@ internal static class Program
 
         throw new InvalidOperationException(
             $"Expected {typeof(TException).Name} to be thrown.");
+    }
+
+    private static async Task AssertThrowsAsync<TException>(Func<Task> action)
+        where TException : Exception
+    {
+        try
+        {
+            await action();
+        }
+        catch (TException)
+        {
+            return;
+        }
+
+        throw new InvalidOperationException(
+            $"Expected {typeof(TException).Name} to be thrown.");
+    }
+
+    private sealed class ScriptedHubSocketFactory(params string[] inbound)
+        : IHubSocketFactory
+    {
+        internal ScriptedHubSocket Socket { get; } = new(inbound);
+
+        public IHubSocket Create() => Socket;
+    }
+
+    private sealed class ScriptedHubSocket(IEnumerable<string> inbound) : IHubSocket
+    {
+        private readonly ConcurrentQueue<string> inboundMessages = new(inbound);
+
+        internal ConcurrentQueue<string> SentMessages { get; } = new();
+
+        internal Uri? Endpoint { get; private set; }
+
+        public Task ConnectAsync(Uri endpoint, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Endpoint = endpoint;
+            return Task.CompletedTask;
+        }
+
+        public Task SendTextAsync(string message, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            SentMessages.Enqueue(message);
+            return Task.CompletedTask;
+        }
+
+        public Task<string?> ReceiveTextAsync(CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(inboundMessages.TryDequeue(out var message) ? message : null);
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private sealed class FakeDirectDataProvider : INinaDirectDataProvider

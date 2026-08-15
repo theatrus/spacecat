@@ -6,6 +6,7 @@ namespace Chatstronomy.NINA.Protocol;
 internal static class DirectProtocol
 {
     internal const ushort CurrentVersion = 1;
+    internal const long ExpiryClockSkewGraceSeconds = 120;
     private const string PipePrefix = "chatstronomy-agent-v1";
     internal const string WebSocketPath = "/v1/direct";
 
@@ -34,27 +35,30 @@ internal static class DirectProtocol
 
         var payload = RequiredObject(root, "payload");
         var id = RequiredGuid(payload, "id");
+        var expiresAt = OptionalInt64(payload, "expires_at");
         var wireKind = RequiredString(payload, "kind");
         return wireKind switch
         {
-            "event_history" => new DirectQuery(id, DirectQueryKind.EventHistory),
-            "image_history" => new DirectQuery(id, DirectQueryKind.ImageHistory),
-            "sequence" => new DirectQuery(id, DirectQueryKind.Sequence),
+            "event_history" => new DirectQuery(id, DirectQueryKind.EventHistory, ExpiresAt: expiresAt),
+            "image_history" => new DirectQuery(id, DirectQueryKind.ImageHistory, ExpiresAt: expiresAt),
+            "sequence" => new DirectQuery(id, DirectQueryKind.Sequence, ExpiresAt: expiresAt),
             "thumbnail" => new DirectQuery(
                 id,
                 DirectQueryKind.Thumbnail,
-                Index: RequiredUInt32(payload, "index")),
-            "last_autofocus" => new DirectQuery(id, DirectQueryKind.LastAutofocus),
-            "mount_info" => new DirectQuery(id, DirectQueryKind.MountInfo),
-            "filterwheel_info" => new DirectQuery(id, DirectQueryKind.FilterwheelInfo),
-            "guider_info" => new DirectQuery(id, DirectQueryKind.GuiderInfo),
-            "guider_graph" => new DirectQuery(id, DirectQueryKind.GuiderGraph),
-            "rotator_info" => new DirectQuery(id, DirectQueryKind.RotatorInfo),
-            "focuser_info" => new DirectQuery(id, DirectQueryKind.FocuserInfo),
+                Index: RequiredUInt32(payload, "index"),
+                ExpiresAt: expiresAt),
+            "last_autofocus" => new DirectQuery(id, DirectQueryKind.LastAutofocus, ExpiresAt: expiresAt),
+            "mount_info" => new DirectQuery(id, DirectQueryKind.MountInfo, ExpiresAt: expiresAt),
+            "filterwheel_info" => new DirectQuery(id, DirectQueryKind.FilterwheelInfo, ExpiresAt: expiresAt),
+            "guider_info" => new DirectQuery(id, DirectQueryKind.GuiderInfo, ExpiresAt: expiresAt),
+            "guider_graph" => new DirectQuery(id, DirectQueryKind.GuiderGraph, ExpiresAt: expiresAt),
+            "rotator_info" => new DirectQuery(id, DirectQueryKind.RotatorInfo, ExpiresAt: expiresAt),
+            "focuser_info" => new DirectQuery(id, DirectQueryKind.FocuserInfo, ExpiresAt: expiresAt),
             "command" => new DirectQuery(
                 id,
                 DirectQueryKind.Command,
-                Command: ParseCommand(RequiredObject(payload, "command"))),
+                Command: ParseCommand(RequiredObject(payload, "command")),
+                ExpiresAt: expiresAt),
             _ => throw new DirectProtocolException($"Unsupported Direct query kind '{wireKind}'."),
         };
     }
@@ -80,6 +84,58 @@ internal static class DirectProtocol
                     JsonSerializer.SerializeToElement<object?>(null, JsonOptions),
                     string.IsNullOrWhiteSpace(error) ? "Direct query failed." : error)),
             JsonOptions);
+
+    internal static string SerializePair(string pairingToken, ClientHello hello) =>
+        JsonSerializer.Serialize(
+            new DirectWireMessage<PairRequestPayload>(
+                "pair",
+                new PairRequestPayload(pairingToken, hello)),
+            JsonOptions);
+
+    internal static string SerializeAuth(string credential, ClientHello hello) =>
+        JsonSerializer.Serialize(
+            new DirectWireMessage<AuthRequestPayload>(
+                "auth",
+                new AuthRequestPayload(credential, hello)),
+            JsonOptions);
+
+    internal static string SerializeHeartbeat(ulong sequence) =>
+        JsonSerializer.Serialize(
+            new DirectWireMessage<HeartbeatPayload>(
+                "heartbeat",
+                new HeartbeatPayload(sequence)),
+            JsonOptions);
+
+    internal static HubMessage ParseHubMessage(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+        var type = RequiredString(root, "type");
+        var payload = RequiredObject(root, "payload");
+        return type switch
+        {
+            "agent_hello" => new HubAgentHelloMessage(ParseAgentHello(payload)),
+            "pair_result" => new HubPairResultMessage(
+                RequiredString(payload, "credential"),
+                ParseAgentHello(RequiredObject(payload, "agent_hello"))),
+            "query" => new HubQueryMessage(ParseQuery(json)),
+            "heartbeat_ack" => new HubHeartbeatAckMessage(RequiredUInt64(payload, "seq")),
+            "error" => new HubErrorMessage(
+                RequiredString(payload, "message"),
+                OptionalBoolean(payload, "retryable") ?? false),
+            _ => new HubUnknownMessage(type),
+        };
+    }
+
+    private static AgentHello ParseAgentHello(JsonElement payload)
+    {
+        var rigId = RequiredObject(payload, "rig_id");
+        return new AgentHello(
+            RequiredUInt16(payload, "protocol_version"),
+            RequiredGuid(payload, "connection_id"),
+            RequiredGuid(rigId, "node_id"),
+            RequiredGuid(rigId, "profile_id"));
+    }
 
     private static DirectRigCommand ParseCommand(JsonElement command)
     {
@@ -155,6 +211,50 @@ internal static class DirectProtocol
         return result;
     }
 
+    private static ushort RequiredUInt16(JsonElement parent, string name)
+    {
+        if (!parent.TryGetProperty(name, out var value) || !value.TryGetUInt16(out var result))
+        {
+            throw new DirectProtocolException($"Direct message field '{name}' must be an unsigned 16-bit integer.");
+        }
+        return result;
+    }
+
+    private static ulong RequiredUInt64(JsonElement parent, string name)
+    {
+        if (!parent.TryGetProperty(name, out var value) || !value.TryGetUInt64(out var result))
+        {
+            throw new DirectProtocolException($"Direct message field '{name}' must be an unsigned integer.");
+        }
+        return result;
+    }
+
+    private static long? OptionalInt64(JsonElement parent, string name)
+    {
+        if (!parent.TryGetProperty(name, out var value) || value.ValueKind == JsonValueKind.Null)
+        {
+            return null;
+        }
+        if (!value.TryGetInt64(out var result))
+        {
+            throw new DirectProtocolException($"Direct message field '{name}' must be an integer.");
+        }
+        return result;
+    }
+
+    private static bool? OptionalBoolean(JsonElement parent, string name)
+    {
+        if (!parent.TryGetProperty(name, out var value) || value.ValueKind == JsonValueKind.Null)
+        {
+            return null;
+        }
+        if (value.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+        {
+            throw new DirectProtocolException($"Direct message field '{name}' must be a boolean.");
+        }
+        return value.GetBoolean();
+    }
+
     private static int RequiredInt32(JsonElement parent, string name)
     {
         if (!parent.TryGetProperty(name, out var value) || !value.TryGetInt32(out var result))
@@ -206,7 +306,21 @@ internal sealed record DirectQuery(
     Guid Id,
     DirectQueryKind Kind,
     uint? Index = null,
-    DirectRigCommand? Command = null);
+    DirectRigCommand? Command = null,
+    long? ExpiresAt = null)
+{
+    internal bool IsExpiredAt(long unixTimeSeconds)
+    {
+        if (!ExpiresAt.HasValue)
+        {
+            return false;
+        }
+
+        var deadline = ExpiresAt.Value;
+        return deadline <= long.MaxValue - DirectProtocol.ExpiryClockSkewGraceSeconds
+            && unixTimeSeconds > deadline + DirectProtocol.ExpiryClockSkewGraceSeconds;
+    }
+}
 
 internal enum DirectRigCommandKind
 {
@@ -244,6 +358,37 @@ internal sealed record QueryResultPayload(
     [property: JsonPropertyName("ok")] bool Ok,
     [property: JsonPropertyName("payload")] JsonElement Payload,
     [property: JsonPropertyName("error")] string? Error);
+
+internal sealed record PairRequestPayload(
+    [property: JsonPropertyName("pairing_token")] string PairingToken,
+    [property: JsonPropertyName("hello")] ClientHello Hello);
+
+internal sealed record AuthRequestPayload(
+    [property: JsonPropertyName("credential")] string Credential,
+    [property: JsonPropertyName("hello")] ClientHello Hello);
+
+internal sealed record HeartbeatPayload(
+    [property: JsonPropertyName("seq")] ulong Sequence);
+
+internal sealed record AgentHello(
+    ushort ProtocolVersion,
+    Guid ConnectionId,
+    Guid NodeId,
+    Guid ProfileId);
+
+internal abstract record HubMessage;
+
+internal sealed record HubAgentHelloMessage(AgentHello Hello) : HubMessage;
+
+internal sealed record HubPairResultMessage(string Credential, AgentHello Hello) : HubMessage;
+
+internal sealed record HubQueryMessage(DirectQuery Query) : HubMessage;
+
+internal sealed record HubHeartbeatAckMessage(ulong Sequence) : HubMessage;
+
+internal sealed record HubErrorMessage(string Message, bool Retryable) : HubMessage;
+
+internal sealed record HubUnknownMessage(string Type) : HubMessage;
 
 internal sealed record DirectApiEnvelope<T>(
     [property: JsonPropertyName("Response")] T Response,

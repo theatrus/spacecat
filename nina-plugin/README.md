@@ -27,16 +27,17 @@ decides where chat is owned:
   provide interactive commands as well as notifications.
 - **Matrix:** the local runtime owns a Matrix account without requiring Discord.
 - **Chatstronomy.com:** the plugin connects outbound to the hosted service using
-  an opaque credential reference produced by the hosted sign-in/pairing flow.
+  a one-time pairing code, then reconnects with the durable credential issued by
+  the hub. No local Rust runtime or chat credential is required.
 
 Matrix can run by itself or alongside either local Discord choice. The plugin
 captures the HTTPS homeserver URL, username, password, and default room ID,
 allowing the same local runtime to publish to Discord and Matrix together.
 
-Webhook URLs, Discord bot tokens, and Matrix passwords are stored per N.I.N.A.
-profile in Windows Credential Manager, not in profile JSON. Hosted credentials
-are similarly not serialized by this configuration layer: it stores only the
-reference that the hosted credential flow resolves.
+Webhook URLs, Discord bot tokens, Matrix passwords, hosted pairing codes, and
+hosted rig credentials are stored in Windows Credential Manager, not in profile
+JSON. Hosted secrets are scoped to the N.I.N.A. profile and hub origin so a
+credential is never presented to a different service after its URL changes.
 
 In Direct mode, several N.I.N.A. instances can feed one Chatstronomy bot even when
 they run on different computers. Local plugins use a named pipe; remote plugins
@@ -48,8 +49,10 @@ Direct connection mode remains explicit:
 
 - **Local (default):** no endpoint or pairing setup; the plugin connects to the
   bundled on-machine Chatstronomy runtime and the user owns the local chat keys.
-- **Remote:** the plugin uses its hosted credential and opens an outbound
-  connection to Chatstronomy.com. The hosted service owns chat credentials.
+- **Remote:** select the hosted delivery option, enter the hub's HTTPS origin or
+  WSS endpoint and paste a one-time pairing code. The plugin exchanges it once,
+  saves the node-bound credential securely, and maintains an outbound WSS
+  connection. The hosted service owns chat credentials.
 
 Remote mode never silently falls back to Local, preventing duplicate
 notifications or an unexpected second bot.
@@ -122,6 +125,12 @@ source/delivery configuration, Windows-protected local secret storage, supervise
 process controller, secure bootstrap and Direct data pipes, bounded native event,
 image, thumbnail, and guider histories, live equipment snapshots, the bundled
 runtime, sequence normalization, native autofocus result details, the complete
-typed Chatstronomy command surface, shared chart rendering, and the multi-system
-identity handshake. The plugin's remote WebSocket client and hosted credential
-acquisition remain follow-up stages.
+typed Chatstronomy command surface, shared chart rendering, the multi-system
+identity handshake, and the hosted WebSocket client with pairing, secure
+credential persistence, heartbeat, reconnect, command-expiry enforcement, and
+profile-aware lifecycle handling.
+
+The test harness includes a cross-process hosted probe. With
+`CHATSTRONOMY_HUB_EXE` set to a hub-enabled Chatstronomy executable, it starts the
+real Rust hub, pairs the C# client, requests native guider and autofocus payloads
+through `DirectRigSource`, and renders both responses to PNG.

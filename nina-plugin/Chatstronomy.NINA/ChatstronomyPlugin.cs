@@ -14,6 +14,7 @@ using NINA.WPF.Base.Interfaces.ViewModel;
 using Chatstronomy.NINA.Configuration;
 using Chatstronomy.NINA.Direct;
 using Chatstronomy.NINA.Protocol;
+using Chatstronomy.NINA.Remote;
 using Chatstronomy.NINA.Runtime;
 using Chatstronomy.NINA.Settings;
 using Chatstronomy.NINA.UI;
@@ -35,11 +36,16 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
     private readonly ChatstronomySettings settings;
     private readonly IChatstronomyRuntimeController runtimeController;
     private readonly INinaDirectDataProvider directDataProvider;
+    private readonly ChatstronomyHubClient hubClient;
     private readonly AsyncCommand startRuntimeCommand;
     private readonly AsyncCommand stopRuntimeCommand;
+    private readonly AsyncCommand connectHostedCommand;
+    private readonly AsyncCommand disconnectHostedCommand;
+    private readonly AsyncCommand forgetHostedCredentialCommand;
+    private readonly SemaphoreSlim lifecycleGate = new(1, 1);
     private readonly Guid nodeId = NodeIdentityStore.LoadOrCreate();
     private readonly Guid sessionId = Guid.NewGuid();
-    private DirectConnectionSettings connectionSettings = DirectConnectionSettings.Local;
+    private bool initialized;
 
     [ImportingConstructor]
     public ChatstronomyPlugin(
@@ -74,12 +80,22 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
             imageHistory,
             windowFactory);
         runtimeController = new ChatstronomyRuntimeController(directDataProvider);
+        hubClient = new ChatstronomyHubClient(directDataProvider);
         startRuntimeCommand = new AsyncCommand(
             RestartLocalRuntimeAsync,
             () => UsesLocalRuntime && IsConfigurationValid);
         stopRuntimeCommand = new AsyncCommand(
             StopLocalRuntimeAsync,
             () => runtimeController.IsRunning);
+        connectHostedCommand = new AsyncCommand(
+            RestartHostedConnectionAsync,
+            () => UseHostedService && IsConfigurationValid);
+        disconnectHostedCommand = new AsyncCommand(
+            StopHostedConnectionAsync,
+            () => hubClient.IsRunning);
+        forgetHostedCredentialCommand = new AsyncCommand(
+            ForgetHostedCredentialAsync,
+            () => UseHostedService && HasHostedCredential());
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -239,30 +255,66 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
         {
             settings.HostedServiceUrl = value;
             RaisePropertyChanged();
+            RaisePropertyChanged(nameof(HostedCredentialStatus));
             RefreshStatus();
+            if (initialized && UseHostedService && hubClient.IsRunning)
+            {
+                _ = StopHostedAfterServiceChangeAsync();
+            }
         }
     }
 
-    /// <summary>
-    /// Written by the hosted credential flow. It is deliberately opaque here;
-    /// this plugin configuration never serializes the hosted secret itself.
-    /// </summary>
-    public string HostedCredentialReference
+    public string HostedPairingToken
     {
-        get => settings.HostedCredentialReference;
+        get
+        {
+            try
+            {
+                var serviceUrl = ChatstronomyConfigurationValidator.RequireHostedUrl(
+                    HostedServiceUrl);
+                return settings.ReadHostedPairingToken(
+                    profileService.ActiveProfile.Id,
+                    serviceUrl);
+            }
+            catch (InvalidOperationException)
+            {
+                return string.Empty;
+            }
+        }
         set
         {
-            settings.HostedCredentialReference = value;
+            var serviceUrl = ChatstronomyConfigurationValidator.RequireHostedUrl(
+                HostedServiceUrl);
+            settings.WriteHostedPairingToken(
+                profileService.ActiveProfile.Id,
+                serviceUrl,
+                value);
             RaisePropertyChanged();
             RaisePropertyChanged(nameof(HostedCredentialStatus));
             RefreshStatus();
         }
     }
 
-    public string HostedCredentialStatus =>
-        string.IsNullOrWhiteSpace(HostedCredentialReference)
-            ? "Not connected. Complete the Chatstronomy.com sign-in or pairing flow."
-            : "A hosted credential is available for this N.I.N.A. profile.";
+    public string HostedCredentialStatus
+    {
+        get
+        {
+            if (!string.IsNullOrWhiteSpace(HostedPairingToken))
+            {
+                return "A one-time pairing code is ready. Choose Pair / reconnect.";
+            }
+            try
+            {
+                return HasHostedCredential()
+                    ? "A secure hub credential is stored for this profile and service."
+                    : "Not paired. Paste the one-time code from the Chatstronomy hub.";
+            }
+            catch (InvalidOperationException exception)
+            {
+                return exception.Message;
+            }
+        }
+    }
 
     public string LocalRuntimePath
     {
@@ -353,6 +405,12 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
 
     public ICommand StopRuntimeCommand => stopRuntimeCommand;
 
+    public ICommand ConnectHostedCommand => connectHostedCommand;
+
+    public ICommand DisconnectHostedCommand => disconnectHostedCommand;
+
+    public ICommand ForgetHostedCredentialCommand => forgetHostedCredentialCommand;
+
     public bool IsConfigurationValid
     {
         get
@@ -377,7 +435,7 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
             {
                 _ = BuildConfiguration();
                 return UseHostedService
-                    ? "Ready to connect to Chatstronomy.com."
+                    ? hubClient.StatusMessage
                     : runtimeController.IsRunning
                         ? runtimeController.StatusMessage
                         : StartLocalRuntime
@@ -396,24 +454,39 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
         directDataProvider.Start();
         profileService.ProfileChanged += ProfileServiceProfileChanged;
         runtimeController.StateChanged += RuntimeControllerStateChanged;
+        hubClient.StateChanged += HubClientStateChanged;
+        hubClient.CredentialIssued += HubClientCredentialIssued;
         await base.Initialize();
-        await StartConfiguredRuntimeAsync(CancellationToken.None);
+        initialized = true;
+        await StartConfiguredModeAsync(CancellationToken.None);
     }
 
     public override async Task Teardown()
     {
         profileService.ProfileChanged -= ProfileServiceProfileChanged;
         runtimeController.StateChanged -= RuntimeControllerStateChanged;
-        if (runtimeController.IsRunning)
+        hubClient.StateChanged -= HubClientStateChanged;
+        hubClient.CredentialIssued -= HubClientCredentialIssued;
+        initialized = false;
+        await lifecycleGate.WaitAsync(CancellationToken.None);
+        try
         {
-            if (StopLocalRuntimeWithNina)
+            await hubClient.StopAsync(CancellationToken.None);
+            if (runtimeController.IsRunning)
             {
-                await runtimeController.StopAsync(CancellationToken.None);
+                if (StopLocalRuntimeWithNina)
+                {
+                    await runtimeController.StopAsync(CancellationToken.None);
+                }
+                else
+                {
+                    await runtimeController.DetachAsync(CancellationToken.None);
+                }
             }
-            else
-            {
-                await runtimeController.DetachAsync(CancellationToken.None);
-            }
+        }
+        finally
+        {
+            lifecycleGate.Release();
         }
         directDataProvider.Stop();
         await base.Teardown();
@@ -436,10 +509,7 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
                     DiscordChannelId,
                     "Default Discord channel ID")),
             ChatDeliveryMode.HostedService => new HostedDeliveryConfiguration(
-                ChatstronomyConfigurationValidator.RequireHostedUrl(HostedServiceUrl),
-                ChatstronomyConfigurationValidator.RequireSecret(
-                    HostedCredentialReference,
-                    "Hosted credential")),
+                BuildHostedConnectionConfiguration().ServiceUrl),
             ChatDeliveryMode.MatrixOnly => null,
             _ => throw new InvalidOperationException("Unknown Chatstronomy delivery mode."),
         };
@@ -470,14 +540,17 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
         return new ChatstronomyConfiguration(delivery, matrix, localRuntime);
     }
 
-    internal DirectConnectionSettings ConnectionSettings
+    internal HubConnectionConfiguration BuildHostedConnectionConfiguration()
     {
-        get => connectionSettings;
-        set
-        {
-            value.Validate();
-            connectionSettings = value;
-        }
+        var serviceUrl = ChatstronomyConfigurationValidator.RequireHostedUrl(HostedServiceUrl);
+        var profileId = profileService.ActiveProfile.Id;
+        var configuration = new HubConnectionConfiguration(
+            serviceUrl,
+            settings.ReadHostedCredential(profileId, serviceUrl),
+            settings.ReadHostedPairingToken(profileId, serviceUrl),
+            profileId);
+        configuration.Validate();
+        return configuration;
     }
 
     /// <summary>
@@ -523,42 +596,42 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
 
         settings.DeliveryMode = mode;
         RefreshAllProperties();
+        if (initialized)
+        {
+            _ = StartConfiguredModeAsync(CancellationToken.None);
+        }
     }
 
     private async void ProfileServiceProfileChanged(object? sender, EventArgs args)
     {
+        await lifecycleGate.WaitAsync(CancellationToken.None);
         try
         {
+            await hubClient.StopAsync(CancellationToken.None);
             if (runtimeController.IsRunning)
             {
                 await runtimeController.StopAsync(CancellationToken.None);
             }
             directDataProvider.Reset();
             RefreshAllProperties();
-            await StartConfiguredRuntimeAsync(CancellationToken.None);
+            await StartConfiguredModeCoreAsync(CancellationToken.None);
         }
         catch
         {
             RefreshStatus();
         }
+        finally
+        {
+            lifecycleGate.Release();
+        }
     }
 
-    private async Task StartConfiguredRuntimeAsync(CancellationToken cancellationToken)
+    private async Task StartConfiguredModeAsync(CancellationToken cancellationToken)
     {
-        if (!UsesLocalRuntime || !StartLocalRuntime)
-        {
-            RefreshStatus();
-            return;
-        }
-
+        await lifecycleGate.WaitAsync(cancellationToken);
         try
         {
-            var configuration = BuildConfiguration();
-            var profile = profileService.ActiveProfile;
-            await runtimeController.StartAsync(
-                configuration,
-                new LocalRuntimeIdentity(nodeId, profile.Id, profile.Name),
-                cancellationToken);
+            await StartConfiguredModeCoreAsync(cancellationToken);
         }
         catch (InvalidOperationException)
         {
@@ -567,37 +640,79 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
         }
         catch
         {
-            // Runtime controller failures are retained in StatusMessage and
-            // surfaced through ConfigurationStatus without failing N.I.N.A.
+            // Runtime and hub clients retain their user-facing failure state.
         }
-        RefreshStatus();
+        finally
+        {
+            lifecycleGate.Release();
+            RefreshStatus();
+        }
     }
+
+    private async Task StartConfiguredModeCoreAsync(CancellationToken cancellationToken)
+    {
+        if (UseHostedService)
+        {
+            if (runtimeController.IsRunning)
+            {
+                await runtimeController.StopAsync(cancellationToken);
+            }
+            await StartHostedCoreAsync(cancellationToken);
+            return;
+        }
+
+        await hubClient.StopAsync(cancellationToken);
+        if (runtimeController.IsRunning)
+        {
+            await runtimeController.StopAsync(cancellationToken);
+        }
+        if (StartLocalRuntime)
+        {
+            await StartLocalRuntimeCoreAsync(cancellationToken);
+        }
+    }
+
+    private async Task StartLocalRuntimeCoreAsync(CancellationToken cancellationToken)
+    {
+        var configuration = BuildConfiguration();
+        var profile = profileService.ActiveProfile;
+        await runtimeController.StartAsync(
+            configuration,
+            new LocalRuntimeIdentity(nodeId, profile.Id, profile.Name),
+            cancellationToken);
+    }
+
+    private Task StartHostedCoreAsync(CancellationToken cancellationToken) =>
+        hubClient.StartAsync(
+            BuildHostedConnectionConfiguration(),
+            CreateClientHello(),
+            cancellationToken);
 
     private async Task RestartLocalRuntimeAsync()
     {
-        if (runtimeController.IsRunning)
-        {
-            await runtimeController.StopAsync(CancellationToken.None);
-        }
-
+        await lifecycleGate.WaitAsync(CancellationToken.None);
         try
         {
-            var configuration = BuildConfiguration();
-            var profile = profileService.ActiveProfile;
-            await runtimeController.StartAsync(
-                configuration,
-                new LocalRuntimeIdentity(nodeId, profile.Id, profile.Name),
-                CancellationToken.None);
+            if (runtimeController.IsRunning)
+            {
+                await runtimeController.StopAsync(CancellationToken.None);
+            }
+            await StartLocalRuntimeCoreAsync(CancellationToken.None);
         }
         catch
         {
             // RuntimeController retains a user-facing status message.
         }
-        RefreshStatus();
+        finally
+        {
+            lifecycleGate.Release();
+            RefreshStatus();
+        }
     }
 
     private async Task StopLocalRuntimeAsync()
     {
+        await lifecycleGate.WaitAsync(CancellationToken.None);
         try
         {
             await runtimeController.StopAsync(CancellationToken.None);
@@ -607,7 +722,77 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
             // RuntimeController retains a user-facing status message when the
             // controlled process cannot be stopped cleanly.
         }
-        RefreshStatus();
+        finally
+        {
+            lifecycleGate.Release();
+            RefreshStatus();
+        }
+    }
+
+    private async Task RestartHostedConnectionAsync()
+    {
+        await lifecycleGate.WaitAsync(CancellationToken.None);
+        try
+        {
+            await hubClient.StopAsync(CancellationToken.None);
+            await StartHostedCoreAsync(CancellationToken.None);
+        }
+        catch
+        {
+            // The validation or hub status is displayed in ConfigurationStatus.
+        }
+        finally
+        {
+            lifecycleGate.Release();
+            RefreshStatus();
+        }
+    }
+
+    private async Task StopHostedConnectionAsync()
+    {
+        await lifecycleGate.WaitAsync(CancellationToken.None);
+        try
+        {
+            await hubClient.StopAsync(CancellationToken.None);
+        }
+        finally
+        {
+            lifecycleGate.Release();
+            RefreshStatus();
+        }
+    }
+
+    private async Task StopHostedAfterServiceChangeAsync()
+    {
+        try
+        {
+            await StopHostedConnectionAsync();
+        }
+        catch
+        {
+            RefreshStatus();
+        }
+    }
+
+    private async Task ForgetHostedCredentialAsync()
+    {
+        await lifecycleGate.WaitAsync(CancellationToken.None);
+        try
+        {
+            await hubClient.StopAsync(CancellationToken.None);
+            var serviceUrl = ChatstronomyConfigurationValidator.RequireHostedUrl(
+                HostedServiceUrl);
+            settings.WriteHostedCredential(
+                profileService.ActiveProfile.Id,
+                serviceUrl,
+                credential: null);
+        }
+        finally
+        {
+            lifecycleGate.Release();
+            RaisePropertyChanged(nameof(HostedCredentialStatus));
+            RefreshStatus();
+        }
     }
 
     private void RuntimeControllerStateChanged(object? sender, EventArgs args)
@@ -619,6 +804,52 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
             return;
         }
         RefreshStatus();
+    }
+
+    private void HubClientStateChanged(object? sender, EventArgs args) =>
+        DispatchRefreshStatus();
+
+    private void HubClientCredentialIssued(
+        object? sender,
+        HubCredentialIssuedEventArgs args)
+    {
+        settings.WriteHostedCredential(args.ProfileId, args.ServiceUrl, args.Credential);
+        settings.WriteHostedPairingToken(
+            args.ProfileId,
+            args.ServiceUrl,
+            pairingToken: null);
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher is not null && !dispatcher.CheckAccess())
+        {
+            dispatcher.BeginInvoke(new Action(() =>
+            {
+                RaisePropertyChanged(nameof(HostedPairingToken));
+                RaisePropertyChanged(nameof(HostedCredentialStatus));
+                RefreshStatus();
+            }));
+            return;
+        }
+        RaisePropertyChanged(nameof(HostedPairingToken));
+        RaisePropertyChanged(nameof(HostedCredentialStatus));
+        RefreshStatus();
+    }
+
+    private void DispatchRefreshStatus()
+    {
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher is not null && !dispatcher.CheckAccess())
+        {
+            dispatcher.BeginInvoke(new Action(RefreshStatus));
+            return;
+        }
+        RefreshStatus();
+    }
+
+    private bool HasHostedCredential()
+    {
+        var serviceUrl = ChatstronomyConfigurationValidator.RequireHostedUrl(HostedServiceUrl);
+        return !string.IsNullOrWhiteSpace(
+            settings.ReadHostedCredential(profileService.ActiveProfile.Id, serviceUrl));
     }
 
     private void RefreshAllProperties()
@@ -641,7 +872,7 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
             nameof(MatrixPassword),
             nameof(MatrixRoomId),
             nameof(HostedServiceUrl),
-            nameof(HostedCredentialReference),
+            nameof(HostedPairingToken),
             nameof(HostedCredentialStatus),
             nameof(LocalRuntimePath),
             nameof(UseDirectSource),
@@ -664,6 +895,9 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
         RaisePropertyChanged(nameof(ConfigurationStatus));
         startRuntimeCommand.RaiseCanExecuteChanged();
         stopRuntimeCommand.RaiseCanExecuteChanged();
+        connectHostedCommand.RaiseCanExecuteChanged();
+        disconnectHostedCommand.RaiseCanExecuteChanged();
+        forgetHostedCredentialCommand.RaiseCanExecuteChanged();
     }
 
     private void RaisePropertyChanged([CallerMemberName] string? propertyName = null) =>

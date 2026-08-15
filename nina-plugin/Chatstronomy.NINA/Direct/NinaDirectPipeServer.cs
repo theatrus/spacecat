@@ -86,17 +86,26 @@ internal sealed class NinaDirectPipeServer : IDisposable
 
                 var query = DirectProtocol.ParseQuery(line);
                 string response;
-                try
+                if (query.IsExpiredAt(DateTimeOffset.UtcNow.ToUnixTimeSeconds()))
                 {
-                    var payload = await provider.ExecuteAsync(query, cancellationToken)
-                        .ConfigureAwait(false);
-                    response = DirectProtocol.SerializeSuccess(query.Id, payload);
+                    response = DirectProtocol.SerializeFailure(
+                        query.Id,
+                        "query expired before execution");
                 }
-                catch (Exception exception) when (
-                    exception is not OperationCanceledException
-                    || !cancellationToken.IsCancellationRequested)
+                else
                 {
-                    response = DirectProtocol.SerializeFailure(query.Id, exception.Message);
+                    try
+                    {
+                        var payload = await provider.ExecuteAsync(query, cancellationToken)
+                            .ConfigureAwait(false);
+                        response = DirectProtocol.SerializeSuccess(query.Id, payload);
+                    }
+                    catch (Exception exception) when (
+                        exception is not OperationCanceledException
+                        || !cancellationToken.IsCancellationRequested)
+                    {
+                        response = DirectProtocol.SerializeFailure(query.Id, exception.Message);
+                    }
                 }
 
                 await writer.WriteLineAsync(response.AsMemory(), cancellationToken)

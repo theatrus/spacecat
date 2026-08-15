@@ -1,5 +1,7 @@
 using System.IO;
 using System.Reflection;
+using System.Security.Cryptography;
+using System.Text;
 using NINA.Plugin;
 using NINA.Profile;
 using NINA.Profile.Interfaces;
@@ -95,17 +97,48 @@ internal sealed class ChatstronomySettings
         set => options.SetValueString(nameof(HostedServiceUrl), value?.Trim() ?? string.Empty);
     }
 
-    /// <summary>
-    /// An opaque reference issued by the hosted credential flow. The actual
-    /// credential is resolved by that flow and is never stored in profile JSON.
-    /// </summary>
-    public string HostedCredentialReference
+    public string ReadHostedCredential(Guid profileId, Uri serviceUrl)
     {
-        get => options.GetValueString(nameof(HostedCredentialReference), string.Empty);
-        set => options.SetValueString(
-            nameof(HostedCredentialReference),
-            value?.Trim() ?? string.Empty);
+        var target = HostedCredentialTarget(profileId, serviceUrl);
+        var credential = WindowsCredentialStore.Read(target);
+        if (!string.IsNullOrWhiteSpace(credential))
+        {
+            return credential;
+        }
+
+        // Early development builds called this an opaque reference. If one
+        // actually contains a hub credential, migrate it out of profile JSON.
+        var legacy = options.GetValueString("HostedCredentialReference", string.Empty);
+        if (profileId == profileService.ActiveProfile.Id
+            && legacy.StartsWith("csrc_", StringComparison.Ordinal))
+        {
+            WindowsCredentialStore.Write(target, legacy);
+            options.SetValueString("HostedCredentialReference", string.Empty);
+            return legacy;
+        }
+
+        return string.Empty;
     }
+
+    public void WriteHostedCredential(Guid profileId, Uri serviceUrl, string? credential) =>
+        WindowsCredentialStore.Write(
+            HostedCredentialTarget(profileId, serviceUrl),
+            credential?.Trim());
+
+    public string ReadHostedPairingToken(Guid profileId, Uri serviceUrl) =>
+        WindowsCredentialStore.Read(HostedSecretTarget(
+            profileId,
+            serviceUrl,
+            "hosted-pairing-token"))
+        ?? string.Empty;
+
+    public void WriteHostedPairingToken(
+        Guid profileId,
+        Uri serviceUrl,
+        string? pairingToken) =>
+        WindowsCredentialStore.Write(
+            HostedSecretTarget(profileId, serviceUrl, "hosted-pairing-token"),
+            pairingToken?.Trim());
 
     public string LocalRuntimePath
     {
@@ -152,7 +185,25 @@ internal sealed class ChatstronomySettings
     }
 
     private string CredentialTarget(string kind) =>
-        $"{CredentialPrefix}/{profileService.ActiveProfile.Id:D}/{kind}";
+        CredentialTarget(profileService.ActiveProfile.Id, kind);
+
+    private static string CredentialTarget(Guid profileId, string kind) =>
+        $"{CredentialPrefix}/{profileId:D}/{kind}";
+
+    private static string HostedCredentialTarget(Guid profileId, Uri serviceUrl)
+        => HostedSecretTarget(profileId, serviceUrl, "hosted-rig-credential");
+
+    internal static string HostedSecretTarget(
+        Guid profileId,
+        Uri serviceUrl,
+        string kind)
+    {
+        var effectivePort = serviceUrl.IsDefaultPort ? 443 : serviceUrl.Port;
+        var origin = $"{serviceUrl.IdnHost.ToLowerInvariant()}:{effectivePort}";
+        var digest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(origin)))
+            .ToLowerInvariant();
+        return CredentialTarget(profileId, $"{kind}/{digest}");
+    }
 
     private static string DefaultRuntimePath()
     {

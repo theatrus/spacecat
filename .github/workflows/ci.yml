@@ -117,13 +117,18 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Build bundled plugin runtime
-        run: cargo build --release --no-default-features
+      - name: Build hosted probe and bundled plugin runtimes
+        shell: pwsh
+        run: |
+          cargo build --release
+          Copy-Item target/release/chatstronomy.exe target/release/chatstronomy-hub-probe.exe
+          cargo build --release --no-default-features
 
       - name: Test plugin configuration
         shell: pwsh
         run: |
           $env:CHATSTRONOMY_RUNTIME_EXE = "$PWD/target/release/chatstronomy.exe"
+          $env:CHATSTRONOMY_HUB_EXE = "$PWD/target/release/chatstronomy-hub-probe.exe"
           dotnet run --project nina-plugin/Chatstronomy.NINA.Tests/Chatstronomy.NINA.Tests.csproj --configuration Release
 
       - name: Build and package plugin

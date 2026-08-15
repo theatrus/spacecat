@@ -286,6 +286,9 @@ fn authenticate(
             if row.node_id != hello.node_id.to_string() {
                 return Err("credential is bound to a different node".to_string());
             }
+            if row.profile_id != hello.profile_id.to_string() {
+                return Err("credential is bound to a different N.I.N.A. profile".to_string());
+            }
             let response = DirectMessage::AgentHello(agent_hello(hello));
             Ok((row.telescope_id, hello.clone(), response, None))
         }
@@ -658,7 +661,22 @@ mod tests {
         assert!(ok, "credential reconnect never became queryable");
         second.abort();
 
-        // A credential bound to another node is rejected.
+        // The durable credential is bound to both halves of the rig ID.
+        let mut wrong_profile = RelayState::load_or_create(&state_path).unwrap();
+        wrong_profile.profile_id = Uuid::new_v4();
+        let result =
+            run_connection(&relay, &telescope, &api, &mut wrong_profile, &state_path).await;
+        assert!(
+            matches!(result, Err(crate::relay::RelayError::Rejected(message)) if message.contains("profile"))
+        );
+
+        let mut wrong_node = RelayState::load_or_create(&state_path).unwrap();
+        wrong_node.node_id = Uuid::new_v4();
+        let result = run_connection(&relay, &telescope, &api, &mut wrong_node, &state_path).await;
+        assert!(
+            matches!(result, Err(crate::relay::RelayError::Rejected(message)) if message.contains("node"))
+        );
+
         let credential_row = db
             .with_conn(|conn| {
                 conn.query_row("SELECT credential_hash FROM rig_credentials", [], |r| {

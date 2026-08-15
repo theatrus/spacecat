@@ -77,6 +77,23 @@ poise commands and `ChatUpdater` consume the source unchanged. Relay agents
 push the same envelopes from Advanced API polling instead of native N.I.N.A.
 mediators.
 
+### N.I.N.A. plugin client
+
+Hosted delivery is implemented directly in the N.I.N.A. plugin. The user pastes
+the hub's HTTPS origin (or WSS Direct endpoint) and a one-time telescope pairing
+code. The plugin connects only over TLS in production, exchanges the code for a
+node-bound credential, stores both secrets in Windows Credential Manager scoped
+to the profile and hub origin, and clears the code after a successful exchange.
+
+After authentication, every hub query is answered by the same native provider
+used by local Direct mode, including thumbnails, autofocus details, guider graph
+data, equipment snapshots, sequence state, and the typed command allowlist.
+Commands that arrive after their expiry plus the protocol's clock-skew grace are
+rejected before reaching N.I.N.A. The connection sends heartbeats, reconnects
+with bounded exponential backoff after transient failures, and stops for fatal
+authentication errors so the N.I.N.A. options page can direct the user to repair
+or forget the credential.
+
 ## Schema sketch
 
 ```

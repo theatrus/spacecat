@@ -14,9 +14,7 @@ internal sealed record DiscordBotDeliveryConfiguration(
     ulong DefaultChannelId)
     : ChatDeliveryConfiguration;
 
-internal sealed record HostedDeliveryConfiguration(
-    Uri ServiceUrl,
-    string CredentialReference)
+internal sealed record HostedDeliveryConfiguration(Uri ServiceUrl)
     : ChatDeliveryConfiguration;
 
 internal sealed record MatrixDeliveryConfiguration(
@@ -95,10 +93,15 @@ internal static class ChatstronomyConfigurationValidator
     public static Uri RequireHostedUrl(string value)
     {
         if (!Uri.TryCreate(value, UriKind.Absolute, out var uri)
-            || uri.Scheme != Uri.UriSchemeHttps)
+            || (uri.Scheme != Uri.UriSchemeHttps
+                && !uri.Scheme.Equals("wss", StringComparison.OrdinalIgnoreCase))
+            || string.IsNullOrWhiteSpace(uri.Host)
+            || !string.IsNullOrEmpty(uri.UserInfo)
+            || !string.IsNullOrEmpty(uri.Query)
+            || !string.IsNullOrEmpty(uri.Fragment))
         {
             throw new InvalidOperationException(
-                "Chatstronomy service URL must be an absolute https:// URL.");
+                "Chatstronomy service URL must be an absolute HTTPS or WSS URL without credentials, a query, or a fragment.");
         }
 
         return uri;

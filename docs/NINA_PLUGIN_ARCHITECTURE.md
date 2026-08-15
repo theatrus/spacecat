@@ -56,10 +56,10 @@ file is created. If the user elects to leave the runtime running after N.I.N.A.
 exits, the process redirects output to its profile log and detaches from the
 control pipe safely.
 
-The hosted options store the HTTPS service URL and an opaque credential reference.
-Credential acquisition, refresh, revocation, and secret resolution belong to the
-hosted credential flow and are intentionally outside the delivery configuration
-model.
+The hosted options accept an HTTPS service origin (or its WSS Direct endpoint)
+and a one-time pairing code. Pairing codes and durable rig credentials live in
+Windows Credential Manager and are scoped to the N.I.N.A. profile plus hub
+origin; neither is serialized into the delivery configuration or profile JSON.
 
 ## Components
 
@@ -126,8 +126,9 @@ The plugin is intentionally limited to the native source boundary. It will:
 6. Connect to Chatstronomy over a Windows named pipe when local or an outbound TLS
    WebSocket when Chatstronomy runs on another system.
 
-It will not contain Discord, Matrix, notification formatting, chart rendering,
-or hosted-service logic.
+It does not contain Discord, Matrix, notification formatting, chart rendering,
+OAuth, tenant routing, or other hosted application logic. Its hosted role is the
+authenticated Direct transport and secure local credential persistence.
 
 ### Chatstronomy runtime and hub (Rust)
 
@@ -148,8 +149,8 @@ independently for Advanced API and non-Windows deployments.
 
 ### Hosted Chatstronomy service
 
-The hosted service owns the central Discord/Matrix credentials, tenant routing,
-and connected-plugin registry. Read requests use a freshness-stamped cached
+The hosted service owns the central chat credentials, tenant routing, and
+connected-plugin registry. Read requests use a freshness-stamped cached
 snapshot or make a bounded round trip to the relevant plugin. Write commands
 are never queued for an offline rig.
 
@@ -186,15 +187,18 @@ N.I.N.A. exits.
 
 Remote connects one or more imaging computers to a central Chatstronomy hub:
 
-1. Select **Connection mode: Remote**.
-2. Enter the hub's `wss://` URL and a one-time pairing code.
-3. The plugin stores only the resulting node-bound credential and opens an
-   outbound WebSocket to the hub.
+1. Select **Chatstronomy.com — hosted bot**.
+2. Enter the hub's HTTPS origin or `wss://` Direct URL and a one-time pairing
+   code issued by its telescope page.
+3. Choose **Pair / reconnect**. The plugin exchanges the code, clears it after
+   success, stores the resulting node-bound credential in Windows Credential
+   Manager, and opens an outbound WebSocket to the hub.
 
-The central hub owns the Discord/Matrix credentials and bot connections. The
-imaging computers do not run a local bot, accept inbound connections, or expose
-Advanced API. Losing the remote connection produces a visible offline state;
-it does not start a second local bot.
+The central hub owns its configured chat credentials and bot connections (the
+current hosted implementation is Discord; local mode continues to support
+Matrix). The imaging computers do not run a local bot, accept inbound
+connections, or expose Advanced API. Losing the remote connection produces a
+visible offline state; it does not start a second local bot.
 
 ## Multiple N.I.N.A. instances
 
@@ -210,12 +214,12 @@ The stable rig key is `(node_id, profile_id)`. This supports both multiple
 profiles on one computer and profiles on entirely different computers. A
 profile name is display metadata and can change without changing routing.
 
-One profile may have only one active session. Chatstronomy rejects a second active
-process claiming the same rig, but permits the original session to reconnect
-and atomically replaces its stale transport. If N.I.N.A. switches profiles on a
-live connection, the registry moves that connection only after confirming the
-new profile is not already active. A transport disconnect or missed-heartbeat
-lease expiry releases the profile so a restarted N.I.N.A. process can register.
+One telescope may have only one active session. A newer authenticated session
+atomically replaces the older transport. If N.I.N.A. switches profiles, the
+plugin closes the old session, resets native histories, loads the new profile's
+origin-scoped credential, and connects with a fresh hello. Disconnects are
+retried with bounded exponential backoff; fatal authentication errors stop and
+remain visible in N.I.N.A. until the user repairs or forgets the credential.
 
 For example, all of these feed one bot process:
 
@@ -267,9 +271,10 @@ implementations can be inspected and evolved easily.
 4. Complete sequence, autofocus-result, native command, and chart-rendering
    parity for the current Chatstronomy `RigSource` surface.
 5. Extend the working local named-pipe transport with the remote plugin WebSocket
-   client and hosted settings.
+   client and hosted settings. *(complete)*
 6. Validate full feature parity against supported N.I.N.A. versions and real
    hardware/profile combinations.
-7. Add pairing, node-bound credentials, and relay hardening.
+7. Add pairing, node-bound credentials, command expiry, heartbeat, and reconnect
+   hardening. *(complete)*
 8. Package the plugin DLL and optional Windows runtime into a checksummed
    N.I.N.A. plugin ZIP.
