@@ -136,7 +136,7 @@ $manifest = [ordered]@{
         Build = '9001'
     }
     Descriptions = [ordered]@{
-        ShortDescription = 'Bridge N.I.N.A. with Discord and Matrix chat through Chatstronomy.'
+        ShortDescription = 'Bridge NINA with Discord and Matrix, supporting bot slash commands for control'
         LongDescription = 'Routes N.I.N.A. status, events, images, and approved commands through Discord and Matrix chat. Includes a supervised on-machine runtime with Advanced API polling, plus multi-system Remote and native Direct integration paths.'
         FeaturedImageURL = $FeaturedImageUrl
         ScreenshotURL = ''
