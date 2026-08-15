@@ -47,11 +47,16 @@ libsqlite3-sys = { version = "0", features = ["bundled"] }
 # Hub service (feature = "hub"). rusqlite is pinned to the same line
 # matrix-sdk resolves (rusqlite 0.37 -> libsqlite3-sys 0.35) so only one
 # native sqlite3 links entry exists in the graph.
-axum = { version = "0.8", optional = true }
+axum = { version = "0.8", features = ["ws"], optional = true }
 rusqlite = { version = "0.37", optional = true }
 hmac = { version = "0.12", optional = true }
 sha2 = { version = "0.10", optional = true }
 subtle = { version = "2", optional = true }
+# Relay client (rig side): outbound WebSocket to a Chatstronomy hub. Pinned to
+# the same tokio-tungstenite line serenity 0.12 uses so only one tungstenite
+# stack is in the graph.
+tokio-tungstenite = { version = "0.21", features = ["rustls-tls-webpki-roots"] }
+futures-util = "0.3"
 
 # Windows service dependencies (Windows only)
 [target.'cfg(windows)'.dependencies]

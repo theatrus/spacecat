@@ -11,11 +11,29 @@ pub struct ImageResponse {
     pub response_type: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThumbnailResponse {
-    pub data: Vec<u8>, // Raw JPG image data
+    /// Raw JPG image data. Base64 on the wire so Direct-protocol frames
+    /// stay compact.
+    #[serde(with = "thumbnail_base64")]
+    pub data: Vec<u8>,
     pub content_type: String,
     pub status_code: u16,
+}
+
+mod thumbnail_base64 {
+    use base64::Engine;
+    use base64::engine::general_purpose::STANDARD;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(data: &[u8], serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&STANDARD.encode(data))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<u8>, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        STANDARD.decode(&text).map_err(serde::de::Error::custom)
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]

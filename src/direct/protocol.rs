@@ -62,13 +62,97 @@ pub struct AgentHello {
     pub rig_id: RigId,
 }
 
-/// Initial set of Direct messages. Snapshot, event, query, and command payloads
-/// will be added without changing the identity handshake.
+/// First frame from a client that holds no credential yet: a one-time
+/// pairing token minted on the hub web app plus the client's identity.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PairRequest {
+    pub pairing_token: String,
+    pub hello: ClientHello,
+}
+
+/// Successful pairing: the durable rig credential the client must store and
+/// present on every later connection. This is the only time it is sent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PairResult {
+    pub credential: String,
+    pub agent_hello: AgentHello,
+}
+
+/// First frame from a client that already holds a rig credential.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuthRequest {
+    pub credential: String,
+    pub hello: ClientHello,
+}
+
+/// A read or command the hub asks the connected rig to perform. The rig
+/// answers with a [`QueryResult`] carrying the same `id`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QueryRequest {
+    pub id: Uuid,
+    #[serde(flatten)]
+    pub kind: QueryKind,
+}
+
+/// The operations a rig can be asked to perform. These mirror the
+/// [`crate::source::RigSource`] surface; each result payload is the JSON of
+/// the corresponding response type.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum QueryKind {
+    EventHistory,
+    ImageHistory,
+    Sequence,
+    Thumbnail {
+        index: u32,
+    },
+    LastAutofocus,
+    MountInfo,
+    FilterwheelInfo,
+    GuiderInfo,
+    GuiderGraph,
+    RotatorInfo,
+    FocuserInfo,
+    Command {
+        endpoint: String,
+        params: Vec<(String, String)>,
+    },
+}
+
+/// Answer to a [`QueryRequest`]. On success `payload` holds the JSON of the
+/// response type matching the query kind; on failure `error` explains why.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct QueryResult {
+    pub id: Uuid,
+    pub ok: bool,
+    #[serde(default)]
+    pub payload: serde_json::Value,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// Direct protocol messages. The identity handshake (pair/auth → hello) is
+/// stable; query and heartbeat frames flow after it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum DirectMessage {
     ClientHello(ClientHello),
     AgentHello(AgentHello),
+    Pair(PairRequest),
+    PairResult(PairResult),
+    Auth(AuthRequest),
+    Query(QueryRequest),
+    QueryResult(QueryResult),
+    Heartbeat {
+        seq: u64,
+    },
+    HeartbeatAck {
+        seq: u64,
+    },
+    /// Fatal protocol or authentication error; the sender closes after this.
+    Error {
+        message: String,
+    },
 }
 
 #[cfg(test)]
@@ -120,6 +204,65 @@ mod tests {
                 "commands": false
             })
         );
+    }
+
+    #[test]
+    fn query_request_has_stable_json_contract() {
+        let message = DirectMessage::Query(QueryRequest {
+            id: Uuid::parse_str("7afcde18-b5a8-46fd-ad1f-ed54cf3bbc4e").unwrap(),
+            kind: QueryKind::Thumbnail { index: 3 },
+        });
+        let value = serde_json::to_value(&message).unwrap();
+        assert_eq!(value["type"], "query");
+        assert_eq!(value["payload"]["kind"], "thumbnail");
+        assert_eq!(value["payload"]["index"], 3);
+        let back: DirectMessage = serde_json::from_value(value).unwrap();
+        assert_eq!(back, message);
+    }
+
+    #[test]
+    fn command_query_roundtrips() {
+        let message = DirectMessage::Query(QueryRequest {
+            id: Uuid::new_v4(),
+            kind: QueryKind::Command {
+                endpoint: "equipment/mount/unpark".to_string(),
+                params: vec![("wait".to_string(), "true".to_string())],
+            },
+        });
+        let json = serde_json::to_string(&message).unwrap();
+        let back: DirectMessage = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, message);
+    }
+
+    #[test]
+    fn query_result_defaults_payload_and_error() {
+        let json = r#"{"type":"query_result","payload":{"id":"7afcde18-b5a8-46fd-ad1f-ed54cf3bbc4e","ok":true}}"#;
+        let message: DirectMessage = serde_json::from_str(json).unwrap();
+        let DirectMessage::QueryResult(result) = message else {
+            panic!("expected QueryResult");
+        };
+        assert!(result.ok);
+        assert!(result.payload.is_null());
+        assert!(result.error.is_none());
+    }
+
+    #[test]
+    fn pair_and_auth_roundtrip() {
+        let pair = DirectMessage::Pair(PairRequest {
+            pairing_token: "cspt_abc".to_string(),
+            hello: sample_client_hello(),
+        });
+        let back: DirectMessage =
+            serde_json::from_str(&serde_json::to_string(&pair).unwrap()).unwrap();
+        assert_eq!(back, pair);
+
+        let auth = DirectMessage::Auth(AuthRequest {
+            credential: "csrc_def".to_string(),
+            hello: sample_client_hello(),
+        });
+        let value = serde_json::to_value(&auth).unwrap();
+        assert_eq!(value["type"], "auth");
+        assert_eq!(value["payload"]["credential"], "csrc_def");
     }
 
     #[test]

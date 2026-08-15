@@ -106,6 +106,8 @@ enum Commands {
     },
     /// Get mount information from API
     MountInfo,
+    /// Relay this telescope's Advanced API to a central Chatstronomy hub
+    Relay,
     /// Run the centralized hub service (web app + Discord app + SQLite)
     #[cfg(feature = "hub")]
     Hub {
@@ -235,6 +237,12 @@ async fn main() {
                 std::process::exit(1);
             }
         }
+        Commands::Relay => {
+            if let Err(e) = cmd_relay(config_path, telescope).await {
+                eprintln!("Relay command failed: {e}");
+                std::process::exit(1);
+            }
+        }
         #[cfg(feature = "hub")]
         Commands::Hub { hub_config, init } => {
             if let Err(e) = cmd_hub(&hub_config, init).await {
@@ -250,6 +258,25 @@ async fn main() {
             }
         }
     }
+}
+
+async fn cmd_relay(
+    config_path: &str,
+    telescope: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let config = Config::load_or_default_from(config_path);
+    config.validate()?;
+    let t = config.pick_telescope(telescope)?;
+    if t.relay.is_none() {
+        return Err(format!(
+            "telescope '{}' has no relay configuration; add a `relay` section with hub_url \
+             and pairing_token",
+            t.name
+        )
+        .into());
+    }
+    chatstronomy::relay::run_relay(t).await?;
+    Ok(())
 }
 
 #[cfg(feature = "hub")]

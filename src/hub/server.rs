@@ -38,6 +38,8 @@ pub struct HubState {
     pub oauth: Option<Arc<DiscordOauthClient>>,
     /// Present once a bot token is configured; backs live guild checks.
     pub guild_checker: Option<Arc<dyn GuildChecker>>,
+    /// Live rig connections from `/v1/direct`.
+    pub rig_connections: Arc<super::direct_server::RigConnections>,
 }
 
 pub fn router(state: HubState) -> Router {
@@ -65,6 +67,10 @@ pub fn router(state: HubState) -> Router {
         .route(
             "/api/telescopes/{telescope_id}/pairing-tokens",
             delete(api_revoke_pairing_tokens),
+        )
+        .route(
+            crate::direct::protocol::DIRECT_WEBSOCKET_PATH,
+            get(super::direct_server::direct_ws),
         )
         .with_state(state)
 }
@@ -710,6 +716,7 @@ pub async fn serve(
         config: Arc::new(config),
         oauth,
         guild_checker,
+        rig_connections: Arc::new(super::direct_server::RigConnections::default()),
     };
     axum::serve(listener, router(state))
         .with_graceful_shutdown(shutdown_signal())
@@ -750,6 +757,7 @@ mod tests {
             config: Arc::new(config),
             oauth,
             guild_checker: checker,
+            rig_connections: Arc::new(crate::hub::direct_server::RigConnections::default()),
         };
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
