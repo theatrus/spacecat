@@ -114,6 +114,9 @@ jobs:
         with:
           dotnet-version: 8.0.x
 
+      - name: Test plugin configuration
+        run: dotnet run --project nina-plugin/Chatstronomy.NINA.Tests/Chatstronomy.NINA.Tests.csproj --configuration Release
+
       - name: Build and package plugin
         shell: pwsh
         run: >-
