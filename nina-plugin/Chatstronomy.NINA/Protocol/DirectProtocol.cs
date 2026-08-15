@@ -13,6 +13,7 @@ internal static class DirectProtocol
     {
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
         NumberHandling = JsonNumberHandling.AllowNamedFloatingPointLiterals,
+        ReferenceHandler = ReferenceHandler.IgnoreCycles,
     };
 
     static DirectProtocol()

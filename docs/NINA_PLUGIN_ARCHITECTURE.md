@@ -96,8 +96,16 @@ transport and must not require an Advanced API URL in Direct mode.
 The protocol carries typed command variants such as `park_mount`, `cool_camera`,
 and `start_sequence`. Advanced API sources translate those semantic operations
 to legacy routes internally; route strings never cross into the N.I.N.A. plugin.
-Native execution remains disabled until every advertised write has a tested
-mediator implementation, keeping the allowlist auditable on both sides.
+Native execution uses the same closed set of thirteen operations through the
+corresponding N.I.N.A. mediators; arbitrary route names or reflection-based
+command invocation never cross the Direct boundary.
+
+Guider and autofocus graph payloads are rendered by the shared Rust chart layer,
+then delivered as PNG attachments by Discord webhooks, the Discord bot, and
+Matrix. Discord's `/guider`, `/focus`, and `/last-image` inspection tools also
+surface those graphics on demand. Direct graph contract tests cover N.I.N.A.'s
+raw-pixel RMS semantics, arcsecond display scaling, signed correction pulses,
+dither markers, and an actual named-pipe-to-PNG round trip.
 
 Only one source is authoritative for a rig. Chatstronomy will not automatically
 merge or fail over between Direct and Advanced API sources because duplicate
@@ -256,11 +264,12 @@ implementations can be inspected and evolved easily.
 2. Remove concrete API-client dependencies from chat polling and commands.
 3. Define and test Direct identities, registration, and transport-neutral
    envelopes.
-4. Complete the remaining sequence, autofocus-result, and native command hooks;
-   event/image/thumbnail/guide histories and equipment snapshots are implemented.
+4. Complete sequence, autofocus-result, native command, and chart-rendering
+   parity for the current Chatstronomy `RigSource` surface.
 5. Extend the working local named-pipe transport with the remote plugin WebSocket
    client and hosted settings.
-6. Validate full feature parity, including sequence and autofocus details.
+6. Validate full feature parity against supported N.I.N.A. versions and real
+   hardware/profile combinations.
 7. Add pairing, node-bound credentials, and relay hardening.
 8. Package the plugin DLL and optional Windows runtime into a checksummed
    N.I.N.A. plugin ZIP.

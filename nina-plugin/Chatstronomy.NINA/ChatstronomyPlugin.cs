@@ -7,7 +7,10 @@ using NINA.Plugin.Interfaces;
 using NINA.Profile.Interfaces;
 using NINA.Equipment.Interfaces.Mediator;
 using NINA.Sequencer.Interfaces.Mediator;
+using NINA.Core.Utility.WindowService;
+using NINA.WPF.Base.Interfaces;
 using NINA.WPF.Base.Interfaces.Mediator;
+using NINA.WPF.Base.Interfaces.ViewModel;
 using Chatstronomy.NINA.Configuration;
 using Chatstronomy.NINA.Direct;
 using Chatstronomy.NINA.Protocol;
@@ -48,7 +51,11 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
         IRotatorMediator rotator,
         IFocuserMediator focuser,
         ISequenceMediator sequence,
-        IImageSaveMediator imageSave)
+        IImageSaveMediator imageSave,
+        IApplicationStatusMediator applicationStatus,
+        IAutoFocusVMFactory autoFocusFactory,
+        IImageHistoryVM imageHistory,
+        IWindowServiceFactory windowFactory)
     {
         this.profileService = profileService;
         settings = new ChatstronomySettings(profileService);
@@ -61,7 +68,11 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
             rotator,
             focuser,
             sequence,
-            imageSave);
+            imageSave,
+            applicationStatus,
+            autoFocusFactory,
+            imageHistory,
+            windowFactory);
         runtimeController = new ChatstronomyRuntimeController(directDataProvider);
         startRuntimeCommand = new AsyncCommand(
             RestartLocalRuntimeAsync,

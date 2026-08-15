@@ -517,12 +517,12 @@ mod tests {
                     "capabilities": {
                         "event_history": true,
                         "image_history": true,
-                        "thumbnails": false,
-                        "sequence": false,
+                        "thumbnails": true,
+                        "sequence": true,
                         "equipment_snapshots": true,
-                        "autofocus_details": false,
-                        "guider_graph": false,
-                        "commands": false
+                        "autofocus_details": true,
+                        "guider_graph": true,
+                        "commands": true
                     }
                 }"#,
         );

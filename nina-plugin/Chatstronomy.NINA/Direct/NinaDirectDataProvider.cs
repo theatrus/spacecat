@@ -1,15 +1,24 @@
 using Chatstronomy.NINA.Protocol;
 using System.IO;
+using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using NINA.Core.Interfaces;
+using NINA.Core.Enum;
+using NINA.Core.Model;
+using NINA.Core.Utility;
+using NINA.Core.Utility.WindowService;
 using NINA.Equipment.Equipment.MyFocuser;
 using NINA.Equipment.Interfaces;
 using NINA.Equipment.Interfaces.Mediator;
 using NINA.Profile.Interfaces;
 using NINA.Sequencer.Interfaces.Mediator;
+using NINA.WPF.Base.Interfaces;
 using NINA.WPF.Base.Interfaces.Mediator;
+using NINA.WPF.Base.Interfaces.ViewModel;
+using NINA.WPF.Base.Utility.AutoFocus;
 using OxyPlot;
 
 namespace Chatstronomy.NINA.Direct;
@@ -23,7 +32,7 @@ internal sealed class NinaDirectDataProvider : INinaDirectDataProvider, IFocuser
 {
     private const int EventHistoryCapacity = 2_000;
     private const int ImageHistoryCapacity = 500;
-    private const int GuideHistoryCapacity = 500;
+    private const int GuideHistoryCapacity = 10_000;
 
     private readonly IProfileService profileService;
     private readonly ITelescopeMediator telescope;
@@ -34,6 +43,10 @@ internal sealed class NinaDirectDataProvider : INinaDirectDataProvider, IFocuser
     private readonly IFocuserMediator focuser;
     private readonly ISequenceMediator sequence;
     private readonly IImageSaveMediator imageSave;
+    private readonly IApplicationStatusMediator applicationStatus;
+    private readonly IAutoFocusVMFactory autoFocusFactory;
+    private readonly IImageHistoryVM imageHistory;
+    private readonly IWindowServiceFactory windowFactory;
     private readonly BoundedHistory<Dictionary<string, object?>> events =
         new(EventHistoryCapacity);
     private readonly BoundedHistory<DirectSavedImage> images =
@@ -43,6 +56,12 @@ internal sealed class NinaDirectDataProvider : INinaDirectDataProvider, IFocuser
     private readonly object sequenceGate = new();
     private CancellationTokenSource? sequenceSubscriptionStop;
     private bool sequenceSubscribed;
+    private readonly object commandGate = new();
+    private readonly object autofocusReportGate = new();
+    private CancellationTokenSource? guideCommandStop;
+    private CancellationTokenSource? cameraCommandStop;
+    private CancellationTokenSource? autofocusCommandStop;
+    private AutoFocusReport? lastAutofocusReport;
     private long guideStepId;
     private bool started;
 
@@ -55,7 +74,11 @@ internal sealed class NinaDirectDataProvider : INinaDirectDataProvider, IFocuser
         IRotatorMediator rotator,
         IFocuserMediator focuser,
         ISequenceMediator sequence,
-        IImageSaveMediator imageSave)
+        IImageSaveMediator imageSave,
+        IApplicationStatusMediator applicationStatus,
+        IAutoFocusVMFactory autoFocusFactory,
+        IImageHistoryVM imageHistory,
+        IWindowServiceFactory windowFactory)
     {
         this.profileService = profileService;
         this.telescope = telescope;
@@ -66,17 +89,21 @@ internal sealed class NinaDirectDataProvider : INinaDirectDataProvider, IFocuser
         this.focuser = focuser;
         this.sequence = sequence;
         this.imageSave = imageSave;
+        this.applicationStatus = applicationStatus;
+        this.autoFocusFactory = autoFocusFactory;
+        this.imageHistory = imageHistory;
+        this.windowFactory = windowFactory;
     }
 
     public DirectCapabilities Capabilities { get; } = new(
         EventHistory: true,
         ImageHistory: true,
         Thumbnails: true,
-        Sequence: false,
+        Sequence: true,
         EquipmentSnapshots: true,
-        AutofocusDetails: false,
+        AutofocusDetails: true,
         GuiderGraph: true,
-        Commands: false);
+        Commands: true);
 
     public void Start()
     {
@@ -179,6 +206,7 @@ internal sealed class NinaDirectDataProvider : INinaDirectDataProvider, IFocuser
         }
         subscriptionStop?.Dispose();
         imageSave.ImageSaved -= ImageSaved;
+        CancelOutstandingCommands();
     }
 
     public void Reset()
@@ -186,10 +214,14 @@ internal sealed class NinaDirectDataProvider : INinaDirectDataProvider, IFocuser
         events.Clear();
         images.Clear();
         guideSteps.Clear();
+        lock (autofocusReportGate)
+        {
+            lastAutofocusReport = null;
+        }
         Interlocked.Exchange(ref guideStepId, 0);
     }
 
-    public Task<object?> ExecuteAsync(
+    public async Task<object?> ExecuteAsync(
         DirectQuery query,
         CancellationToken cancellationToken)
     {
@@ -201,7 +233,13 @@ internal sealed class NinaDirectDataProvider : INinaDirectDataProvider, IFocuser
             DirectQueryKind.ImageHistory =>
                 DirectApiEnvelope<IReadOnlyList<DirectImageMetadata>>.Ok(
                     images.Snapshot().Select(image => image.Metadata).ToArray()),
+            DirectQueryKind.Sequence =>
+                DirectApiEnvelope<IReadOnlyList<Dictionary<string, object?>>>.Ok(
+                    RunOnUiThread(() => NinaDirectSequenceSnapshot.Build(sequence))),
             DirectQueryKind.Thumbnail => GetThumbnail(query.Index),
+            DirectQueryKind.LastAutofocus =>
+                DirectApiEnvelope<JsonElement>.Ok(
+                    await GetLastAutofocusAsync(cancellationToken).ConfigureAwait(false)),
             DirectQueryKind.MountInfo =>
                 DirectApiEnvelope<IReadOnlyDictionary<string, object?>>.Ok(GetMountInfo()),
             DirectQueryKind.FilterwheelInfo =>
@@ -212,10 +250,15 @@ internal sealed class NinaDirectDataProvider : INinaDirectDataProvider, IFocuser
                 DirectApiEnvelope<DirectGuiderGraph>.Ok(GetGuiderGraph()),
             DirectQueryKind.RotatorInfo => DirectApiEnvelope<object>.Ok(rotator.GetInfo()),
             DirectQueryKind.FocuserInfo => DirectApiEnvelope<object>.Ok(focuser.GetInfo()),
+            DirectQueryKind.Command =>
+                await ExecuteCommandAsync(
+                    query.Command ?? throw new InvalidOperationException(
+                        "The Direct command payload is missing."),
+                    cancellationToken).ConfigureAwait(false),
             _ => throw new NotSupportedException(
                 $"Direct query '{query.Kind}' is not implemented by this plugin version."),
         };
-        return Task.FromResult<object?>(result);
+        return result;
     }
 
     public void Dispose() => Stop();
@@ -234,6 +277,463 @@ internal sealed class NinaDirectDataProvider : INinaDirectDataProvider, IFocuser
         "AUTOFOCUS-POINT-ADDED",
         ("Position", FiniteInt(dataPoint.X)),
         ("HFR", FiniteOrZero(dataPoint.Y)));
+
+    private async Task<JsonElement> GetLastAutofocusAsync(CancellationToken cancellationToken)
+    {
+        lock (autofocusReportGate)
+        {
+            if (lastAutofocusReport is not null)
+            {
+                return JsonSerializer.SerializeToElement(
+                    lastAutofocusReport,
+                    DirectProtocol.JsonOptions);
+            }
+        }
+
+        var directory = Path.Combine(CoreUtil.APPLICATIONTEMPPATH, "AutoFocus");
+        if (!Directory.Exists(directory))
+        {
+            throw new InvalidOperationException("No completed autofocus report is available.");
+        }
+
+        Exception? lastError = null;
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                var newest = Directory.EnumerateFiles(directory)
+                    .OrderBy(File.GetCreationTimeUtc)
+                    .LastOrDefault()
+                    ?? throw new InvalidOperationException(
+                        "No completed autofocus report is available.");
+                var json = await File.ReadAllTextAsync(newest, cancellationToken)
+                    .ConfigureAwait(false);
+                using var document = JsonDocument.Parse(json);
+                return document.RootElement.Clone();
+            }
+            catch (Exception exception) when (
+                exception is IOException or UnauthorizedAccessException or JsonException)
+            {
+                lastError = exception;
+                if (attempt < 4)
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(100), cancellationToken)
+                        .ConfigureAwait(false);
+                }
+            }
+        }
+
+        throw new InvalidOperationException(
+            "The latest autofocus report could not be read.",
+            lastError);
+    }
+
+    private Task<object?> ExecuteCommandAsync(
+        DirectRigCommand command,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var response = command.Kind switch
+        {
+            DirectRigCommandKind.UnparkMount => UnparkMount(),
+            DirectRigCommandKind.HomeMount => HomeMount(),
+            DirectRigCommandKind.ChangeFilter => ChangeFilter(command.FilterId),
+            DirectRigCommandKind.StartGuiding => StartGuiding(command.Calibrate),
+            DirectRigCommandKind.StopGuiding => StopGuiding(),
+            DirectRigCommandKind.CoolCamera => CoolCamera(command.Temperature, command.Minutes),
+            DirectRigCommandKind.WarmCamera => WarmCamera(command.Minutes),
+            DirectRigCommandKind.StartAutofocus => StartAutofocus(),
+            DirectRigCommandKind.CancelAutofocus => CancelAutofocus(),
+            DirectRigCommandKind.ParkMount => ParkMount(),
+            DirectRigCommandKind.AbortExposure => AbortExposure(),
+            DirectRigCommandKind.StopSequence => StopSequence(),
+            DirectRigCommandKind.StartSequence => StartSequence(command.SkipValidation),
+            _ => throw new NotSupportedException(
+                $"Direct command '{command.Kind}' is not implemented."),
+        };
+        return Task.FromResult<object?>(response);
+    }
+
+    private DirectApiEnvelope<string> UnparkMount()
+    {
+        var info = telescope.GetInfo();
+        if (!info.Connected)
+        {
+            throw new InvalidOperationException("Mount is not connected.");
+        }
+        if (!info.AtPark)
+        {
+            return DirectApiEnvelope<string>.Ok("Mount is not parked");
+        }
+        ObserveCommand(
+            telescope.UnparkTelescope(CreateProgress(), CancellationToken.None),
+            "Unpark mount");
+        return DirectApiEnvelope<string>.Ok("Mount unparking started");
+    }
+
+    private DirectApiEnvelope<string> HomeMount()
+    {
+        var info = telescope.GetInfo();
+        if (!info.Connected)
+        {
+            throw new InvalidOperationException("Mount is not connected.");
+        }
+        if (info.AtPark)
+        {
+            throw new InvalidOperationException("Mount is parked.");
+        }
+        if (info.AtHome)
+        {
+            return DirectApiEnvelope<string>.Ok("Mount is already homed");
+        }
+        if (!info.CanFindHome)
+        {
+            throw new InvalidOperationException("The mount does not support homing.");
+        }
+        if (info.Slewing)
+        {
+            telescope.StopSlew();
+        }
+        ObserveCommand(
+            telescope.FindHome(CreateProgress(), CancellationToken.None),
+            "Home mount");
+        return DirectApiEnvelope<string>.Ok("Mount homing started");
+    }
+
+    private DirectApiEnvelope<string> ParkMount()
+    {
+        var info = telescope.GetInfo();
+        if (!info.Connected)
+        {
+            throw new InvalidOperationException("Mount is not connected.");
+        }
+        if (info.AtPark)
+        {
+            return DirectApiEnvelope<string>.Ok("Mount is already parked");
+        }
+        if (!info.CanPark)
+        {
+            throw new InvalidOperationException("The mount does not support parking.");
+        }
+        if (info.Slewing)
+        {
+            telescope.StopSlew();
+        }
+        ObserveCommand(
+            telescope.ParkTelescope(CreateProgress(), CancellationToken.None),
+            "Park mount");
+        return DirectApiEnvelope<string>.Ok("Mount parking started");
+    }
+
+    private DirectApiEnvelope<string> ChangeFilter(int? filterId)
+    {
+        if (!filterWheel.GetInfo().Connected)
+        {
+            throw new InvalidOperationException("Filter wheel is not connected.");
+        }
+        if (!filterId.HasValue)
+        {
+            throw new InvalidOperationException("A filter ID is required.");
+        }
+
+        var filters = profileService.ActiveProfile.FilterWheelSettings.FilterWheelFilters;
+        var selected = filters.FirstOrDefault(filter => filter.Position == filterId.Value);
+        if (selected is null && filterId.Value >= 0 && filterId.Value < filters.Count)
+        {
+            selected = filters[filterId.Value];
+        }
+        if (selected is null)
+        {
+            throw new InvalidOperationException($"Filter ID {filterId.Value} does not exist.");
+        }
+
+        ObserveCommand(
+            filterWheel.ChangeFilter(selected, CancellationToken.None, CreateProgress()),
+            $"Change filter to {selected.Name}");
+        return DirectApiEnvelope<string>.Ok($"Filter change to {selected.Name} started");
+    }
+
+    private DirectApiEnvelope<string> StartGuiding(bool? calibrate)
+    {
+        if (!guider.GetInfo().Connected)
+        {
+            throw new InvalidOperationException("Guider is not connected.");
+        }
+        var stop = ReplaceCommandToken(ref guideCommandStop);
+        ObserveCommand(
+            guider.StartGuiding(calibrate ?? false, CreateProgress(), stop.Token),
+            "Start guiding");
+        return DirectApiEnvelope<string>.Ok("Guiding start requested");
+    }
+
+    private DirectApiEnvelope<string> StopGuiding()
+    {
+        if (!guider.GetInfo().Connected)
+        {
+            throw new InvalidOperationException("Guider is not connected.");
+        }
+        CancelCommand(ref guideCommandStop);
+        ObserveCommand(guider.StopGuiding(CancellationToken.None), "Stop guiding");
+        return DirectApiEnvelope<string>.Ok("Guiding stop requested");
+    }
+
+    private DirectApiEnvelope<string> CoolCamera(double? temperature, double? minutes)
+    {
+        if (!camera.GetInfo().Connected)
+        {
+            throw new InvalidOperationException("Camera is not connected.");
+        }
+        if (!camera.GetInfo().CanSetTemperature)
+        {
+            throw new InvalidOperationException("Camera has no temperature control.");
+        }
+        var target = RequiredFinite(temperature, "Camera temperature");
+        var duration = ResolveDuration(
+            minutes,
+            profileService.ActiveProfile.CameraSettings.CoolingDuration,
+            "Cooling duration");
+        var stop = ReplaceCommandToken(ref cameraCommandStop);
+        ObserveCommand(
+            camera.CoolCamera(target, duration, CreateProgress(), stop.Token),
+            "Cool camera");
+        return DirectApiEnvelope<string>.Ok(
+            $"Camera cooling to {target:0.##} C over {duration.TotalMinutes:0.##} minutes");
+    }
+
+    private DirectApiEnvelope<string> WarmCamera(double? minutes)
+    {
+        if (!camera.GetInfo().Connected)
+        {
+            throw new InvalidOperationException("Camera is not connected.");
+        }
+        if (!camera.GetInfo().CanSetTemperature)
+        {
+            throw new InvalidOperationException("Camera has no temperature control.");
+        }
+        var duration = ResolveDuration(
+            minutes,
+            profileService.ActiveProfile.CameraSettings.WarmingDuration,
+            "Warming duration");
+        var stop = ReplaceCommandToken(ref cameraCommandStop);
+        ObserveCommand(
+            camera.WarmCamera(duration, CreateProgress(), stop.Token),
+            "Warm camera");
+        return DirectApiEnvelope<string>.Ok(
+            $"Camera warming over {duration.TotalMinutes:0.##} minutes");
+    }
+
+    private DirectApiEnvelope<string> StartAutofocus()
+    {
+        if (!focuser.GetInfo().Connected)
+        {
+            throw new InvalidOperationException("Focuser is not connected.");
+        }
+
+        var stop = ReplaceCommandToken(ref autofocusCommandStop);
+        IWindowService? window = null;
+        Task<AutoFocusReport>? autofocus = null;
+        RunOnUiThread(() =>
+        {
+            window = windowFactory.Create();
+            var viewModel = autoFocusFactory.Create();
+            window.Show(
+                viewModel,
+                "Autofocus",
+                ResizeMode.CanResize,
+                WindowStyle.ToolWindow);
+            autofocus = viewModel.StartAutoFocus(
+                filterWheel.GetInfo().SelectedFilter,
+                stop.Token,
+                CreateProgress());
+            return true;
+        });
+
+        ObserveAutofocus(
+            autofocus ?? throw new InvalidOperationException("Autofocus did not start."),
+            window ?? throw new InvalidOperationException("Autofocus window did not open."));
+        return DirectApiEnvelope<string>.Ok("Autofocus started");
+    }
+
+    private DirectApiEnvelope<string> CancelAutofocus()
+    {
+        CancelCommand(ref autofocusCommandStop);
+        return DirectApiEnvelope<string>.Ok("Autofocus cancellation requested");
+    }
+
+    private DirectApiEnvelope<string> AbortExposure()
+    {
+        if (!camera.GetInfo().Connected)
+        {
+            throw new InvalidOperationException("Camera is not connected.");
+        }
+        if (!camera.GetInfo().IsExposing)
+        {
+            return DirectApiEnvelope<string>.Ok("Camera is not exposing");
+        }
+        camera.AbortExposure();
+        return DirectApiEnvelope<string>.Ok("Exposure aborted");
+    }
+
+    private DirectApiEnvelope<string> StopSequence()
+    {
+        EnsureSequenceReady();
+        RunOnUiThread(() =>
+        {
+            sequence.CancelAdvancedSequence();
+            return true;
+        });
+        return DirectApiEnvelope<string>.Ok("Sequence stopped");
+    }
+
+    private DirectApiEnvelope<string> StartSequence(bool? skipValidation)
+    {
+        EnsureSequenceReady();
+        if (sequence.IsAdvancedSequenceRunning())
+        {
+            throw new InvalidOperationException("Sequence is already running.");
+        }
+        var task = RunOnUiThread(() => sequence.StartAdvancedSequence(skipValidation ?? false));
+        ObserveCommand(task, "Start sequence");
+        return DirectApiEnvelope<string>.Ok("Sequence started");
+    }
+
+    private void EnsureSequenceReady()
+    {
+        if (!sequence.Initialized)
+        {
+            throw new InvalidOperationException("Sequence is not initialized.");
+        }
+    }
+
+    private void ObserveAutofocus(Task<AutoFocusReport> task, IWindowService window)
+    {
+        _ = task.ContinueWith(
+            completed =>
+            {
+                if (completed.Status == TaskStatus.RanToCompletion)
+                {
+                    lock (autofocusReportGate)
+                    {
+                        lastAutofocusReport = completed.Result;
+                    }
+                    imageHistory.AppendAutoFocusPoint(completed.Result);
+                    window.DelayedClose(TimeSpan.FromSeconds(10));
+                    return;
+                }
+
+                if (completed.IsFaulted)
+                {
+                    AddEvent(
+                        "CHATSTRONOMY-COMMAND-FAILED",
+                        ("Command", "Autofocus"),
+                        ("Error", completed.Exception?.GetBaseException().Message ?? "Unknown error"));
+                }
+                _ = window.Close();
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
+    private void ObserveCommand(Task task, string commandName)
+    {
+        _ = task.ContinueWith(
+            completed =>
+            {
+                if (completed.IsFaulted)
+                {
+                    AddEvent(
+                        "CHATSTRONOMY-COMMAND-FAILED",
+                        ("Command", commandName),
+                        ("Error", completed.Exception?.GetBaseException().Message ?? "Unknown error"));
+                }
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
+    private IProgress<ApplicationStatus> CreateProgress() =>
+        new Progress<ApplicationStatus>(applicationStatus.StatusUpdate);
+
+    private CancellationTokenSource ReplaceCommandToken(ref CancellationTokenSource? field)
+    {
+        lock (commandGate)
+        {
+            CancelCommandCore(ref field);
+            field = new CancellationTokenSource();
+            return field;
+        }
+    }
+
+    private void CancelCommand(ref CancellationTokenSource? field)
+    {
+        lock (commandGate)
+        {
+            CancelCommandCore(ref field);
+        }
+    }
+
+    private static void CancelCommandCore(ref CancellationTokenSource? field)
+    {
+        var stop = field;
+        field = null;
+        if (stop is null)
+        {
+            return;
+        }
+        // N.I.N.A. command implementations can continue registering callbacks
+        // with the token while their asynchronous cancellation unwinds.  A
+        // cancelled source is collectible; disposing it here can race those
+        // registrations and turn a requested cancellation into an
+        // ObjectDisposedException inside N.I.N.A.
+        stop.Cancel();
+    }
+
+    private void CancelOutstandingCommands()
+    {
+        lock (commandGate)
+        {
+            CancelCommandCore(ref guideCommandStop);
+            CancelCommandCore(ref cameraCommandStop);
+            CancelCommandCore(ref autofocusCommandStop);
+        }
+    }
+
+    private static TimeSpan ResolveDuration(
+        double? requestedMinutes,
+        double profileMinutes,
+        string name)
+    {
+        var minutes = RequiredFinite(requestedMinutes, name);
+        if (minutes == -1)
+        {
+            minutes = profileMinutes;
+        }
+        if (minutes < 0)
+        {
+            throw new InvalidOperationException($"{name} must be zero or greater, or -1 for the profile default.");
+        }
+        return TimeSpan.FromMinutes(minutes);
+    }
+
+    private static double RequiredFinite(double? value, string name)
+    {
+        if (!value.HasValue || !double.IsFinite(value.Value))
+        {
+            throw new InvalidOperationException($"{name} must be a finite number.");
+        }
+        return value.Value;
+    }
+
+    private static T RunOnUiThread<T>(Func<T> action)
+    {
+        var dispatcher = Application.Current?.Dispatcher;
+        return dispatcher is null || dispatcher.CheckAccess()
+            ? action()
+            : dispatcher.Invoke(action);
+    }
 
     private IReadOnlyDictionary<string, object?> GetMountInfo()
     {
@@ -354,27 +854,40 @@ internal sealed class NinaDirectDataProvider : INinaDirectDataProvider, IFocuser
     {
         var info = guider.GetInfo();
         var pixelScale = FiniteOrZero(info.PixelScale);
-        var steps = guideSteps.Snapshot();
-        var rms = steps.Count == 0 ? null : DirectGuideRms.FromSteps(steps, pixelScale);
-        var maxDistance = steps.Count == 0
-            ? 0
-            : steps.Max(step => Math.Max(
-                Math.Abs(step.RADistanceRawDisplay),
-                Math.Abs(step.DECDistanceRawDisplay)));
-        var maxDuration = steps.Count == 0
-            ? 0
-            : steps.Max(step => Math.Max(Math.Abs(step.RADuration), Math.Abs(step.DECDuration)));
+        var settings = profileService.ActiveProfile.GuiderSettings;
+        var historySize = Math.Clamp(settings.PHD2HistorySize, 1, GuideHistoryCapacity);
+        var scale = settings.PHD2GuiderScale;
+        var displayScale = scale == GuiderScaleEnum.ARCSECONDS ? pixelScale : 1;
+        var steps = guideSteps.Snapshot()
+            .TakeLast(historySize)
+            .Select(step => step with
+            {
+                RADistanceRawDisplay = step.RADistanceRaw * displayScale,
+                DECDistanceRawDisplay = step.DECDistanceRaw * displayScale,
+            })
+            .ToArray();
+        var measuredSteps = steps.Where(step => step.Dither == "NO").ToArray();
+        var rms = measuredSteps.Length == 0
+            ? null
+            : DirectGuideRms.FromSteps(measuredSteps, pixelScale);
+        var maxDistance = double.IsFinite(settings.MaxY) && settings.MaxY > 0
+            ? settings.MaxY
+            : 4;
+        var maxDuration = measuredSteps.Length == 0
+            ? 1
+            : Math.Max(1, measuredSteps.Max(
+                step => Math.Max(Math.Abs(step.RADuration), Math.Abs(step.DECDuration))));
         return new DirectGuiderGraph(
             rms,
-            Interval: 1,
+            Interval: maxDistance / 4,
             MaxY: maxDistance,
             MinY: -maxDistance,
             MaxDurationY: maxDuration,
             MinDurationY: -maxDuration,
             GuideSteps: steps,
-            HistorySize: GuideHistoryCapacity,
+            HistorySize: historySize,
             PixelScale: pixelScale,
-            Scale: 1);
+            Scale: (int)scale);
     }
 
     private DirectThumbnail GetThumbnail(uint? index)
@@ -468,17 +981,16 @@ internal sealed class NinaDirectDataProvider : INinaDirectDataProvider, IFocuser
 
     private void GuiderGuideEvent(object? sender, IGuideStep step)
     {
-        var pixelScale = FiniteOrZero(guider.GetInfo().PixelScale);
         var id = Interlocked.Increment(ref guideStepId);
         guideSteps.Add(new DirectGuideStep(
             Id: id,
-            IdOffsetLeft: id - 0.4,
-            IdOffsetRight: id + 0.4,
+            IdOffsetLeft: id - 0.15,
+            IdOffsetRight: id + 0.15,
             RADistanceRaw: FiniteOrZero(step.RADistanceRaw),
-            RADistanceRawDisplay: FiniteOrZero(step.RADistanceRaw * pixelScale),
+            RADistanceRawDisplay: FiniteOrZero(step.RADistanceRaw),
             RADuration: FiniteOrZero(step.RADuration),
             DECDistanceRaw: FiniteOrZero(step.DECDistanceRaw),
-            DECDistanceRawDisplay: FiniteOrZero(step.DECDistanceRaw * pixelScale),
+            DECDistanceRawDisplay: FiniteOrZero(step.DECDistanceRaw),
             DECDuration: FiniteOrZero(step.DECDuration),
             Dither: "NO"));
     }
@@ -559,7 +1071,22 @@ internal sealed class NinaDirectDataProvider : INinaDirectDataProvider, IFocuser
     private Task FilterWheelDisconnected(object sender, EventArgs args) => AddSimpleEvent("FILTERWHEEL-DISCONNECTED");
     private Task GuiderConnected(object sender, EventArgs args) => AddSimpleEvent("GUIDER-CONNECTED");
     private Task GuiderDisconnected(object sender, EventArgs args) => AddSimpleEvent("GUIDER-DISCONNECTED");
-    private Task GuiderDithered(object sender, EventArgs args) => AddSimpleEvent("GUIDER-DITHER");
+    private Task GuiderDithered(object sender, EventArgs args)
+    {
+        var id = Interlocked.Increment(ref guideStepId);
+        guideSteps.Add(new DirectGuideStep(
+            Id: id,
+            IdOffsetLeft: id - 0.15,
+            IdOffsetRight: id + 0.15,
+            RADistanceRaw: 0,
+            RADistanceRawDisplay: 0,
+            RADuration: 0,
+            DECDistanceRaw: 0,
+            DECDistanceRawDisplay: 0,
+            DECDuration: 0,
+            Dither: "0.01"));
+        return AddSimpleEvent("GUIDER-DITHER");
+    }
     private Task GuiderStarted(object sender, EventArgs args) => AddSimpleEvent("GUIDER-START");
     private Task GuiderStopped(object sender, EventArgs args) => AddSimpleEvent("GUIDER-STOP");
     private Task RotatorConnected(object sender, EventArgs args) => AddSimpleEvent("ROTATOR-CONNECTED");
@@ -657,7 +1184,7 @@ internal sealed record DirectThumbnail(
 
 internal sealed record DirectGuiderGraph(
     [property: JsonPropertyName("RMS")] DirectGuideRms? RMS,
-    int Interval,
+    double Interval,
     double MaxY,
     double MinY,
     double MaxDurationY,
@@ -685,20 +1212,22 @@ internal sealed record DirectGuideRms(
         IReadOnlyList<DirectGuideStep> steps,
         double pixelScale)
     {
-        var ra = Math.Sqrt(steps.Average(step => Math.Pow(step.RADistanceRawDisplay, 2)));
-        var dec = Math.Sqrt(steps.Average(step => Math.Pow(step.DECDistanceRawDisplay, 2)));
+        var meanRa = steps.Average(step => step.RADistanceRaw);
+        var meanDec = steps.Average(step => step.DECDistanceRaw);
+        var ra = Math.Sqrt(steps.Average(step => Math.Pow(step.RADistanceRaw - meanRa, 2)));
+        var dec = Math.Sqrt(steps.Average(step => Math.Pow(step.DECDistanceRaw - meanDec, 2)));
         var total = Math.Sqrt(ra * ra + dec * dec);
-        var peakRa = steps.Max(step => Math.Abs(step.RADistanceRawDisplay));
-        var peakDec = steps.Max(step => Math.Abs(step.DECDistanceRawDisplay));
+        var peakRa = steps.Max(step => Math.Abs(step.RADistanceRaw));
+        var peakDec = steps.Max(step => Math.Abs(step.DECDistanceRaw));
         return new DirectGuideRms(
             ra,
             dec,
             total,
-            $"RA: {ra:0.00}",
-            $"Dec: {dec:0.00}",
-            $"Tot: {total:0.00}",
-            $"Peak RA: {peakRa:0.00}",
-            $"Peak Dec: {peakDec:0.00}",
+            $"RA: {ra:0.00} ({ra * pixelScale:0.00}\")",
+            $"Dec: {dec:0.00} ({dec * pixelScale:0.00}\")",
+            $"Tot: {total:0.00} ({total * pixelScale:0.00}\")",
+            $"RA Peak: {peakRa:0.00} ({peakRa * pixelScale:0.00}\")",
+            $"Dec Peak: {peakDec:0.00} ({peakDec * pixelScale:0.00}\")",
             pixelScale,
             peakRa,
             peakDec,

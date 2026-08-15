@@ -3,6 +3,7 @@ using Chatstronomy.NINA.Direct;
 using Chatstronomy.NINA.Protocol;
 using Chatstronomy.NINA.Runtime;
 using Chatstronomy.NINA.Settings;
+using System.Collections.Concurrent;
 using System.Text.Json;
 
 namespace Chatstronomy.NINA.Tests;
@@ -23,6 +24,7 @@ internal static class Program
         Run("Plugin runtime bootstrap is source-explicit", PluginRuntimeBootstrapIsSourceExplicit);
         Run("Direct runtime bootstrap carries only its pipe", DirectRuntimeBootstrapCarriesOnlyPipe);
         Run("Direct commands use semantic wire names", DirectCommandsUseSemanticWireNames);
+        Run("Direct guider payload matches the Rust chart contract", DirectGuiderPayloadMatchesRustChart);
         Run("Direct query results match Rust envelope", DirectQueryResultsMatchRustEnvelope);
         Run("Direct histories stay insertion ordered and bounded", DirectHistoriesAreBounded);
 
@@ -38,6 +40,9 @@ internal static class Program
             await RunAsync(
                 "Plugin runtime queries the native Direct data pipe",
                 () => PluginRuntimeUsesDirectPipe(runtimePath));
+            await RunAsync(
+                "Release runtime renders Direct guider and autofocus pipe payloads to PNG",
+                () => DirectPipeRendersCharts(runtimePath));
         }
         else
         {
@@ -179,30 +184,101 @@ internal static class Program
 
     private static void DirectCommandsUseSemanticWireNames()
     {
-        const string json = """
+        var cases = new (string Json, DirectRigCommandKind Kind)[]
+        {
+            ("""{"kind":"unpark_mount"}""", DirectRigCommandKind.UnparkMount),
+            ("""{"kind":"home_mount"}""", DirectRigCommandKind.HomeMount),
+            ("""{"kind":"change_filter","filter_id":3}""", DirectRigCommandKind.ChangeFilter),
+            ("""{"kind":"start_guiding","calibrate":true}""", DirectRigCommandKind.StartGuiding),
+            ("""{"kind":"stop_guiding"}""", DirectRigCommandKind.StopGuiding),
+            ("""{"kind":"cool_camera","temperature":-10.0,"minutes":15.0}""", DirectRigCommandKind.CoolCamera),
+            ("""{"kind":"warm_camera","minutes":10.0}""", DirectRigCommandKind.WarmCamera),
+            ("""{"kind":"start_autofocus"}""", DirectRigCommandKind.StartAutofocus),
+            ("""{"kind":"cancel_autofocus"}""", DirectRigCommandKind.CancelAutofocus),
+            ("""{"kind":"park_mount"}""", DirectRigCommandKind.ParkMount),
+            ("""{"kind":"abort_exposure"}""", DirectRigCommandKind.AbortExposure),
+            ("""{"kind":"stop_sequence"}""", DirectRigCommandKind.StopSequence),
+            ("""{"kind":"start_sequence","skip_validation":false}""", DirectRigCommandKind.StartSequence),
+        };
+
+        foreach (var (commandJson, expectedKind) in cases)
+        {
+            var command = ParseDirectCommand(commandJson);
+            AssertEqual(expectedKind, command.Kind);
+            AssertFalse(commandJson.Contains("/equipment/", StringComparison.Ordinal));
+        }
+
+        var filter = ParseDirectCommand(cases[2].Json);
+        AssertEqual<int?>(3, filter.FilterId);
+        var guiding = ParseDirectCommand(cases[3].Json);
+        AssertEqual<bool?>(true, guiding.Calibrate);
+        var cooling = ParseDirectCommand(cases[5].Json);
+        AssertEqual<double?>(-10.0, cooling.Temperature);
+        AssertEqual<double?>(15.0, cooling.Minutes);
+        var warming = ParseDirectCommand(cases[6].Json);
+        AssertEqual<double?>(10.0, warming.Minutes);
+        var sequence = ParseDirectCommand(cases[12].Json);
+        AssertEqual<bool?>(false, sequence.SkipValidation);
+
+        AssertThrows<DirectProtocolException>(() => ParseDirectCommand(
+            """{"kind":"/equipment/camera/cool"}"""));
+    }
+
+    private static DirectRigCommand ParseDirectCommand(string commandJson)
+    {
+        var json = $$"""
             {
               "type": "query",
               "payload": {
                 "id": "7afcde18-b5a8-46fd-ad1f-ed54cf3bbc4e",
                 "kind": "command",
-                "command": {
-                  "kind": "cool_camera",
-                  "temperature": -10.0,
-                  "minutes": 15.0
-                }
+                "command": {{commandJson}}
               }
             }
             """;
-
         var query = DirectProtocol.ParseQuery(json);
         AssertEqual(DirectQueryKind.Command, query.Kind);
-        AssertEqual(DirectRigCommandKind.CoolCamera, query.Command!.Kind);
-        AssertEqual(-10.0, query.Command.Temperature);
-        AssertEqual(15.0, query.Command.Minutes);
-        AssertFalse(json.Contains("/equipment/", StringComparison.Ordinal));
+        return query.Command ?? throw new InvalidOperationException("Command was not parsed.");
+    }
 
-        AssertThrows<DirectProtocolException>(() => DirectProtocol.ParseQuery(
-            json.Replace("cool_camera", "/equipment/camera/cool")));
+    private static void DirectGuiderPayloadMatchesRustChart()
+    {
+        var measured = new[]
+        {
+            new DirectGuideStep(1, 0.85, 1.15, -1, -2, -120, 0, 0, 80, "NO"),
+            new DirectGuideStep(2, 1.85, 2.15, 1, 2, 140, 2, 4, -90, "NO"),
+        };
+        var rms = DirectGuideRms.FromSteps(measured, pixelScale: 2);
+        AssertEqual(1.0, rms.RA);
+        AssertEqual(1.0, rms.Dec);
+        AssertTrue(Math.Abs(rms.Total - Math.Sqrt(2)) < 1e-12);
+        AssertEqual(2.0, rms.Scale);
+        AssertEqual(2, rms.DataPoints);
+        AssertTrue(rms.RAText.Contains("(2.00\")", StringComparison.Ordinal));
+
+        var steps = measured.Append(
+            new DirectGuideStep(3, 2.85, 3.15, 0, 0, 0, 0, 0, 0, "0.01"))
+            .ToArray();
+        var graph = new DirectGuiderGraph(
+            rms,
+            Interval: 1.1,
+            MaxY: 4.4,
+            MinY: -4.4,
+            MaxDurationY: 140,
+            MinDurationY: -140,
+            GuideSteps: steps,
+            HistorySize: 500,
+            PixelScale: 2,
+            Scale: 1);
+        var json = JsonSerializer.Serialize(
+            DirectApiEnvelope<DirectGuiderGraph>.Ok(graph),
+            DirectProtocol.JsonOptions);
+        using var document = JsonDocument.Parse(json);
+        var response = document.RootElement.GetProperty("Response");
+        AssertEqual(1, response.GetProperty("Scale").GetInt32());
+        AssertEqual(1.1, response.GetProperty("Interval").GetDouble());
+        AssertEqual("0.01", response.GetProperty("GuideSteps")[2].GetProperty("Dither").GetString());
+        AssertEqual(2, response.GetProperty("RMS").GetProperty("DataPoints").GetInt32());
     }
 
     private static void DirectRuntimeBootstrapCarriesOnlyPipe()
@@ -224,18 +300,22 @@ internal static class Program
             directCapabilities: new DirectCapabilities(
                 EventHistory: true,
                 ImageHistory: true,
-                Thumbnails: false,
-                Sequence: false,
+                Thumbnails: true,
+                Sequence: true,
                 EquipmentSnapshots: true,
-                AutofocusDetails: false,
-                GuiderGraph: false,
-                Commands: false));
+                AutofocusDetails: true,
+                GuiderGraph: true,
+                Commands: true));
 
         using var document = JsonDocument.Parse(json);
         var source = document.RootElement.GetProperty("source");
         AssertEqual("nina_direct", source.GetProperty("kind").GetString());
         AssertEqual("chatstronomy-direct-test", source.GetProperty("pipe_name").GetString());
         AssertTrue(source.GetProperty("capabilities").GetProperty("event_history").GetBoolean());
+        AssertTrue(source.GetProperty("capabilities").GetProperty("sequence").GetBoolean());
+        AssertTrue(source.GetProperty("capabilities").GetProperty("autofocus_details").GetBoolean());
+        AssertTrue(source.GetProperty("capabilities").GetProperty("guider_graph").GetBoolean());
+        AssertTrue(source.GetProperty("capabilities").GetProperty("commands").GetBoolean());
         AssertFalse(source.TryGetProperty("base_url", out _));
         AssertFalse(json.Contains("127.0.0.1:1888", StringComparison.Ordinal));
     }
@@ -373,7 +453,7 @@ internal static class Program
             AssertTrue(controller.IsRunning);
 
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            while (provider.QueryCount < 2)
+            while (provider.QueryCount < 3)
             {
                 await Task.Delay(50, timeout.Token);
             }
@@ -388,6 +468,77 @@ internal static class Program
                 await controller.StopAsync(CancellationToken.None);
             }
             provider.Dispose();
+        }
+    }
+
+    private static async Task DirectPipeRendersCharts(string runtimePath)
+    {
+        var provider = new FakeDirectDataProvider();
+        var pipeName = NinaDirectPipeServer.CreatePipeName();
+        using var pipe = new NinaDirectPipeServer(provider, pipeName);
+        var artifactDirectory = Environment.GetEnvironmentVariable(
+            "CHATSTRONOMY_CHART_ARTIFACT_DIRECTORY");
+        var outputDirectory = string.IsNullOrWhiteSpace(artifactDirectory)
+            ? Path.GetTempPath()
+            : Path.GetFullPath(artifactDirectory);
+        Directory.CreateDirectory(outputDirectory);
+        var suffix = string.IsNullOrWhiteSpace(artifactDirectory)
+            ? $"-{Guid.NewGuid():N}"
+            : string.Empty;
+        var guiderOutputPath = Path.Combine(
+            outputDirectory,
+            $"chatstronomy-direct-guider{suffix}.png");
+        var autofocusOutputPath = Path.Combine(
+            outputDirectory,
+            $"chatstronomy-direct-autofocus{suffix}.png");
+        try
+        {
+            provider.Start();
+            pipe.Start();
+            var startInfo = new System.Diagnostics.ProcessStartInfo(runtimePath)
+            {
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                RedirectStandardError = true,
+            };
+            startInfo.ArgumentList.Add("direct-render-probe");
+            startInfo.ArgumentList.Add("--pipe-name");
+            startInfo.ArgumentList.Add(pipeName);
+            startInfo.ArgumentList.Add("--guider-output");
+            startInfo.ArgumentList.Add(guiderOutputPath);
+            startInfo.ArgumentList.Add("--autofocus-output");
+            startInfo.ArgumentList.Add(autofocusOutputPath);
+            using var process = System.Diagnostics.Process.Start(startInfo)
+                ?? throw new InvalidOperationException("Could not start the Direct render probe.");
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            await process.WaitForExitAsync(timeout.Token);
+            var standardError = await process.StandardError.ReadToEndAsync(timeout.Token);
+            AssertEqual(0, process.ExitCode);
+            AssertTrue(string.IsNullOrWhiteSpace(standardError));
+            AssertTrue(provider.QueriedKinds.Contains(DirectQueryKind.GuiderGraph));
+            AssertTrue(provider.QueriedKinds.Contains(DirectQueryKind.LastAutofocus));
+
+            foreach (var outputPath in new[] { guiderOutputPath, autofocusOutputPath })
+            {
+                var png = await File.ReadAllBytesAsync(outputPath, timeout.Token);
+                AssertTrue(png.Length > 1_000);
+                AssertTrue(png.AsSpan(0, 8).SequenceEqual(
+                    new byte[] { 0x89, (byte)'P', (byte)'N', (byte)'G', 0x0d, 0x0a, 0x1a, 0x0a }));
+            }
+        }
+        finally
+        {
+            provider.Dispose();
+            if (string.IsNullOrWhiteSpace(artifactDirectory))
+            {
+                foreach (var outputPath in new[] { guiderOutputPath, autofocusOutputPath })
+                {
+                    if (File.Exists(outputPath))
+                    {
+                        File.Delete(outputPath);
+                    }
+                }
+            }
         }
     }
 
@@ -494,18 +645,20 @@ internal static class Program
     private sealed class FakeDirectDataProvider : INinaDirectDataProvider
     {
         private int queryCount;
+        private readonly ConcurrentBag<DirectQueryKind> queriedKinds = new();
 
         public DirectCapabilities Capabilities { get; } = new(
             EventHistory: true,
             ImageHistory: true,
-            Thumbnails: false,
-            Sequence: false,
-            EquipmentSnapshots: false,
-            AutofocusDetails: false,
-            GuiderGraph: false,
-            Commands: false);
+            Thumbnails: true,
+            Sequence: true,
+            EquipmentSnapshots: true,
+            AutofocusDetails: true,
+            GuiderGraph: true,
+            Commands: true);
 
         public int QueryCount => Volatile.Read(ref queryCount);
+        public IReadOnlyCollection<DirectQueryKind> QueriedKinds => queriedKinds;
 
         public void Start()
         {
@@ -525,15 +678,54 @@ internal static class Program
         {
             cancellationToken.ThrowIfCancellationRequested();
             Interlocked.Increment(ref queryCount);
+            queriedKinds.Add(query.Kind);
             object response = query.Kind switch
             {
                 DirectQueryKind.EventHistory =>
                     DirectApiEnvelope<IReadOnlyList<object>>.Ok(Array.Empty<object>()),
                 DirectQueryKind.ImageHistory =>
+                    DirectApiEnvelope<IReadOnlyList<DirectImageMetadata>>.Ok(
+                        Array.Empty<DirectImageMetadata>()),
+                DirectQueryKind.Sequence =>
                     DirectApiEnvelope<IReadOnlyList<object>>.Ok(Array.Empty<object>()),
+                DirectQueryKind.Thumbnail => new DirectThumbnail(
+                    new byte[] { 0xff, 0xd8, 0xff, 0xd9 },
+                    "image/jpeg",
+                    200),
+                DirectQueryKind.GuiderGraph => GuiderGraph(),
+                DirectQueryKind.LastAutofocus => LastAutofocus(),
                 _ => throw new NotSupportedException(),
             };
             return Task.FromResult<object?>(response);
+        }
+
+        private static object GuiderGraph()
+        {
+            var steps = new[]
+            {
+                new DirectGuideStep(1, 0.85, 1.15, -0.2, -0.4, -120, 0.1, 0.2, 80, "NO"),
+                new DirectGuideStep(2, 1.85, 2.15, 0.3, 0.6, 140, -0.2, -0.4, -90, "NO"),
+                new DirectGuideStep(3, 2.85, 3.15, 0, 0, 0, 0, 0, 0, "0.01"),
+            };
+            var rms = DirectGuideRms.FromSteps(steps[..2], pixelScale: 2);
+            return DirectApiEnvelope<DirectGuiderGraph>.Ok(new DirectGuiderGraph(
+                rms,
+                Interval: 1,
+                MaxY: 4,
+                MinY: -4,
+                MaxDurationY: 140,
+                MinDurationY: -140,
+                GuideSteps: steps,
+                HistorySize: 500,
+                PixelScale: 2,
+                Scale: 1));
+        }
+
+        private static object LastAutofocus()
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText("example_last_af.json"));
+            return DirectApiEnvelope<JsonElement>.Ok(
+                document.RootElement.GetProperty("Response").Clone());
         }
 
         public void Dispose() => Stop();

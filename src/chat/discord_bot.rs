@@ -681,7 +681,7 @@ async fn focus(
     let af = client.get_last_autofocus().await?;
     let d = &af.response;
     let position_change = d.calculated_focus_point.position - d.previous_focus_point.position;
-    let embed = serenity::CreateEmbed::new()
+    let mut embed = serenity::CreateEmbed::new()
         .title(format!("[{name}] Last autofocus"))
         .field("Filter", &d.filter, true)
         .field("Method", &d.method, true)
@@ -702,7 +702,13 @@ async fn focus(
         )
         .field("Best R²", format!("{:.4}", af.get_best_r_squared()), true)
         .field("Timestamp", &d.timestamp, true);
-    ctx.send(poise::CreateReply::default().embed(embed)).await?;
+    let mut reply = poise::CreateReply::default();
+    if let Ok(png) = crate::charts::render_autofocus_graph_png(d) {
+        let filename = "autofocus.png";
+        embed = embed.image(format!("attachment://{filename}"));
+        reply = reply.attachment(CreateAttachment::bytes(png, filename));
+    }
+    ctx.send(reply.embed(embed)).await?;
     Ok(())
 }
 
@@ -739,7 +745,18 @@ async fn guider(
             false,
         );
     }
-    ctx.send(poise::CreateReply::default().embed(embed)).await?;
+    let mut reply = poise::CreateReply::default();
+    if client.capabilities().guider_graph
+        && let Ok(graph) = client.get_guider_graph().await
+        && graph.success
+        && graph.response.has_graph_data()
+        && let Ok(png) = crate::charts::render_guider_graph_png(&graph.response)
+    {
+        let filename = "guiding.png";
+        embed = embed.image(format!("attachment://{filename}"));
+        reply = reply.attachment(CreateAttachment::bytes(png, filename));
+    }
+    ctx.send(reply.embed(embed)).await?;
     Ok(())
 }
 
@@ -812,6 +829,14 @@ async fn last_image(
         let filename = format!("thumbnail_{idx}.jpg");
         embed = embed.image(format!("attachment://{filename}"));
         reply = reply.attachment(CreateAttachment::bytes(bytes, filename));
+    }
+    if client.capabilities().guider_graph
+        && let Ok(graph) = client.get_guider_graph().await
+        && graph.success
+        && graph.response.has_graph_data()
+        && let Ok(png) = crate::charts::render_guider_graph_png(&graph.response)
+    {
+        reply = reply.attachment(CreateAttachment::bytes(png, format!("guiding_{idx}.png")));
     }
     reply = reply.embed(embed);
     ctx.send(reply).await?;

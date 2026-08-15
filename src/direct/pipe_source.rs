@@ -23,7 +23,9 @@ use uuid::Uuid;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const QUERY_TIMEOUT: Duration = Duration::from_secs(15);
-const MAX_FRAME_BYTES: usize = 1024 * 1024;
+// Loaded advanced sequences and long histories can legitimately exceed a
+// megabyte. Keep a bounded response, but leave enough room for a real session.
+const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 
 pub struct DirectPipeRigSource {
     capabilities: RigCapabilities,

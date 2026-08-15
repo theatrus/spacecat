@@ -121,6 +121,7 @@ The project exports the N.I.N.A. plugin manifest, options UI, validated
 source/delivery configuration, Windows-protected local secret storage, supervised
 process controller, secure bootstrap and Direct data pipes, bounded native event,
 image, thumbnail, and guider histories, live equipment snapshots, the bundled
-runtime, and the shared multi-system identity handshake. Sequence normalization,
-native autofocus result details and command execution, the plugin's remote
-WebSocket client, and hosted credential acquisition remain follow-up stages.
+runtime, sequence normalization, native autofocus result details, the complete
+typed Chatstronomy command surface, shared chart rendering, and the multi-system
+identity handshake. The plugin's remote WebSocket client and hosted credential
+acquisition remain follow-up stages.
