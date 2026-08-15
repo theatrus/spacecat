@@ -13,6 +13,14 @@ Summary:        Chatstronomy - Astronomical Observation System
 License:        Apache-2.0
 URL:            https://github.com/theatrus/chatstronomy
 
+# Renamed from spacecat. Without these, dnf treats chatstronomy as an unrelated
+# package and installs it ALONGSIDE spacecat: two units, two system users, two
+# config directories, and the old bot still posting to the same channel. The
+# upper bound is open-ended because spacecat never went past 0.3.0 and never
+# will -- nothing is published under that name again.
+Obsoletes:      spacecat < 0.3.1
+Provides:       spacecat = %{version}-%{release}
+
 # Both sources are produced by scripts/make-rpm-sources.sh (the git archive does
 # not contain the vendored crates needed for an offline build).
 Source0:        %{name}-%{version}.tar.gz

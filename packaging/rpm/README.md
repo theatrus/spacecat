@@ -105,3 +105,27 @@ mock -r fedora-44-x86_64 ~/rpmbuild/SRPMS/chatstronomy-*.src.rpm
 CI (`.github/workflows/rpm.yml`) builds the RPMs in Fedora 43 and 44 containers
 on every push and pull request, uploads them as artifacts, and attaches the
 binary RPMs to the GitHub release on tag builds.
+
+## Upgrading a host that still has `spacecat` installed
+
+The package was renamed. The spec carries `Obsoletes: spacecat < 0.3.1` and
+`Provides: spacecat`, so `dnf install chatstronomy` replaces the old package
+rather than installing beside it. Without those, dnf has no reason to connect
+the two names and you end up with both — two units, two system users, two
+config directories, and the old bot still posting to the same channel.
+
+**The configuration does not migrate itself.** `/etc/spacecat/config.json` is
+`%config(noreplace)`, so removing the old package leaves it as
+`/etc/spacecat/config.json.rpmsave` and the new package installs its own
+disabled default. Carry the credentials across by hand:
+
+```bash
+sudo cp /etc/spacecat/config.json.rpmsave /etc/chatstronomy/config.json
+sudo chown root:chatstronomy /etc/chatstronomy/config.json
+sudo chmod 0640 /etc/chatstronomy/config.json
+sudo systemctl restart chatstronomy
+```
+
+Check the old unit is gone (`systemctl status spacecat` should report no such
+unit) before assuming the rename completed — a leftover enabled `spacecat.service`
+is the failure that looks like duplicate messages in your channel.
