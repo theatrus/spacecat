@@ -13,6 +13,8 @@ pub mod events;
 pub mod filterwheel;
 pub mod focuser;
 pub mod guider;
+#[cfg(feature = "hub")]
+pub mod hub;
 pub mod images;
 pub mod mount;
 pub mod poller;

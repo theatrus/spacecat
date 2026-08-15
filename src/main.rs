@@ -106,6 +106,17 @@ enum Commands {
     },
     /// Get mount information from API
     MountInfo,
+    /// Run the centralized hub service (web app + Discord app + SQLite)
+    #[cfg(feature = "hub")]
+    Hub {
+        /// Path to the hub configuration file. Separate from the rig
+        /// configuration: a hub has no telescope list in its config.
+        #[arg(long = "hub-config", default_value = "hub.json")]
+        hub_config: String,
+        /// Write a default hub configuration file and exit
+        #[arg(long)]
+        init: bool,
+    },
     /// Windows service management commands
     #[cfg(windows)]
     WindowsService {
@@ -224,6 +235,13 @@ async fn main() {
                 std::process::exit(1);
             }
         }
+        #[cfg(feature = "hub")]
+        Commands::Hub { hub_config, init } => {
+            if let Err(e) = cmd_hub(&hub_config, init).await {
+                eprintln!("Hub command failed: {e}");
+                std::process::exit(1);
+            }
+        }
         #[cfg(windows)]
         Commands::WindowsService { action } => {
             if let Err(e) = cmd_windows_service(action, config_path).await {
@@ -232,6 +250,28 @@ async fn main() {
             }
         }
     }
+}
+
+#[cfg(feature = "hub")]
+async fn cmd_hub(config_path: &str, init: bool) -> Result<(), Box<dyn std::error::Error>> {
+    use chatstronomy::hub::{config::HubConfig, server};
+
+    if init {
+        if std::path::Path::new(config_path).exists() {
+            return Err(format!("Refusing to overwrite existing file {config_path}").into());
+        }
+        HubConfig::default().save_to_file(config_path)?;
+        println!("Wrote default hub configuration to {config_path}");
+        println!("Edit it (Discord app credentials, signing key), then run: chatstronomy hub");
+        return Ok(());
+    }
+
+    let config = HubConfig::load_from_file(config_path).map_err(|e| {
+        format!("{e}. Run `chatstronomy hub --init` to create a default hub configuration.")
+    })?;
+    config.validate()?;
+    server::run(config).await?;
+    Ok(())
 }
 
 /// Load the config, pick the requested telescope, and build an API client.

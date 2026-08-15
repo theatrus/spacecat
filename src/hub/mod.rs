@@ -1,0 +1,13 @@
+//! The centralized Chatstronomy hub service.
+//!
+//! The hub is the third run mode next to Advanced API polling and N.I.N.A.
+//! Direct: one hosted process that owns the central Discord application, a
+//! web app for login and telescope management, and the `/v1/direct`
+//! WebSocket listener that N.I.N.A. plugins and relay agents connect to.
+//! All durable state lives in one SQLite database.
+//!
+//! See `docs/HOSTED_SERVICE.md` for the full design.
+
+pub mod config;
+pub mod db;
+pub mod server;
