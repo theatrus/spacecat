@@ -1158,9 +1158,9 @@ mod tests {
             .into_response()
         }
         let app = Router::new()
-            .route("/api/oauth2/token", axum::routing::post(token))
-            .route("/api/users/@me", get(me))
-            .route("/api/users/@me/guilds", get(guilds));
+            .route("/api/v10/oauth2/token", axum::routing::post(token))
+            .route("/api/v10/users/@me", get(me))
+            .route("/api/v10/users/@me/guilds", get(guilds));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });

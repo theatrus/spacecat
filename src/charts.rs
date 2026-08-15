@@ -449,6 +449,47 @@ mod tests {
     }
 
     #[test]
+    fn test_render_nina_direct_plugin_graph_contract() {
+        // This is the exact PascalCase envelope and field shape emitted by
+        // NinaDirectDataProvider, including a fractional interval, signed
+        // correction pulses, and the plugin's string dither marker.
+        let json = r#"{
+            "Response": {
+                "RMS": {
+                    "RA": 1.0, "Dec": 1.0, "Total": 1.4142135623730951,
+                    "RAText": "RA: 1.00 (2.00\")",
+                    "DecText": "Dec: 1.00 (2.00\")",
+                    "TotalText": "Tot: 1.41 (2.83\")",
+                    "PeakRAText": "RA Peak: 1.00 (2.00\")",
+                    "PeakDecText": "Dec Peak: 2.00 (4.00\")",
+                    "Scale": 2.0, "PeakRA": 1.0, "PeakDec": 2.0,
+                    "DataPoints": 2
+                },
+                "Interval": 1.1, "MaxY": 4.4, "MinY": -4.4,
+                "MaxDurationY": 140.0, "MinDurationY": -140.0,
+                "GuideSteps": [
+                    {"Id":1,"IdOffsetLeft":0.85,"IdOffsetRight":1.15,"RADistanceRaw":-1.0,"RADistanceRawDisplay":-2.0,"RADuration":-120.0,"DECDistanceRaw":0.0,"DECDistanceRawDisplay":0.0,"DECDuration":80.0,"Dither":"NO"},
+                    {"Id":2,"IdOffsetLeft":1.85,"IdOffsetRight":2.15,"RADistanceRaw":1.0,"RADistanceRawDisplay":2.0,"RADuration":140.0,"DECDistanceRaw":2.0,"DECDistanceRawDisplay":4.0,"DECDuration":-90.0,"Dither":"NO"},
+                    {"Id":3,"IdOffsetLeft":2.85,"IdOffsetRight":3.15,"RADistanceRaw":0.0,"RADistanceRawDisplay":0.0,"RADuration":0.0,"DECDistanceRaw":0.0,"DECDistanceRawDisplay":0.0,"DECDuration":0.0,"Dither":"0.01"}
+                ],
+                "HistorySize": 500, "PixelScale": 2.0, "Scale": 1
+            },
+            "Error": "", "StatusCode": 200, "Success": true, "Type": "API"
+        }"#;
+        let graph: GuiderGraphResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(graph.response.interval, 1.1);
+        assert!(GuideStepsHistory::is_dither_step(
+            &graph.response.guide_steps[2]
+        ));
+        let png = render_guider_graph_png(&graph.response).unwrap();
+        assert_eq!(
+            &png[..8],
+            &[0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1A, b'\n']
+        );
+        assert!(png.len() > 1000);
+    }
+
+    #[test]
     fn test_render_rejects_too_few_steps() {
         let mut history = sample_history();
         history.guide_steps.truncate(1);

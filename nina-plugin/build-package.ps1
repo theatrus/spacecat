@@ -10,7 +10,11 @@ param(
     [string] $FeaturedImageUrl = 'https://raw.githubusercontent.com/theatrus/chatstronomy/main/assets/branding/chatstronomy-featured.png',
 
     [ValidateNotNullOrEmpty()]
-    [string] $OutputDirectory = 'artifacts/nina-plugin'
+    [string] $OutputDirectory = 'artifacts/nina-plugin',
+
+    [string] $RuntimePath = '',
+
+    [switch] $SkipRuntime
 )
 
 $ErrorActionPreference = 'Stop'
@@ -75,7 +79,37 @@ if (-not (Test-Path -LiteralPath $pluginDll)) {
 }
 
 Copy-Item -LiteralPath $pluginDll -Destination $packageDirectory
-Compress-Archive -LiteralPath (Join-Path $packageDirectory 'Chatstronomy.dll') -DestinationPath $archivePath
+
+$packagedRuntime = $null
+if (-not $SkipRuntime) {
+    if ([string]::IsNullOrWhiteSpace($RuntimePath)) {
+        if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
+            throw 'cargo is required to build the bundled Chatstronomy runtime. Install Rust or pass -SkipRuntime.'
+        }
+        Push-Location $repositoryRoot
+        try {
+            cargo build --release --no-default-features
+            if ($LASTEXITCODE -ne 0) {
+                throw "Chatstronomy runtime build failed with exit code $LASTEXITCODE."
+            }
+        } finally {
+            Pop-Location
+        }
+        $RuntimePath = Join-Path $repositoryRoot 'target/release/chatstronomy.exe'
+    } elseif (-not [IO.Path]::IsPathRooted($RuntimePath)) {
+        $RuntimePath = Join-Path $repositoryRoot $RuntimePath
+    }
+
+    if (-not (Test-Path -LiteralPath $RuntimePath -PathType Leaf)) {
+        throw "Expected Chatstronomy runtime was not found at $RuntimePath."
+    }
+    $runtimeDirectory = Join-Path $packageDirectory 'runtime'
+    New-Item -ItemType Directory -Path $runtimeDirectory -Force | Out-Null
+    $packagedRuntime = Join-Path $runtimeDirectory 'chatstronomy.exe'
+    Copy-Item -LiteralPath $RuntimePath -Destination $packagedRuntime
+}
+
+Compress-Archive -Path (Join-Path $packageDirectory '*') -DestinationPath $archivePath
 
 $checksum = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash
 $versionParts = $Version.Split('.')
@@ -103,7 +137,7 @@ $manifest = [ordered]@{
     }
     Descriptions = [ordered]@{
         ShortDescription = 'Bridge N.I.N.A. with Discord and Matrix chat through Chatstronomy.'
-        LongDescription = 'Routes N.I.N.A. status, events, images, and approved commands through Discord and Matrix chat. Supports simple on-machine Local mode, multi-system Remote mode, and compatibility with Advanced API deployments.'
+        LongDescription = 'Routes N.I.N.A. status, events, images, and approved commands through Discord and Matrix chat. Includes a supervised on-machine runtime with Advanced API polling, plus multi-system Remote and native Direct integration paths.'
         FeaturedImageURL = $FeaturedImageUrl
         ScreenshotURL = ''
         AltScreenshotURL = ''
@@ -125,4 +159,5 @@ $json = $manifest | ConvertTo-Json -Depth 10
     Manifest = $manifestPath
     Checksum = $checksum
     InstallerUrl = $InstallerUrl
+    Runtime = $packagedRuntime
 }

@@ -17,6 +17,7 @@ pub mod guider;
 pub mod hub;
 pub mod images;
 pub mod mount;
+pub mod plugin_runtime;
 pub mod poller;
 pub mod relay;
 pub mod rotator;

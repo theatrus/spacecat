@@ -72,7 +72,7 @@ pub struct GuideStepsHistory {
     #[serde(rename = "RMS", default)]
     pub rms: Option<GuideGraphRms>,
     #[serde(default)]
-    pub interval: i32,
+    pub interval: f64,
     #[serde(default)]
     pub max_y: f64,
     #[serde(default)]
@@ -161,8 +161,11 @@ pub struct GuideGraphStep {
     pub dec_distance_raw_display: f64,
     #[serde(rename = "DECDuration", default, deserialize_with = "de_f64_tolerant")]
     pub dec_duration: f64,
+    /// NINA's underlying value is a floating-point marker (`NaN` for an
+    /// ordinary sample and `0.01` for a dither). Advanced API installations
+    /// have emitted both JSON strings and numbers, so preserve either form.
     #[serde(default)]
-    pub dither: String,
+    pub dither: serde_json::Value,
 }
 
 impl GuideStepsHistory {
@@ -200,9 +203,23 @@ impl GuideStepsHistory {
     }
 
     /// True when this step marks a dither (NINA sets `Dither` to a
-    /// non-`"NO"` value on dither steps).
+    /// finite non-zero number; older API payloads also use `"1"`).
     pub fn is_dither_step(step: &GuideGraphStep) -> bool {
-        !step.dither.is_empty() && step.dither != "NO"
+        match &step.dither {
+            serde_json::Value::Number(value) => value.as_f64().is_some_and(|value| value != 0.0),
+            serde_json::Value::String(value) => {
+                let value = value.trim();
+                if value.is_empty()
+                    || value.eq_ignore_ascii_case("NO")
+                    || value.eq_ignore_ascii_case("NaN")
+                {
+                    false
+                } else {
+                    value.parse::<f64>() != Ok(0.0)
+                }
+            }
+            _ => false,
+        }
     }
 }
 
@@ -243,6 +260,16 @@ mod tests {
         // Dither step detection
         assert!(GuideStepsHistory::is_dither_step(&history.guide_steps[2]));
         assert!(!GuideStepsHistory::is_dither_step(&history.guide_steps[0]));
+
+        let mut numeric = serde_json::from_str::<GuiderGraphResponse>(&json).unwrap();
+        numeric.response.guide_steps[0].dither = serde_json::json!(0.01);
+        numeric.response.guide_steps[1].dither = serde_json::json!("NaN");
+        assert!(GuideStepsHistory::is_dither_step(
+            &numeric.response.guide_steps[0]
+        ));
+        assert!(!GuideStepsHistory::is_dither_step(
+            &numeric.response.guide_steps[1]
+        ));
 
         let summary = history.rms_summary().unwrap();
         assert!(summary.contains("RA: 0.34"));

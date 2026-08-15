@@ -15,7 +15,7 @@ use super::rig_resolver::{CommandContext, RigResolver};
 use super::status_state::{StatusMessage, StatusState};
 use super::{ChatAttachment, ChatMessage, ChatService, ChatTarget, DiscordBotConfig};
 use crate::error::ChatError;
-use crate::source::SharedRigSource;
+use crate::source::{RigCommand, SharedRigSource};
 use async_trait::async_trait;
 use poise::serenity_prelude::{self as serenity, CreateAttachment, CreateMessage};
 use std::path::PathBuf;
@@ -673,7 +673,7 @@ async fn focus(
     let af = client.get_last_autofocus().await?;
     let d = &af.response;
     let position_change = d.calculated_focus_point.position - d.previous_focus_point.position;
-    let embed = serenity::CreateEmbed::new()
+    let mut embed = serenity::CreateEmbed::new()
         .title(format!("[{name}] Last autofocus"))
         .field("Filter", &d.filter, true)
         .field("Method", &d.method, true)
@@ -694,7 +694,13 @@ async fn focus(
         )
         .field("Best R²", format!("{:.4}", af.get_best_r_squared()), true)
         .field("Timestamp", &d.timestamp, true);
-    ctx.send(poise::CreateReply::default().embed(embed)).await?;
+    let mut reply = poise::CreateReply::default();
+    if let Ok(png) = crate::charts::render_autofocus_graph_png(d) {
+        let filename = "autofocus.png";
+        embed = embed.image(format!("attachment://{filename}"));
+        reply = reply.attachment(CreateAttachment::bytes(png, filename));
+    }
+    ctx.send(reply.embed(embed)).await?;
     Ok(())
 }
 
@@ -731,7 +737,18 @@ async fn guider(
             false,
         );
     }
-    ctx.send(poise::CreateReply::default().embed(embed)).await?;
+    let mut reply = poise::CreateReply::default();
+    if client.capabilities().guider_graph
+        && let Ok(graph) = client.get_guider_graph().await
+        && graph.success
+        && graph.response.has_graph_data()
+        && let Ok(png) = crate::charts::render_guider_graph_png(&graph.response)
+    {
+        let filename = "guiding.png";
+        embed = embed.image(format!("attachment://{filename}"));
+        reply = reply.attachment(CreateAttachment::bytes(png, filename));
+    }
+    ctx.send(reply.embed(embed)).await?;
     Ok(())
 }
 
@@ -805,6 +822,14 @@ async fn last_image(
         embed = embed.image(format!("attachment://{filename}"));
         reply = reply.attachment(CreateAttachment::bytes(bytes, filename));
     }
+    if client.capabilities().guider_graph
+        && let Ok(graph) = client.get_guider_graph().await
+        && graph.success
+        && graph.response.has_graph_data()
+        && let Ok(png) = crate::charts::render_guider_graph_png(&graph.response)
+    {
+        reply = reply.attachment(CreateAttachment::bytes(png, format!("guiding_{idx}.png")));
+    }
     reply = reply.embed(embed);
     ctx.send(reply).await?;
     Ok(())
@@ -873,17 +898,27 @@ async fn confirm_destructive(ctx: Context<'_>, action: &str) -> Result<bool, Bot
     Ok(confirmed)
 }
 
-/// Issue a NINA command endpoint and reply with a status line. Used by all
+/// Issue a typed rig command and reply with a status line. Used by all
 /// write commands once authorization (and any confirmation) has passed.
 async fn run_command(
     ctx: Context<'_>,
     telescope: &str,
     client: &SharedRigSource,
     label: &str,
-    endpoint: &str,
-    params: &[(&str, &str)],
+    command: RigCommand,
 ) -> Result<(), BotError> {
-    let result = client.execute_command(endpoint, params).await;
+    if !client.capabilities().commands {
+        ctx.send(
+            poise::CreateReply::default()
+                .ephemeral(true)
+                .content(format!(
+                    "❌ [{telescope}] {label} is not supported by this rig connection"
+                )),
+        )
+        .await?;
+        return Ok(());
+    }
+    let result = client.execute_command(command).await;
     let reply = match result {
         Ok(resp) if resp.success => poise::CreateReply::default()
             .content(format!("✅ [{telescope}] {label}: {}", resp.summary())),
@@ -911,15 +946,7 @@ async fn unpark(
         Err(_) => return Ok(()),
     };
     ctx.defer().await?;
-    run_command(
-        ctx,
-        &name,
-        &client,
-        "Unpark mount",
-        "/equipment/mount/unpark",
-        &[],
-    )
-    .await
+    run_command(ctx, &name, &client, "Unpark mount", RigCommand::UnparkMount).await
 }
 
 /// Send the mount to its home position.
@@ -933,15 +960,7 @@ async fn home(
         Err(_) => return Ok(()),
     };
     ctx.defer().await?;
-    run_command(
-        ctx,
-        &name,
-        &client,
-        "Home mount",
-        "/equipment/mount/home",
-        &[],
-    )
-    .await
+    run_command(ctx, &name, &client, "Home mount", RigCommand::HomeMount).await
 }
 
 /// Change the filter wheel position by filter name (resolved to id via
@@ -994,14 +1013,14 @@ async fn change_filter(
         return Ok(());
     };
 
-    let id = target.id.to_string();
     run_command(
         ctx,
         &name,
         &client,
         &format!("Change filter → {} (ID {})", target.name, target.id),
-        "/equipment/filterwheel/change-filter",
-        &[("filterId", id.as_str())],
+        RigCommand::ChangeFilter {
+            filter_id: target.id,
+        },
     )
     .await
 }
@@ -1018,18 +1037,14 @@ async fn guider_start(
         Err(_) => return Ok(()),
     };
     ctx.defer().await?;
-    let cal = if calibrate.unwrap_or(false) {
-        "true"
-    } else {
-        "false"
-    };
     run_command(
         ctx,
         &name,
         &client,
         "Start guiding",
-        "/equipment/guider/start",
-        &[("calibrate", cal)],
+        RigCommand::StartGuiding {
+            calibrate: calibrate.unwrap_or(false),
+        },
     )
     .await
 }
@@ -1045,15 +1060,7 @@ async fn guider_stop(
         Err(_) => return Ok(()),
     };
     ctx.defer().await?;
-    run_command(
-        ctx,
-        &name,
-        &client,
-        "Stop guiding",
-        "/equipment/guider/stop",
-        &[],
-    )
-    .await
+    run_command(ctx, &name, &client, "Stop guiding", RigCommand::StopGuiding).await
 }
 
 /// Cool the camera to a target temperature over `minutes` minutes.
@@ -1069,8 +1076,6 @@ async fn cool(
         Err(_) => return Ok(()),
     };
     ctx.defer().await?;
-    let t = temperature.to_string();
-    let m = minutes.unwrap_or(10.0).to_string();
     run_command(
         ctx,
         &name,
@@ -1079,8 +1084,10 @@ async fn cool(
             "Cool to {temperature:.1}°C over {} min",
             minutes.unwrap_or(10.0)
         ),
-        "/equipment/camera/cool",
-        &[("temperature", t.as_str()), ("minutes", m.as_str())],
+        RigCommand::CoolCamera {
+            temperature,
+            minutes: minutes.unwrap_or(10.0),
+        },
     )
     .await
 }
@@ -1097,14 +1104,14 @@ async fn warm(
         Err(_) => return Ok(()),
     };
     ctx.defer().await?;
-    let m = minutes.unwrap_or(10.0).to_string();
     run_command(
         ctx,
         &name,
         &client,
         &format!("Warm camera over {} min", minutes.unwrap_or(10.0)),
-        "/equipment/camera/warm",
-        &[("minutes", m.as_str())],
+        RigCommand::WarmCamera {
+            minutes: minutes.unwrap_or(10.0),
+        },
     )
     .await
 }
@@ -1131,14 +1138,16 @@ async fn autofocus(
     } else {
         "Start autofocus"
     };
-    let cancel_str = if cancel { "true" } else { "false" };
     run_command(
         ctx,
         &name,
         &client,
         label,
-        "/equipment/focuser/auto-focus",
-        &[("cancel", cancel_str)],
+        if cancel {
+            RigCommand::CancelAutofocus
+        } else {
+            RigCommand::StartAutofocus
+        },
     )
     .await
 }
@@ -1156,15 +1165,7 @@ async fn park(
     if !confirm_destructive(ctx, &format!("park {name}")).await? {
         return Ok(());
     }
-    run_command(
-        ctx,
-        &name,
-        &client,
-        "Park mount",
-        "/equipment/mount/park",
-        &[],
-    )
-    .await
+    run_command(ctx, &name, &client, "Park mount", RigCommand::ParkMount).await
 }
 
 /// Abort the current camera exposure (requires confirmation).
@@ -1185,8 +1186,7 @@ async fn abort_capture(
         &name,
         &client,
         "Abort capture",
-        "/equipment/camera/abort-exposure",
-        &[],
+        RigCommand::AbortExposure,
     )
     .await
 }
@@ -1204,7 +1204,14 @@ async fn stop_sequence(
     if !confirm_destructive(ctx, &format!("stop sequence on {name}")).await? {
         return Ok(());
     }
-    run_command(ctx, &name, &client, "Stop sequence", "/sequence/stop", &[]).await
+    run_command(
+        ctx,
+        &name,
+        &client,
+        "Stop sequence",
+        RigCommand::StopSequence,
+    )
+    .await
 }
 
 /// Start the loaded sequence (requires confirmation).
@@ -1221,18 +1228,14 @@ async fn start_sequence(
     if !confirm_destructive(ctx, &format!("start sequence on {name}")).await? {
         return Ok(());
     }
-    let skip = if skip_validation.unwrap_or(false) {
-        "true"
-    } else {
-        "false"
-    };
     run_command(
         ctx,
         &name,
         &client,
         "Start sequence",
-        "/sequence/start",
-        &[("skipValidation", skip)],
+        RigCommand::StartSequence {
+            skip_validation: skip_validation.unwrap_or(false),
+        },
     )
     .await
 }

@@ -32,6 +32,9 @@ jobs:
         with:
           dotnet-version: 8.0.x
 
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Resolve and validate version
         id: version
         shell: pwsh

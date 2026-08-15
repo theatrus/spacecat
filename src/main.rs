@@ -16,7 +16,11 @@ use chatstronomy::{
 use clap::{Parser, Subcommand};
 
 #[cfg(windows)]
-use chatstronomy::windows_service;
+use chatstronomy::{
+    direct::pipe_source::DirectPipeRigSource,
+    source::{RigCapabilities, RigSource},
+    windows_service,
+};
 
 use std::time::Duration;
 
@@ -119,6 +123,30 @@ enum Commands {
         #[arg(long)]
         init: bool,
     },
+    /// Run a plugin-owned local process configured over a secure named pipe
+    #[cfg(windows)]
+    PluginRuntime {
+        /// Random current-user-only bootstrap pipe created by the N.I.N.A. plugin
+        #[arg(long)]
+        bootstrap_pipe: String,
+        /// Non-secret runtime log destination
+        #[arg(long)]
+        log_file: String,
+    },
+    /// Internal Direct transport and guider-rendering diagnostic
+    #[cfg(windows)]
+    #[command(name = "direct-render-probe", hide = true)]
+    DirectRenderProbe {
+        /// Current-user-only data pipe created by the N.I.N.A. plugin
+        #[arg(long)]
+        pipe_name: String,
+        /// PNG file to write after querying the guider graph
+        #[arg(long)]
+        guider_output: String,
+        /// Optional autofocus PNG file to render from the same Direct source
+        #[arg(long)]
+        autofocus_output: Option<String>,
+    },
     /// Windows service management commands
     #[cfg(windows)]
     WindowsService {
@@ -147,6 +175,22 @@ enum WindowsServiceAction {
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
+
+    #[cfg(windows)]
+    if let Commands::PluginRuntime {
+        bootstrap_pipe,
+        log_file,
+    } = &cli.command
+    {
+        if let Err(error) =
+            chatstronomy::plugin_runtime::run_from_named_pipe(bootstrap_pipe, log_file).await
+        {
+            eprintln!("Plugin runtime failed: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
     println!(
         "{} {}",
         chatstronomy::version::WORDMARK,
@@ -247,6 +291,22 @@ async fn main() {
         Commands::Hub { hub_config, init } => {
             if let Err(e) = cmd_hub(&hub_config, init).await {
                 eprintln!("Hub command failed: {e}");
+                std::process::exit(1);
+            }
+        }
+        #[cfg(windows)]
+        Commands::PluginRuntime { .. } => unreachable!("plugin runtime handled before CLI banner"),
+        #[cfg(windows)]
+        Commands::DirectRenderProbe {
+            pipe_name,
+            guider_output,
+            autofocus_output,
+        } => {
+            if let Err(error) =
+                cmd_direct_render_probe(&pipe_name, &guider_output, autofocus_output.as_deref())
+                    .await
+            {
+                eprintln!("Direct render probe failed: {error}");
                 std::process::exit(1);
             }
         }
@@ -700,6 +760,24 @@ async fn cmd_guider_graph(
         .map_err(|e| format!("Failed to render guide graph: {e}"))?;
     std::fs::write(output, &png)?;
     println!("Guide graph written to {output}");
+    Ok(())
+}
+
+#[cfg(windows)]
+async fn cmd_direct_render_probe(
+    pipe_name: &str,
+    guider_output: &str,
+    autofocus_output: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let source = DirectPipeRigSource::connect(pipe_name, RigCapabilities::advanced_api()).await?;
+    let graph = source.get_guider_graph().await?;
+    let png = chatstronomy::charts::render_guider_graph_png(&graph.response)?;
+    std::fs::write(guider_output, png)?;
+    if let Some(output) = autofocus_output {
+        let autofocus = source.get_last_autofocus().await?;
+        let png = chatstronomy::charts::render_autofocus_graph_png(&autofocus.response)?;
+        std::fs::write(output, png)?;
+    }
     Ok(())
 }
 

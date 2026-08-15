@@ -1,6 +1,6 @@
 //! Versioned messages exchanged between N.I.N.A. plugins and a Chatstronomy hub.
 
-use crate::source::RigCapabilities;
+use crate::source::{RigCapabilities, RigCommand};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -87,7 +87,7 @@ pub struct AuthRequest {
 
 /// A read or command the hub asks the connected rig to perform. The rig
 /// answers with a [`QueryResult`] carrying the same `id`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct QueryRequest {
     pub id: Uuid,
     /// Unix time after which the rig must not execute this query. Guards
@@ -113,29 +113,6 @@ pub fn unix_now() -> i64 {
         .unwrap_or(0)
 }
 
-/// The only NINA endpoints a rig executes for [`QueryKind::Command`]. This
-/// is the rig-side backstop: even a compromised or buggy hub cannot reach
-/// arbitrary NINA endpoints on the owner's machine.
-pub const ALLOWED_COMMAND_ENDPOINTS: &[&str] = &[
-    "/equipment/mount/unpark",
-    "/equipment/mount/park",
-    "/equipment/mount/home",
-    "/equipment/filterwheel/change-filter",
-    "/equipment/filterwheel/info",
-    "/equipment/guider/start",
-    "/equipment/guider/stop",
-    "/equipment/camera/cool",
-    "/equipment/camera/warm",
-    "/equipment/camera/abort-exposure",
-    "/equipment/focuser/auto-focus",
-    "/sequence/start",
-    "/sequence/stop",
-];
-
-pub fn command_endpoint_allowed(endpoint: &str) -> bool {
-    ALLOWED_COMMAND_ENDPOINTS.contains(&endpoint)
-}
-
 impl QueryRequest {
     /// True when the query must be rejected rather than executed. `now` is
     /// the executing side's clock; the skew grace keeps a slightly-fast rig
@@ -149,15 +126,13 @@ impl QueryRequest {
 /// The operations a rig can be asked to perform. These mirror the
 /// [`crate::source::RigSource`] surface; each result payload is the JSON of
 /// the corresponding response type.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum QueryKind {
     EventHistory,
     ImageHistory,
     Sequence,
-    Thumbnail {
-        index: u32,
-    },
+    Thumbnail { index: u32 },
     LastAutofocus,
     MountInfo,
     FilterwheelInfo,
@@ -165,10 +140,7 @@ pub enum QueryKind {
     GuiderGraph,
     RotatorInfo,
     FocuserInfo,
-    Command {
-        endpoint: String,
-        params: Vec<(String, String)>,
-    },
+    Command { command: RigCommand },
 }
 
 /// Answer to a [`QueryRequest`]. On success `payload` holds the JSON of the
@@ -284,13 +256,16 @@ mod tests {
             id: Uuid::new_v4(),
             expires_at: Some(1_900_000_000),
             kind: QueryKind::Command {
-                endpoint: "equipment/mount/unpark".to_string(),
-                params: vec![("wait".to_string(), "true".to_string())],
+                command: RigCommand::StartSequence {
+                    skip_validation: true,
+                },
             },
         });
         let json = serde_json::to_string(&message).unwrap();
         let back: DirectMessage = serde_json::from_str(&json).unwrap();
         assert_eq!(back, message);
+        assert!(json.contains("start_sequence"));
+        assert!(!json.contains("/sequence/start"));
     }
 
     #[test]
@@ -335,17 +310,6 @@ mod tests {
             panic!("expected Error");
         };
         assert!(!retryable);
-    }
-
-    #[test]
-    fn command_allowlist_covers_bot_commands_only() {
-        assert!(command_endpoint_allowed("/equipment/mount/park"));
-        assert!(command_endpoint_allowed("/sequence/stop"));
-        assert!(!command_endpoint_allowed(
-            "/equipment/mount/../../v3/anything"
-        ));
-        assert!(!command_endpoint_allowed("/profile/switch"));
-        assert!(!command_endpoint_allowed(""));
     }
 
     #[test]

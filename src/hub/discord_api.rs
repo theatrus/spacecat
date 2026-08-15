@@ -159,7 +159,8 @@ impl DiscordOauthClient {
         &self,
         access_token: &str,
     ) -> Result<Vec<DiscordGuild>, DiscordApiError> {
-        self.get_json(access_token, "/api/v10/users/@me/guilds").await
+        self.get_json(access_token, "/api/v10/users/@me/guilds")
+            .await
     }
 
     async fn get_json<T: serde::de::DeserializeOwned>(

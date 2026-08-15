@@ -17,7 +17,9 @@ use crate::images::{ImageHistoryResponse, ThumbnailResponse};
 use crate::mount::MountInfoResponse;
 use crate::rotator::RotatorInfoResponse;
 use crate::sequence::SequenceResponse;
-use crate::source::{RigCapabilities, RigSource, RigSourceError, RigSourceKind, RigSourceResult};
+use crate::source::{
+    RigCapabilities, RigCommand, RigSource, RigSourceError, RigSourceKind, RigSourceResult,
+};
 use async_trait::async_trait;
 use std::sync::Arc;
 
@@ -110,18 +112,7 @@ impl RigSource for DirectRigSource {
         self.query_as(QueryKind::FocuserInfo).await
     }
 
-    async fn execute_command(
-        &self,
-        endpoint: &str,
-        params: &[(&str, &str)],
-    ) -> RigSourceResult<CommandResponse> {
-        self.query_as(QueryKind::Command {
-            endpoint: endpoint.to_string(),
-            params: params
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect(),
-        })
-        .await
+    async fn execute_command(&self, command: RigCommand) -> RigSourceResult<CommandResponse> {
+        self.query_as(QueryKind::Command { command }).await
     }
 }

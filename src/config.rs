@@ -2,6 +2,7 @@ use crate::chat::{ChatConfig, SharedDiscordConfig, TelescopeChatOverrides};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
+use url::Url;
 
 /// Top-level configuration. Holds the shared chat infrastructure (one Matrix
 /// login process-wide, default Discord webhook) and the list of telescopes
@@ -357,10 +358,8 @@ impl Config {
                     "Matrix homeserver URL cannot be empty when Matrix is enabled".to_string(),
                 );
             }
-            if !matrix.homeserver_url.starts_with("https://")
-                && !matrix.homeserver_url.starts_with("http://")
-            {
-                return Err("Matrix homeserver URL must start with http:// or https://".to_string());
+            if !is_valid_https_url(&matrix.homeserver_url) {
+                return Err("Matrix homeserver URL must be an absolute https:// URL".to_string());
             }
             if matrix.username.is_empty() {
                 return Err("Matrix username cannot be empty when Matrix is enabled".to_string());
@@ -373,8 +372,7 @@ impl Config {
         if let Some(discord) = &self.chat.discord
             && discord.enabled
             && let Some(url) = &discord.default_webhook_url
-            && !url.starts_with("https://discord.com/api/webhooks/")
-            && !url.starts_with("https://discordapp.com/api/webhooks/")
+            && !is_valid_discord_webhook_url(url)
         {
             return Err(
                 "Default Discord webhook URL must be a valid Discord webhook URL".to_string(),
@@ -439,9 +437,7 @@ impl TelescopeConfig {
         // Discord override: must look like a webhook URL, and shared Discord
         // must be enabled (otherwise the service won't exist at runtime).
         if let Some(url) = &self.chat.discord_webhook_url {
-            if !url.starts_with("https://discord.com/api/webhooks/")
-                && !url.starts_with("https://discordapp.com/api/webhooks/")
-            {
+            if !is_valid_discord_webhook_url(url) {
                 return Err(ctx(
                     "Discord webhook URL must be a valid Discord webhook URL".to_string(),
                 ));
@@ -477,6 +473,52 @@ impl TelescopeConfig {
 
         Ok(())
     }
+}
+
+pub(crate) fn is_valid_https_url(value: &str) -> bool {
+    Url::parse(value).is_ok_and(|url| url.scheme() == "https" && url.host_str().is_some())
+}
+
+pub(crate) fn is_valid_discord_webhook_url(value: &str) -> bool {
+    let Ok(url) = Url::parse(value) else {
+        return false;
+    };
+    let valid_host = matches!(url.host_str(), Some("discord.com" | "discordapp.com"))
+        || url.host_str().is_some_and(|host| {
+            host.ends_with(".discord.com") || host.ends_with(".discordapp.com")
+        });
+    let segments: Vec<_> = url
+        .path_segments()
+        .map(Iterator::collect)
+        .unwrap_or_default();
+    let (id, token) = match segments.as_slice() {
+        [api, webhooks, id, token]
+            if api.eq_ignore_ascii_case("api") && webhooks.eq_ignore_ascii_case("webhooks") =>
+        {
+            (*id, *token)
+        }
+        [api, version, webhooks, id, token]
+            if api.eq_ignore_ascii_case("api")
+                && is_discord_api_version(version)
+                && webhooks.eq_ignore_ascii_case("webhooks") =>
+        {
+            (*id, *token)
+        }
+        _ => ("", ""),
+    };
+
+    url.scheme() == "https"
+        && valid_host
+        && url.port_or_known_default() == Some(443)
+        && id.parse::<u64>().is_ok_and(|id| id != 0)
+        && !token.is_empty()
+}
+
+fn is_discord_api_version(value: &str) -> bool {
+    value
+        .strip_prefix('v')
+        .or_else(|| value.strip_prefix('V'))
+        .is_some_and(|version| !version.is_empty() && version.chars().all(|c| c.is_ascii_digit()))
 }
 
 #[cfg(test)]
@@ -739,5 +781,21 @@ mod tests {
         )
         .unwrap();
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn discord_webhook_validation_accepts_versioned_paths_only() {
+        assert!(is_valid_discord_webhook_url(
+            "https://discord.com/api/webhooks/123/token"
+        ));
+        assert!(is_valid_discord_webhook_url(
+            "https://discord.com/api/v10/webhooks/123/token"
+        ));
+        assert!(!is_valid_discord_webhook_url(
+            "https://discord.com/api/releases/webhooks/123/token"
+        ));
+        assert!(!is_valid_discord_webhook_url(
+            "https://discord.com:8443/api/webhooks/123/token"
+        ));
     }
 }

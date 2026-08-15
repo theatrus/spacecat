@@ -411,43 +411,50 @@ impl ChatUpdater {
 
     pub async fn initialize_baseline(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let n = self.telescope_name.clone();
+        let capabilities = self.source.capabilities();
         println!("[{n}] Fetching initial baseline...");
 
         // Load events and find latest TS-TARGETSTART
-        let events = self.source.get_event_history().await?;
-        self.process_baseline_events(&events.response);
+        if capabilities.event_history {
+            let events = self.source.get_event_history().await?;
+            self.process_baseline_events(&events.response);
+        }
 
         // Load sequence to get meridian flip time and potential sequence target
-        match self.source.get_sequence().await {
-            Ok(sequence) => {
-                self.state.meridian_flip_time = extract_meridian_flip_time(&sequence);
+        if capabilities.sequence {
+            match self.source.get_sequence().await {
+                Ok(sequence) => {
+                    self.state.meridian_flip_time = extract_meridian_flip_time(&sequence);
 
-                // Only use sequence target if no TS-TARGETSTART target was found
-                if self.state.current_target.is_none()
-                    && let Some(target_name) = extract_current_target(&sequence)
-                {
-                    self.state.current_target = Some(TargetInfo {
-                        name: target_name,
-                        source: TargetSource::Sequence,
-                        coordinates: None,
-                        project: None,
-                        rotation: None,
-                    });
+                    // Only use sequence target if no TS-TARGETSTART target was found
+                    if self.state.current_target.is_none()
+                        && let Some(target_name) = extract_current_target(&sequence)
+                    {
+                        self.state.current_target = Some(TargetInfo {
+                            name: target_name,
+                            source: TargetSource::Sequence,
+                            coordinates: None,
+                            project: None,
+                            rotation: None,
+                        });
+                    }
+
+                    self.state.sequence = Some(sequence);
                 }
-
-                self.state.sequence = Some(sequence);
-            }
-            Err(e) => {
-                println!("[{n}] Could not load sequence during initialization: {e}");
+                Err(e) => {
+                    println!("[{n}] Could not load sequence during initialization: {e}");
+                }
             }
         }
 
         // Load images
-        let images = self.source.get_all_image_history().await?;
-        for image in &images.response {
-            self.state
-                .images_seen
-                .insert(UpdaterState::image_key(image));
+        if capabilities.image_history {
+            let images = self.source.get_all_image_history().await?;
+            for image in &images.response {
+                self.state
+                    .images_seen
+                    .insert(UpdaterState::image_key(image));
+            }
         }
 
         println!(
@@ -579,6 +586,9 @@ impl ChatUpdater {
     /// so the poll loop can detect a mid-run disconnect without a separate
     /// health probe.
     pub async fn poll_events(&mut self) -> bool {
+        if !self.source.capabilities().event_history {
+            return false;
+        }
         match self.source.get_event_history().await {
             Ok(events) => {
                 for event in events.response {
@@ -837,6 +847,9 @@ impl ChatUpdater {
 
     /// Returns whether the API responded (see [`Self::poll_events`]).
     pub async fn poll_sequence(&mut self) -> bool {
+        if !self.source.capabilities().sequence {
+            return false;
+        }
         match self.source.get_sequence().await {
             Ok(sequence) => {
                 let new_sequence_target = extract_current_target(&sequence);
@@ -895,6 +908,9 @@ impl ChatUpdater {
 
     /// Returns whether the API responded (see [`Self::poll_events`]).
     pub async fn poll_images(&mut self) -> bool {
+        if !self.source.capabilities().image_history {
+            return false;
+        }
         match self.source.get_all_image_history().await {
             Ok(images) => {
                 for (index, image) in images.response.iter().enumerate() {
@@ -1548,16 +1564,27 @@ impl ChatUpdater {
 
         // Send message with thumbnail plus, when the guider has data, a
         // rendered guiding graph
-        let extra_attachments = self.render_guiding_graph_attachment(index).await;
-        self.chat_manager
-            .send_message_with_image(
-                &message,
-                &self.chat_target,
-                &self.source,
-                index as u32,
-                extra_attachments,
-            )
-            .await;
+        let capabilities = self.source.capabilities();
+        let extra_attachments = if capabilities.guider_graph {
+            self.render_guiding_graph_attachment(index).await
+        } else {
+            Vec::new()
+        };
+        if capabilities.thumbnails {
+            self.chat_manager
+                .send_message_with_image(
+                    &message,
+                    &self.chat_target,
+                    &self.source,
+                    index as u32,
+                    extra_attachments,
+                )
+                .await;
+        } else {
+            self.chat_manager
+                .send_message_with_attachments(&message, &self.chat_target, &extra_attachments)
+                .await;
+        }
     }
 
     /// Fetch the guide graph and render it as a PNG attachment. Any
