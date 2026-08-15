@@ -16,6 +16,29 @@ plugin. When the plugin is installed in Advanced API mode, it acts as an
 in-application configuration and health surface for the Rust agent rather than
 becoming a second data source.
 
+## Chat delivery configuration
+
+Chat delivery is selected separately from the source mode. The N.I.N.A. options
+surface provides three mutually exclusive choices:
+
+| Delivery choice | Runtime owner | Credential location | Capability |
+|---|---|---|---|
+| Discord webhook | Local computer | Windows Credential Manager | Outbound notifications |
+| Discord app / bot | Local computer | Windows Credential Manager | Notifications and Discord commands |
+| Chatstronomy.com | Hosted service | Hosted credential resolver | Hosted chat delivery and remote routing |
+
+Local delivery configuration includes the runtime executable path, whether the
+plugin should start it with N.I.N.A., and whether a plugin-owned process should
+stop with N.I.N.A. These settings define lifecycle ownership without committing
+secrets to command-line arguments or a generated configuration file. A runtime
+controller receives the validated in-memory configuration and is the boundary for
+the future process/named-pipe implementation.
+
+The hosted options store the HTTPS service URL and an opaque credential reference.
+Credential acquisition, refresh, revocation, and secret resolution belong to the
+hosted credential flow and are intentionally outside the delivery configuration
+model.
+
 ## Components
 
 ### `RigSource` (Rust)
@@ -81,13 +104,14 @@ Local is the simple all-in-one path for a single imaging computer:
 
 1. Install the Chatstronomy N.I.N.A. plugin.
 2. Leave **Connection mode** set to **Local**.
-3. Configure locally owned Discord and/or Matrix credentials in the plugin UI.
+3. Select Discord webhook or Discord app / bot delivery and configure its local
+   credentials in the plugin UI.
 4. The plugin ensures the bundled Chatstronomy runtime is running and connects to
    it through the node-scoped Windows named pipe.
 
 Local requires no URL, pairing code, open port, or Advanced API installation.
-Chat credentials remain on that computer and will be stored with Windows data
-protection rather than in normal profile JSON.
+Chat credentials remain on that computer in Windows Credential Manager rather
+than normal profile JSON.
 
 ### Remote
 

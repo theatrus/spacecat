@@ -1,3 +1,5 @@
+using System.IO;
+
 namespace Chatstronomy.NINA.Protocol;
 
 /// <summary>
