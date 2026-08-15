@@ -9,8 +9,9 @@ live in a separate repository.
 The plugin supports two independent configuration axes. The source mode decides
 how observatory data reaches Chatstronomy:
 
-- **Direct** — collect snapshots and events from N.I.N.A. mediators and execute
-  approved commands through those mediators.
+- **Direct** — replace the Advanced API hooks Chatstronomy consumes with native
+  snapshots, bounded histories, and approved commands built from N.I.N.A.
+  mediators. This preserves source capability parity without hosting an HTTP API.
 - **Advanced API** — supervise/configure the Rust agent while it continues to
   use the separately installed Advanced API plugin. The N.I.N.A. plugin is not
   required for existing headless Advanced API deployments. A plugin-owned local
@@ -65,8 +66,10 @@ the runtime to detach and continue independently.
 
 The working source in this runtime slice is `advanced_api_polling`, with a URL
 and 1–300 second interval. The source is tagged independently in the bootstrap
-protocol so native Direct can replace HTTP polling without changing the process
-or delivery lifecycle.
+protocol so native Direct can replace every consumed Advanced API hook without
+changing the process or delivery lifecycle. Direct will answer the same logical
+`RigSource` operations from mediator snapshots and plugin-maintained history; it
+will not expose a duplicate HTTP API.
 
 ## Build
 

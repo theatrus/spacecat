@@ -4,6 +4,12 @@ Chatstronomy treats **how observatory data is collected** and **where chat servi
 run** as independent choices. Direct mode is an additional integration, not a
 replacement for Advanced API mode.
 
+Functionally, Direct is a native in-process replacement for every Advanced API
+hook Chatstronomy consumes. It preserves the same source capabilities and
+normalized response shapes so the Rust updater, renderers, and chat commands do
+not care which provider is active. It does **not** reproduce the Advanced API's
+HTTP server or require the C# plugin to parse HTTP route names.
+
 ## Supported combinations
 
 | Source | Local delivery | Central/hosted delivery |
@@ -68,20 +74,47 @@ snapshot and request/response messages carried over the Direct protocol. Each
 source advertises capabilities so callers can report unsupported operations
 clearly.
 
+The parity boundary is the `RigSource` operation set, not the Advanced API wire
+format:
+
+| Chatstronomy operation | Native N.I.N.A. implementation |
+|---|---|
+| Event history | Subscribe to application/device events and keep a bounded journal |
+| Image history and thumbnails | Observe saved images and keep a bounded metadata/thumbnail cache |
+| Sequence | Read the active sequence through N.I.N.A. sequence services |
+| Last autofocus | Capture autofocus completion/results in a bounded cache |
+| Mount, filter wheel, guider, rotator, focuser | Build live snapshots from the corresponding mediators |
+| Guider graph | Accumulate recent guide-step events in a bounded ring buffer |
+| Commands | Execute typed, explicitly allowed operations through N.I.N.A. mediators |
+
+Advanced API mode obtains these values by polling HTTP endpoints. Direct mode
+answers the same logical reads from native snapshots and plugin-maintained
+history, while allowing incremental events to be pushed as the protocol grows.
+Any refresh cadence used by the Rust state reducer is independent of the HTTP
+transport and must not require an Advanced API URL in Direct mode.
+
+Before native command execution is enabled, the protocol's temporary generic
+`Command { endpoint, params }` request will be replaced with typed command
+variants. This keeps Advanced API route strings out of the N.I.N.A. plugin and
+makes the allowed Direct write surface auditable on both sides.
+
 Only one source is authoritative for a rig. Chatstronomy will not automatically
 merge or fail over between Direct and Advanced API sources because duplicate
 events and ambiguous command results are more dangerous than a visible outage.
 
 ### Chatstronomy N.I.N.A. plugin (C#)
 
-The plugin is intentionally thin. It will:
+The plugin is intentionally limited to the native source boundary. It will:
 
 1. Subscribe to N.I.N.A. device, image-save, autofocus, guider, and sequence
    mediators.
-2. Convert native information into versioned Chatstronomy messages.
-3. Execute an explicit allowlist of commands through N.I.N.A. mediators.
-4. Provide source/delivery settings and connection health inside N.I.N.A.
-5. Connect to Chatstronomy over a Windows named pipe when local or an outbound TLS
+2. Maintain the bounded histories needed to provide parity with the Advanced API
+   hooks Chatstronomy currently reads.
+3. Convert native information into versioned Chatstronomy messages and normalized
+   response payloads.
+4. Execute an explicit allowlist of typed commands through N.I.N.A. mediators.
+5. Provide source/delivery settings and connection health inside N.I.N.A.
+6. Connect to Chatstronomy over a Windows named pipe when local or an outbound TLS
    WebSocket when Chatstronomy runs on another system.
 
 It will not contain Discord, Matrix, notification formatting, chart rendering,
@@ -131,9 +164,10 @@ Local is the simple all-in-one path for a single imaging computer:
    configuration over its bootstrap pipe, and supervises the owned process.
 
 Native Direct local mode requires no URL, pairing code, open port, or Advanced API
-installation. The initial working compatibility path continues to poll the
-separately installed Advanced API plugin. Chat credentials remain on that computer
-in Windows Credential Manager rather than normal profile JSON.
+installation because the plugin implements Chatstronomy's required source hooks
+directly from N.I.N.A. The initial working compatibility path continues to poll
+the separately installed Advanced API plugin. Chat credentials remain on that
+computer in Windows Credential Manager rather than normal profile JSON.
 
 ### Remote
 
@@ -215,7 +249,8 @@ implementations can be inspected and evolved easily.
 2. Remove concrete API-client dependencies from chat polling and commands.
 3. Define and test Direct identities, registration, and transport-neutral
    envelopes.
-4. Add N.I.N.A. native snapshots/events and read-only commands.
+4. Implement every consumed Advanced API hook through N.I.N.A. mediators, bounded
+   history caches, and typed read-only operations.
 5. Add local named-pipe and remote WebSocket transports plus plugin settings.
 6. Validate feature parity, including autofocus and guide graphs.
 7. Add pairing, node-bound credentials, and relay hardening.
