@@ -78,12 +78,7 @@ pub fn router(state: HubState) -> Router {
 }
 
 async fn index() -> Html<&'static str> {
-    Html(
-        "<!doctype html><title>Chatstronomy hub</title>\
-         <h1>Chatstronomy hub</h1>\
-         <p>space | cat — observatory chat hub. \
-         <a href=\"/login\">Log in with Discord</a></p>",
-    )
+    Html(super::web_ui::INDEX_HTML)
 }
 
 /// Liveness and readiness in one: proves the process is up and the database
@@ -375,11 +370,24 @@ async fn api_list_guilds(State(state): State<HubState>, headers: HeaderMap) -> R
             Some(checker) => serde_json::Value::from(checker.bot_in_guild(g.guild_id as u64).await),
             None => serde_json::Value::Null,
         };
+        // The Discord app-install link for this guild. The client ID is
+        // public, so exposing it here is fine.
+        let install_url = if state.config.discord.client_id.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::Value::from(format!(
+                "{}/oauth2/authorize?client_id={}&scope=bot+applications.commands&guild_id={}",
+                state.config.discord.base_url.trim_end_matches('/'),
+                state.config.discord.client_id,
+                snowflake_string(g.guild_id),
+            ))
+        };
         out.push(serde_json::json!({
             "id": snowflake_string(g.guild_id),
             "name": g.guild_name,
             "registered": registered,
             "bot_installed": bot_installed,
+            "install_url": install_url,
         }));
     }
     Json(serde_json::json!({ "guilds": out })).into_response()
@@ -1164,6 +1172,10 @@ mod tests {
         assert_eq!(guilds[0]["id"], OWNED_GUILD);
         assert_eq!(guilds[0]["registered"], false);
         assert_eq!(guilds[0]["bot_installed"], true);
+        let install_url = guilds[0]["install_url"].as_str().unwrap();
+        assert!(install_url.contains("client_id=client-1"));
+        assert!(install_url.contains(&format!("guild_id={OWNED_GUILD}")));
+        assert!(install_url.contains("scope=bot+applications.commands"));
 
         // Register, then create a telescope.
         let response = client
