@@ -15,7 +15,7 @@
     <AssemblyVersion>$(Version)</AssemblyVersion>
     <FileVersion>$(Version)</FileVersion>
     <Title>Chatstronomy</Title>
-    <Description>Bridge N.I.N.A. with Discord and Matrix chat using Direct or Advanced API mode</Description>
+    <Description>Bridge NINA with Discord and Matrix, supporting bot slash commands for control</Description>
     <Company>Yann Ramin</Company>
     <Product>Chatstronomy for N.I.N.A.</Product>
     <Copyright>Copyright (c) 2026 Yann Ramin</Copyright>

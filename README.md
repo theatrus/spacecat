@@ -31,9 +31,10 @@ really.
 
 ### Installation
 
-> **N.I.N.A. plugin work is in progress.** Chatstronomy will continue to support
-> the existing Advanced API source alongside a native Direct source. The two
-> source modes can each use either local or hosted chat delivery; see the
+> **N.I.N.A. plugin work is in progress.** Chatstronomy supports the existing
+> Advanced API source alongside native Direct mode. Direct mode can run with a
+> local Chatstronomy bot or pair outbound to a central hub with no Advanced API
+> or inbound port; see the
 > [N.I.N.A. integration architecture](docs/NINA_PLUGIN_ARCHITECTURE.md).
 
 #### Option 1: RPM Package (Recommended for Fedora/RHEL/CentOS)
