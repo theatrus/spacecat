@@ -1,10 +1,13 @@
 //! The hub's management page: one inline HTML document, no build pipeline.
 //!
-//! Structure mirrors the data model: "My telescopes" (user-owned rigs —
-//! pairing, cooldown, attach/share) on top, then one card per server with
-//! its attachments (per-server permissions and channel destinations).
-//! Channels and roles come from Discord via `/api/guilds/{id}/options` —
-//! nobody types an ID anywhere.
+//! Structure mirrors the data model: "My telescopes" (user-owned rigs) on
+//! top, then one card per server with its attachments. Every control
+//! applies immediately — there are no save buttons — and channels/roles are
+//! always picked from Discord data, never typed.
+//!
+//! Layout discipline: every card is head (title left, badges right) plus
+//! labeled sections; every control row uses .controls with fixed control
+//! heights so things line up.
 
 pub const INDEX_HTML: &str = r#"<!doctype html>
 <html lang="en">
@@ -17,13 +20,14 @@ pub const INDEX_HTML: &str = r#"<!doctype html>
     --bg: #0b0e14; --panel: #141922; --panel2: #1a2130; --border: #2a3245;
     --text: #e6edf3; --muted: #8b96a8; --accent: #58a6ff; --accent2: #1f6feb;
     --good: #3fb950; --bad: #f85149; --warn: #d29922; --radius: 10px;
+    --ctl-h: 2.2rem;
   }
   * { box-sizing: border-box; }
   body {
     margin: 0; background: var(--bg); color: var(--text);
     font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
   }
-  .wrap { max-width: 860px; margin: 0 auto; padding: 1.5rem 1rem 4rem; }
+  .wrap { max-width: 820px; margin: 0 auto; padding: 1.5rem 1rem 4rem; }
   header { display: flex; align-items: center; gap: .75rem; margin-bottom: 1.25rem; }
   header h1 { font-size: 1.25rem; margin: 0; flex: 1; letter-spacing: .01em; }
   header h1 span { color: var(--muted); font-weight: normal; font-size: .9rem; }
@@ -31,19 +35,28 @@ pub const INDEX_HTML: &str = r#"<!doctype html>
   a { color: var(--accent); text-decoration: none; }
   a:hover { text-decoration: underline; }
 
+  /* Card anatomy: .head (title left, .badges right), then .section blocks. */
   .card {
     background: var(--panel); border: 1px solid var(--border);
     border-radius: var(--radius); padding: 1.1rem 1.2rem; margin-bottom: 1.1rem;
   }
-  .card > .head { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
-  .card h2 { margin: 0; font-size: 1.05rem; flex: 1; }
   .sub {
     background: var(--panel2); border: 1px solid var(--border);
     border-radius: var(--radius); padding: .9rem 1rem; margin-top: .9rem;
   }
-  .sub .head { display: flex; align-items: center; gap: .6rem; margin-bottom: .6rem; flex-wrap: wrap; }
-  .sub .head b { font-size: 1rem; }
-  .grow { flex: 1; }
+  .head { display: flex; align-items: center; gap: .55rem; min-height: 1.8rem; }
+  .head h2 { margin: 0; font-size: 1.05rem; }
+  .head b { font-size: 1rem; }
+  .head .badges { margin-left: auto; display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; }
+  .head .sub-note { color: var(--muted); font-size: .82rem; }
+
+  .section { margin-top: .85rem; }
+  .section > label {
+    display: block; font-size: .72rem; color: var(--muted);
+    margin-bottom: .35rem; text-transform: uppercase; letter-spacing: .06em;
+  }
+  .controls { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+  .controls + .controls, .chips + .controls { margin-top: .5rem; }
 
   .badge {
     font-size: .72rem; padding: .12rem .55rem; border-radius: 999px;
@@ -54,9 +67,10 @@ pub const INDEX_HTML: &str = r#"<!doctype html>
   .badge.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 60%, transparent); }
 
   button {
-    background: #222938; color: var(--text); border: 1px solid var(--border);
-    border-radius: 7px; padding: .4rem .85rem; cursor: pointer; font: inherit;
-    font-size: .85rem; transition: border-color .12s, background .12s;
+    height: var(--ctl-h); background: #222938; color: var(--text);
+    border: 1px solid var(--border); border-radius: 7px; padding: 0 .9rem;
+    cursor: pointer; font: inherit; font-size: .85rem;
+    transition: border-color .12s, background .12s;
   }
   button:hover { border-color: var(--accent); }
   button.primary { background: var(--accent2); border-color: var(--accent2); }
@@ -64,46 +78,37 @@ pub const INDEX_HTML: &str = r#"<!doctype html>
   button.subtle { background: transparent; color: var(--muted); }
   button.danger { color: var(--bad); }
   button.danger:hover { border-color: var(--bad); }
-  .actions { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: .8rem; }
-  .actions .spacer { flex: 1; }
 
-  .fields {
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(215px, 1fr));
-    gap: .8rem; margin-top: .4rem;
-  }
-  .field label {
-    display: block; font-size: .75rem; color: var(--muted);
-    margin-bottom: .25rem; text-transform: uppercase; letter-spacing: .05em;
-  }
   input, select {
-    width: 100%; background: var(--bg); color: var(--text);
-    border: 1px solid var(--border); border-radius: 7px; padding: .45rem .55rem;
+    height: var(--ctl-h); background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 7px; padding: 0 .55rem;
     font: inherit; font-size: .88rem;
   }
-  .row select, .row input, .newrow select, .newrow input { width: auto; }
-  .row { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
-  .chips { display: flex; flex-wrap: wrap; gap: .4rem; }
+  select.pick { width: 230px; max-width: 100%; }
+  input.name { width: 230px; max-width: 100%; }
+  input.num { width: 6.2rem; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
   .chip {
-    display: inline-flex; align-items: center; gap: .35rem;
+    display: inline-flex; align-items: center; gap: .35rem; height: 1.75rem;
     border: 1px solid var(--border); border-radius: 999px;
-    padding: .2rem .7rem; cursor: pointer; font-size: .82rem; color: var(--muted);
+    padding: 0 .7rem; cursor: pointer; font-size: .82rem; color: var(--muted);
     user-select: none;
   }
   .chip input { display: none; }
   .chip.on { color: var(--text); border-color: var(--accent); background: #1b2740; }
-  .chip .rm-route {
-    background: none; border: none; padding: 0 0 0 .15rem; color: var(--muted);
-    cursor: pointer; font-size: .8rem;
+  .chip .rm {
+    background: none; border: none; padding: 0 0 0 .1rem; height: auto;
+    color: var(--muted); cursor: pointer; font-size: .8rem;
   }
-  .chip .rm-route:hover { color: var(--bad); }
+  .chip .rm:hover { color: var(--bad); }
 
-  .newrow { display: flex; gap: .5rem; margin-top: .9rem; align-items: center; flex-wrap: wrap; }
-  .newrow input { max-width: 240px; }
   .token-box {
     background: var(--bg); border: 1px dashed var(--warn); border-radius: 8px;
     padding: .8rem .9rem; margin-top: .8rem; word-break: break-all;
     font-family: ui-monospace, monospace; font-size: .85rem;
   }
+  .token-box .b-copy { margin-top: .4rem; }
   .hint { color: var(--muted); font-size: .8rem; }
   .error { color: var(--bad); margin: .5rem 0; }
   .banner {
@@ -141,7 +146,7 @@ function toast(msg) {
   el.textContent = msg;
   el.style.display = "block";
   clearTimeout(el._t);
-  el._t = setTimeout(() => { el.style.display = "none"; }, 4000);
+  el._t = setTimeout(() => { el.style.display = "none"; }, 3500);
 }
 
 async function api(path, opts = {}) {
@@ -164,7 +169,7 @@ async function boot() {
   if (!session.authenticated) {
     who.innerHTML = "";
     app.innerHTML =
-      '<div class="card"><h2>Bring your observatory into Discord</h2>' +
+      '<div class="card"><h2 style="margin-top:0">Bring your observatory into Discord</h2>' +
       '<p>Add your telescopes, attach them to your servers, and let everyone ' +
       "watch sessions unfold — images, autofocus runs, guiding graphs, and " +
       "slash commands to drive the mount.</p>" +
@@ -216,48 +221,52 @@ function attachTargets(t) {
   return GUILDS.filter((g) => g.registered && !attached.has(g.id));
 }
 
+function rigBadge(connected) {
+  return connected
+    ? '<span class="badge good">rig online</span>'
+    : '<span class="badge warn">rig offline</span>';
+}
+
 function renderMyTelescopes(telescopes) {
   const card = document.createElement("div");
   card.className = "card";
   let html = '<div class="head"><h2>My telescopes</h2>' +
-    '<span class="hint">One per N.I.N.A. profile or relay agent — yours across every server.</span></div>';
+    '<div class="badges"><span class="hint">yours across every server</span></div></div>';
+  if (!telescopes.length) {
+    html += '<p class="hint" style="margin:.8rem 0 0">Add a telescope, attach it to a ' +
+      "server, then connect your rig with a pairing token.</p>";
+  }
   for (const t of telescopes) {
-    const connected = t.connected
-      ? '<span class="badge good">connected</span>'
-      : '<span class="badge warn">waiting for rig</span>';
-    const where = t.attachments.length
-      ? t.attachments.map((a) =>
-          esc(a.guild_name || a.guild_id) + (a.can_command ? "" : " (feed)")).join(", ")
-      : "not attached to any server yet";
+    const servers = t.attachments.length
+      ? '<div class="chips">' + t.attachments.map((a) =>
+          '<span class="chip on">' + esc(a.guild_name || a.guild_id) +
+          (a.can_command ? "" : ' <span class="hint">feed</span>') + "</span>").join("") +
+        "</div>"
+      : '<span class="hint">Not attached to any server yet.</span>';
     const targets = attachTargets(t);
-    const attachRow = targets.length
-      ? '<select class="f-attach">' + targets.map((g) =>
+    const attachControls = targets.length
+      ? '<div class="controls"><select class="pick f-attach">' + targets.map((g) =>
           '<option value="' + esc(g.id) + '">' + esc(g.name) + "</option>").join("") +
-        '</select><button class="b-attach">Attach to server</button>'
-      : '<span class="hint">Attached to all your registered servers.</span>';
+        '</select><button class="b-attach">Attach to server</button></div>'
+      : "";
     html +=
       '<div class="sub telescope" data-id="' + t.id + '">' +
-      '<div class="head"><b>' + esc(t.name) + "</b>" + connected +
-      '<span class="hint">' + where + '</span><span class="grow"></span></div>' +
-      '<div class="row">' +
-      '<span class="hint">Image cooldown (s)</span>' +
-      '<input class="f-cooldown" type="number" min="0" max="86400" style="max-width:6.5rem" value="' +
-      t.image_cooldown_seconds + '">' +
-      '<button class="b-save">Save</button>' +
-      attachRow +
-      "</div>" +
-      '<div class="actions">' +
-      '<button class="primary b-token">Pair a rig…</button>' +
-      '<button class="b-share">Share code…</button>' +
-      '<span class="spacer"></span>' +
-      '<button class="subtle danger b-revoke">Revoke access</button>' +
-      '<button class="subtle danger b-delete">Delete</button>' +
-      "</div></div>";
+      '<div class="head"><b>' + esc(t.name) + '</b>' +
+      '<div class="badges">' + rigBadge(t.connected) +
+      '<button class="subtle b-token">Connect rig…</button>' +
+      '<button class="subtle b-share">Share…</button>' +
+      '<button class="subtle danger b-revoke">Reset access</button>' +
+      '<button class="subtle danger b-delete">Delete</button></div></div>' +
+      '<div class="section"><label>Servers</label>' + servers + attachControls + "</div>" +
+      '<div class="section"><label>Image cooldown</label>' +
+      '<div class="controls"><input class="num f-cooldown" type="number" min="0" max="86400" value="' +
+      t.image_cooldown_seconds + '"><span class="hint">seconds between image posts — applies on change</span>' +
+      "</div></div></div>";
   }
   html +=
-    '<div class="newrow">' +
-    '<input class="new-name" placeholder="telescope name (e.g. c925)">' +
-    '<button class="b-create">Add telescope</button></div>' +
+    '<div class="controls" style="margin-top:.9rem">' +
+    '<input class="name new-name" placeholder="telescope name (e.g. c925)">' +
+    '<button class="primary b-create">Add telescope</button></div>' +
     '<div class="token-out"></div>';
   card.innerHTML = html;
   app.appendChild(card);
@@ -267,20 +276,18 @@ function renderMyTelescopes(telescopes) {
     if (!name) return;
     try {
       await api("/api/telescopes", { method: "POST", body: JSON.stringify({ name }) });
-      toast("Telescope added — attach it to a server, then pair the rig");
+      toast("Telescope added");
       renderAll();
     } catch (e) { toast(e.message); }
   };
 
   card.querySelectorAll(".telescope").forEach((row) => {
     const id = row.dataset.id;
-    row.querySelector(".b-save").onclick = async () => {
-      const body = {
-        image_cooldown_seconds: parseInt(row.querySelector(".f-cooldown").value, 10) || 0,
-      };
+    row.querySelector(".f-cooldown").onchange = async (ev) => {
+      const body = { image_cooldown_seconds: parseInt(ev.target.value, 10) || 0 };
       try {
         await api("/api/telescopes/" + id, { method: "PATCH", body: JSON.stringify(body) });
-        toast("Saved");
+        toast("Cooldown updated");
       } catch (e) { toast(e.message); }
     };
     const attach = row.querySelector(".b-attach");
@@ -298,8 +305,8 @@ function renderMyTelescopes(telescopes) {
     row.querySelector(".b-token").onclick = async () => {
       try {
         const out = await api("/api/telescopes/" + id + "/pairing-token", { method: "POST" });
-        showToken(card, "Pairing token (shown once, valid " +
-          Math.round(out.expires_in_seconds / 60) + " minutes)", out.token,
+        showToken(card, "Pairing token — shown once, valid " +
+          Math.round(out.expires_in_seconds / 60) + " minutes", out.token,
           "Paste into the N.I.N.A. plugin or the relay config, then connect. " +
           "Issuing a new token cancels this one.");
       } catch (e) { toast(e.message); }
@@ -307,29 +314,29 @@ function renderMyTelescopes(telescopes) {
     row.querySelector(".b-share").onclick = async () => {
       try {
         const out = await api("/api/telescopes/" + id + "/share-code", { method: "POST" });
-        showToken(card, "Share code (valid " +
-          Math.round(out.expires_in_seconds / 86400) + " days, single use)", out.code,
+        showToken(card, "Share code — single use, valid " +
+          Math.round(out.expires_in_seconds / 86400) + " days", out.code,
           "Give this to a manager of another server. They redeem it on their server " +
-          "card against one of their channels. Their server gets the feed and read " +
-          "commands; only servers you attach directly can drive the scope.");
+          "card, against one of their channels. Their server gets the feed and read " +
+          "commands; only servers you attach yourself can drive the telescope.");
       } catch (e) { toast(e.message); }
     };
     row.querySelector(".b-revoke").onclick = async () => {
-      if (!confirm("Revoke this telescope's rig credentials? The rig is disconnected " +
-        "and must re-pair with a new token.")) return;
+      if (!confirm("Reset this telescope's rig access? The connected rig is cut off " +
+        "and must pair again with a new token.")) return;
       try {
         await api("/api/telescopes/" + id + "/credentials", { method: "DELETE" });
         await api("/api/telescopes/" + id + "/pairing-tokens", { method: "DELETE" });
-        toast("Access revoked");
+        toast("Rig access reset");
         renderAll();
       } catch (e) { toast(e.message); }
     };
     row.querySelector(".b-delete").onclick = async () => {
-      if (!confirm("Delete this telescope everywhere? All attachments, destinations, " +
-        "and credentials go with it.")) return;
+      if (!confirm("Delete this telescope everywhere? All attachments, channels, " +
+        "and rig credentials go with it.")) return;
       try {
         await api("/api/telescopes/" + id, { method: "DELETE" });
-        toast("Deleted");
+        toast("Telescope deleted");
         renderAll();
       } catch (e) { toast(e.message); }
     };
@@ -350,22 +357,20 @@ function showToken(card, title, value, hint) {
 function renderGuildCard(g) {
   const card = document.createElement("div");
   card.className = "card";
-  const botBadge = g.bot_installed === null ? "" :
-    g.bot_installed ? '<span class="badge good">bot installed</span>'
-                    : '<span class="badge bad">bot not installed</span>';
-  const regBadge = g.registered ? '<span class="badge good">registered</span>'
-                                : '<span class="badge">not registered</span>';
-  let actions = "";
+  const badges = [];
+  if (g.registered) badges.push('<span class="badge good">registered</span>');
+  if (g.bot_installed === true) badges.push('<span class="badge good">bot installed</span>');
+  if (g.bot_installed === false) badges.push('<span class="badge bad">bot not installed</span>');
+  let action = "";
   if (g.bot_installed === false && g.install_url) {
-    actions += '<a href="' + esc(g.install_url) + '" target="_blank" rel="noopener">' +
-      '<button class="primary">Add bot to server</button></a> ';
-  }
-  if (!g.registered && g.bot_installed !== false) {
-    actions += '<button class="primary b-register">Set up this server</button>';
+    action = '<a href="' + esc(g.install_url) + '" target="_blank" rel="noopener">' +
+      '<button class="primary">Add bot to server</button></a>';
+  } else if (!g.registered) {
+    action = '<button class="primary b-register">Set up this server</button>';
   }
   card.innerHTML =
     '<div class="head"><h2>' + esc(g.name) + "</h2>" +
-    regBadge + " " + botBadge + " " + actions + "</div>" +
+    '<div class="badges">' + badges.join("") + action + "</div></div>" +
     '<div class="attachments"></div>';
   app.appendChild(card);
   const registerBtn = card.querySelector(".b-register");
@@ -384,46 +389,46 @@ function renderGuildCard(g) {
 const POLICY_OPTIONS = [
   ["admins", "Server managers"],
   ["roles", "Managers + selected roles"],
-  ["disabled", "Disabled"],
+  ["disabled", "Nobody (disabled)"],
 ];
 
-function addChannelSelect(options, used, cls) {
+function channelPicker(options, used, cls) {
   const free = options.channels.filter((c) => !used.includes(c.id));
   if (!options.channels.length) {
     const why = options.bot_configured === false
       ? "hub has no bot token"
-      : "none visible to the bot — check its channel permissions";
-    return '<select class="' + cls + '" disabled><option value="">no channels (' +
-      why + ")</option></select>";
+      : "none visible to the bot";
+    return '<select class="pick ' + cls + '" disabled><option value="">no channels — ' +
+      why + "</option></select>";
   }
   if (!free.length) {
-    return '<select class="' + cls + '" disabled><option value="">all channels routed</option></select>';
+    return '<select class="pick ' + cls + '" disabled><option value="">all channels in use</option></select>';
   }
-  return '<select class="' + cls + '">' + free.map((c) =>
+  return '<select class="pick ' + cls + '">' + free.map((c) =>
     '<option value="' + esc(c.id) + '">#' + esc(c.name) + "</option>").join("") + "</select>";
 }
 
-function roleChips(options, selected) {
-  if (!options.roles.length) {
-    return '<span class="hint">No assignable roles found in this server.</span>';
-  }
-  return '<div class="chips">' + options.roles.map((r) => {
-    const on = selected.includes(r.id);
-    return '<label class="chip' + (on ? " on" : "") + '"><input type="checkbox" value="' +
-      esc(r.id) + '"' + (on ? " checked" : "") + ">@" + esc(r.name) + "</label>";
-  }).join("") + "</div>";
-}
-
-function destinationChips(a) {
+function channelChips(a) {
   if (!a.channels.length) {
-    return '<span class="hint">No channels yet — this feed is not posting here.</span>';
+    return '<span class="hint">No channels yet — this telescope is not posting here.</span>';
   }
   return '<div class="chips">' + a.channels.map((route) => {
     const name = route.channel_name ? '#' + esc(route.channel_name)
                                     : "channel " + esc(route.channel_id);
     return '<span class="chip on">' + name +
-      ' <button type="button" class="rm-route" data-route="' + route.route_id +
-      '" title="Remove">✕</button></span>';
+      ' <button type="button" class="rm rm-route" data-route="' + route.route_id +
+      '" title="Remove channel">✕</button></span>';
+  }).join("") + "</div>";
+}
+
+function roleChips(options, selected) {
+  if (!options.roles.length) {
+    return '<span class="hint">No assignable roles in this server.</span>';
+  }
+  return '<div class="chips">' + options.roles.map((r) => {
+    const on = selected.includes(r.id);
+    return '<label class="chip' + (on ? " on" : "") + '"><input type="checkbox" value="' +
+      esc(r.id) + '"' + (on ? " checked" : "") + ">@" + esc(r.name) + "</label>";
   }).join("") + "</div>";
 }
 
@@ -439,54 +444,56 @@ async function renderAttachments(g, el) {
   const usedChannels = data.attachments.flatMap((a) => a.channels.map((r) => r.channel_id));
   let html = "";
   for (const a of data.attachments) {
-    const connected = a.connected
-      ? '<span class="badge good">connected</span>'
-      : '<span class="badge warn">waiting for rig</span>';
-    const kind = a.can_command
-      ? '<span class="badge good">commands enabled</span>'
-      : '<span class="badge">feed only</span>';
+    const badges =
+      rigBadge(a.connected) +
+      (a.can_command ? '<span class="badge good">can command</span>'
+                     : '<span class="badge">feed only</span>');
     const owner = a.owned_by_me ? "" :
-      '<span class="hint">from ' + esc(a.owner_name) + "</span>";
-    const policySelect = '<select class="f-policy">' + POLICY_OPTIONS.map(([v, label]) =>
-      '<option value="' + v + '"' + (a.write_policy === v ? " selected" : "") + ">" +
-      label + "</option>").join("") + "</select>";
+      '<span class="sub-note">shared by ' + esc(a.owner_name) + "</span>";
+    const commands = a.can_command
+      ? '<div class="section"><label>Commands — who may drive this telescope here</label>' +
+        '<div class="controls"><select class="pick f-policy">' +
+        POLICY_OPTIONS.map(([v, label]) =>
+          '<option value="' + v + '"' + (a.write_policy === v ? " selected" : "") + ">" +
+          label + "</option>").join("") +
+        '</select><span class="hint">applies on change</span></div>' +
+        '<div class="roles-field" style="margin-top:.5rem' +
+        (a.write_policy === "roles" ? "" : ";display:none") + '">' +
+        roleChips(options, a.allowed_role_ids) + "</div></div>"
+      : '<div class="section"><label>Commands</label>' +
+        '<span class="hint">This server receives the feed and read commands only.</span></div>';
     html +=
       '<div class="sub attachment" data-id="' + a.attachment_id + '">' +
-      '<div class="head"><b>' + esc(a.telescope_name) + "</b>" + owner + connected + kind +
-      '<span class="grow"></span>' +
-      '<button class="subtle danger b-detach">Detach</button></div>' +
-      '<div class="field"><label>Posts to channels</label>' + destinationChips(a) +
-      '<div class="row" style="margin-top:.5rem">' +
-      addChannelSelect(options, usedChannels, "f-addchan") +
+      '<div class="head"><b>' + esc(a.telescope_name) + "</b>" + owner +
+      '<div class="badges">' + badges +
+      '<button class="subtle danger b-detach">Detach</button></div></div>' +
+      '<div class="section"><label>Channels — where this telescope posts</label>' +
+      channelChips(a) +
+      '<div class="controls">' + channelPicker(options, usedChannels, "f-addchan") +
       '<button class="b-addchan">Add channel</button></div></div>' +
-      (a.can_command
-        ? '<div class="fields" style="margin-top:.8rem">' +
-          '<div class="field"><label>Who can send commands here</label>' + policySelect + "</div>" +
-          "</div>" +
-          '<div class="field roles-field" style="margin-top:.7rem' +
-          (a.write_policy === "roles" ? "" : ";display:none") + '">' +
-          "<label>Roles allowed to send commands (managers always can)</label>" +
-          roleChips(options, a.allowed_role_ids) + "</div>" +
-          '<div class="actions"><button class="primary b-savepolicy">Save permissions</button></div>'
-        : '<p class="hint" style="margin:.6rem 0 0">This server receives the feed and read ' +
-          "commands; it cannot drive the telescope.</p>") +
+      commands +
       "</div>";
   }
+  if (!data.attachments.length) {
+    html += '<p class="hint" style="margin:.8rem 0 0">No telescopes here yet. Attach one of ' +
+      "yours from “My telescopes”, or redeem a share code below.</p>";
+  }
   html +=
-    '<div class="newrow">' +
-    '<input class="share-code" placeholder="share code (cssh_…)">' +
-    addChannelSelect(options, usedChannels, "sub-channel") +
-    '<button class="b-subscribe">Add shared telescope</button>' +
-    '<span class="hint">Redeem a code from another server’s telescope owner.</span></div>';
+    '<div class="controls" style="margin-top:.9rem">' +
+    '<input class="name share-code" placeholder="share code (cssh_…)">' +
+    channelPicker(options, usedChannels, "sub-channel") +
+    '<button class="b-subscribe">Subscribe</button>' +
+    '<span class="hint">redeem a code from another server’s telescope owner</span></div>';
   el.innerHTML = html;
 
   el.querySelector(".b-subscribe").onclick = async () => {
     const code = el.querySelector(".share-code").value.trim();
-    const channel = el.querySelector(".sub-channel").value;
-    if (!code || !channel) { toast("Enter a share code and pick a channel"); return; }
+    const channelBox = el.querySelector(".sub-channel");
+    if (!code) { toast("Enter a share code"); return; }
+    if (channelBox.disabled || !channelBox.value) { toast("Pick a channel"); return; }
     try {
       const out = await api("/api/guilds/" + g.id + "/subscribe",
-        { method: "POST", body: JSON.stringify({ code, channel_id: channel }) });
+        { method: "POST", body: JSON.stringify({ code, channel_id: channelBox.value }) });
       toast("Subscribed to " + out.telescope_name);
       renderAll();
     } catch (e) { toast(e.message); }
@@ -496,27 +503,30 @@ async function renderAttachments(g, el) {
     const id = row.dataset.id;
     const rolesField = row.querySelector(".roles-field");
     const policy = row.querySelector(".f-policy");
+
+    const savePermissions = async () => {
+      const roles = [...row.querySelectorAll(".chip input:checked")].map((box) => box.value);
+      try {
+        await api("/api/attachments/" + id, {
+          method: "PATCH",
+          body: JSON.stringify({ write_policy: policy.value, allowed_role_ids: roles }),
+        });
+        toast("Permissions updated");
+      } catch (e) { toast(e.message); }
+    };
     if (policy) {
-      policy.onchange = (ev) => {
-        if (rolesField) rolesField.style.display = ev.target.value === "roles" ? "" : "none";
+      policy.onchange = () => {
+        if (rolesField) rolesField.style.display = policy.value === "roles" ? "" : "none";
+        savePermissions();
       };
     }
     row.querySelectorAll(".chip input").forEach((box) => {
-      box.onchange = () => box.closest(".chip").classList.toggle("on", box.checked);
-    });
-    const save = row.querySelector(".b-savepolicy");
-    if (save) {
-      save.onclick = async () => {
-        const roles = [...row.querySelectorAll(".chip input:checked")].map((box) => box.value);
-        try {
-          await api("/api/attachments/" + id, {
-            method: "PATCH",
-            body: JSON.stringify({ write_policy: policy.value, allowed_role_ids: roles }),
-          });
-          toast("Permissions saved");
-        } catch (e) { toast(e.message); }
+      box.onchange = () => {
+        box.closest(".chip").classList.toggle("on", box.checked);
+        savePermissions();
       };
-    }
+    });
+
     row.querySelector(".b-addchan").onclick = async () => {
       const box = row.querySelector(".f-addchan");
       if (box.disabled || !box.value) return;
@@ -524,7 +534,7 @@ async function renderAttachments(g, el) {
         await api("/api/attachments/" + id + "/channels",
           { method: "POST", body: JSON.stringify({ channel_id: box.value }) });
         toast("Channel added");
-        renderAll();
+        renderAttachments(g, el);
       } catch (e) { toast(e.message); }
     };
     row.querySelectorAll(".rm-route").forEach((btn) => {
@@ -533,7 +543,7 @@ async function renderAttachments(g, el) {
           await api("/api/attachments/" + id + "/channels/" + btn.dataset.route,
             { method: "DELETE" });
           toast("Channel removed");
-          renderAll();
+          renderAttachments(g, el);
         } catch (e) { toast(e.message); }
       };
     });
@@ -584,11 +594,21 @@ mod tests {
             "My telescopes",
             "Attach to server",
             "feed only",
-            "commands enabled",
+            "can command",
             "Detach",
         ] {
             assert!(INDEX_HTML.contains(needle), "missing {needle}");
         }
+    }
+
+    #[test]
+    fn page_applies_settings_instantly() {
+        // One interaction model: everything applies on change; no split
+        // between instant channels and save-button permissions.
+        assert!(!INDEX_HTML.contains("Save permissions"));
+        assert!(!INDEX_HTML.contains(">Save<"));
+        assert!(INDEX_HTML.contains("applies on change"));
+        assert!(INDEX_HTML.contains("savePermissions()"));
     }
 
     #[test]
