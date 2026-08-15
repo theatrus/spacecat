@@ -15,6 +15,7 @@ internal sealed class ChatstronomySettings
     internal const string DefaultHostedServiceUrl = "https://hub.chatstronomy.com/";
 
     private const string CredentialPrefix = "Chatstronomy.NINA";
+    private const string LegacyHostedServiceOrigin = "https://chatstronomy.com";
     private readonly IProfileService profileService;
     private readonly PluginOptionsAccessor options;
 
@@ -94,8 +95,29 @@ internal sealed class ChatstronomySettings
 
     public string HostedServiceUrl
     {
-        get => options.GetValueString(nameof(HostedServiceUrl), DefaultHostedServiceUrl);
+        get
+        {
+            var stored = options.GetValueString(
+                nameof(HostedServiceUrl),
+                DefaultHostedServiceUrl);
+            var normalized = NormalizeHostedServiceUrl(stored);
+            if (!string.Equals(stored, normalized, StringComparison.Ordinal))
+            {
+                options.SetValueString(nameof(HostedServiceUrl), normalized);
+            }
+            return normalized;
+        }
         set => options.SetValueString(nameof(HostedServiceUrl), value?.Trim() ?? string.Empty);
+    }
+
+    internal static string NormalizeHostedServiceUrl(string value)
+    {
+        var trimmed = value?.Trim() ?? string.Empty;
+        return trimmed.TrimEnd('/').Equals(
+            LegacyHostedServiceOrigin,
+            StringComparison.OrdinalIgnoreCase)
+            ? DefaultHostedServiceUrl
+            : trimmed;
     }
 
     public string ReadHostedCredential(Guid profileId, Uri serviceUrl)

@@ -22,6 +22,7 @@ internal static class Program
         Run("Discord application ID is optional", DiscordApplicationIdIsOptional);
         Run("Advanced API polling settings are validated", AdvancedApiPollingIsValidated);
         Run("Hosted mode defaults to the Chatstronomy hub", HostedModeDefaultsToHub);
+        Run("Legacy hosted defaults migrate to the hub", LegacyHostedDefaultsMigrateToHub);
         Run("Hosted hub URLs require TLS and map to Direct WSS", HostedHubUrlsAreSecure);
         Run("Hosted pair and auth frames match the Rust contract", HostedHandshakeFramesMatchRust);
         Run("Hosted secrets are scoped to profile and hub origin", HostedSecretsAreOriginScoped);
@@ -32,6 +33,9 @@ internal static class Program
         await RunAsync(
             "Hosted connection and authentication attempts time out",
             HostedConnectionAttemptsTimeOut);
+        await RunAsync(
+            "Hosted stop finalizes cleanup before honoring caller cancellation",
+            HostedStopFinalizesBeforeCallerCancellation);
         Run("Direct source does not require Advanced API settings", DirectSourceNeedsNoAdvancedApi);
         Run("Plugin runtime bootstrap is source-explicit", PluginRuntimeBootstrapIsSourceExplicit);
         Run("Direct runtime bootstrap carries only its pipe", DirectRuntimeBootstrapCarriesOnlyPipe);
@@ -177,6 +181,19 @@ internal static class Program
         AssertEqual(
             "wss://hub.chatstronomy.com/v1/direct",
             HubConnectionConfiguration.BuildWebSocketUrl(serviceUrl).AbsoluteUri);
+    }
+
+    private static void LegacyHostedDefaultsMigrateToHub()
+    {
+        AssertEqual(
+            ChatstronomySettings.DefaultHostedServiceUrl,
+            ChatstronomySettings.NormalizeHostedServiceUrl("https://chatstronomy.com/"));
+        AssertEqual(
+            ChatstronomySettings.DefaultHostedServiceUrl,
+            ChatstronomySettings.NormalizeHostedServiceUrl(" HTTPS://CHATSTRONOMY.COM "));
+        AssertEqual(
+            "https://private.example.test/",
+            ChatstronomySettings.NormalizeHostedServiceUrl("https://private.example.test/"));
     }
 
     private static void HostedHandshakeFramesMatchRust()
@@ -594,6 +611,38 @@ internal static class Program
             {
                 provider.Dispose();
             }
+        }
+    }
+
+    private static async Task HostedStopFinalizesBeforeCallerCancellation()
+    {
+        var hello = HostedHello();
+        var provider = new FakeDirectDataProvider();
+        provider.Start();
+        try
+        {
+            var client = new ChatstronomyHubClient(
+                provider,
+                new HangingHubSocketFactory(hangDuringConnect: true));
+            var configuration = new HubConnectionConfiguration(
+                new Uri("https://hub.example.test/"),
+                Credential: "csrc_existing",
+                PairingToken: null,
+                hello.ProfileId);
+            await client.StartAsync(configuration, hello, CancellationToken.None);
+            using var callerCancellation = new CancellationTokenSource();
+            callerCancellation.Cancel();
+
+            await AssertThrowsAsync<OperationCanceledException>(() =>
+                client.StopAsync(callerCancellation.Token));
+
+            AssertFalse(client.IsRunning);
+            AssertFalse(client.IsConnected);
+            AssertEqual("Hosted connection is stopped.", client.StatusMessage);
+        }
+        finally
+        {
+            provider.Dispose();
         }
     }
 

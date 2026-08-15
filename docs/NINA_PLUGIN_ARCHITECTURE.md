@@ -32,7 +32,7 @@ surface provides four mutually exclusive choices:
 | Discord webhook | Local computer | Windows Credential Manager | Outbound notifications |
 | Discord app / bot | Local computer | Windows Credential Manager | Notifications and Discord commands |
 | Matrix | Local computer | Windows Credential Manager | Matrix notifications and commands |
-| Chatstronomy.com | Hosted service | Hosted credential resolver | Hosted chat delivery and remote routing |
+| Chatstronomy.com | Hosted service | Windows Credential Manager (rig credential) | Hosted chat delivery and remote routing |
 
 Matrix can be selected as the only local chat service or enabled alongside either
 local Discord choice. Its homeserver must use HTTPS. The Matrix password uses the
@@ -256,8 +256,8 @@ implementations can be inspected and evolved easily.
   the resulting credential must be bound to the claimed node ID.
 - Discord and Matrix secrets for local mode are stored using Windows-protected
   credential storage, never in normal profile JSON or process arguments.
-- Remote control is disabled by default and enforced at both the chat layer and
-  the N.I.N.A. plugin.
+- Remote control is disabled by default in the hub policy. The N.I.N.A. plugin
+  independently enforces the closed typed-command allowlist and query expiry.
 - Commands carry correlation IDs and expiry times. Disconnected or expired
   commands fail rather than executing later.
 - Only thumbnails and selected metadata leave the observatory by default.

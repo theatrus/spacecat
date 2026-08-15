@@ -110,7 +110,6 @@ internal sealed class ChatstronomyHubClient
         }
 
         cancellation.Cancel();
-        cancellationToken.ThrowIfCancellationRequested();
         try
         {
             await running.ConfigureAwait(false);
@@ -123,6 +122,7 @@ internal sealed class ChatstronomyHubClient
             cancellation.Dispose();
             SetState(false, "Hosted connection is stopped.");
         }
+        cancellationToken.ThrowIfCancellationRequested();
     }
 
     internal async Task RunSingleConnectionAsync(
