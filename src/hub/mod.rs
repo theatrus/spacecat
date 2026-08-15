@@ -12,5 +12,7 @@ pub mod auth;
 pub mod config;
 pub mod db;
 pub mod discord_api;
+pub mod guild_check;
 pub mod server;
 pub mod store;
+pub mod tenants;

@@ -64,6 +64,39 @@ const MIGRATIONS: &[&str] = &[
         issued_at INTEGER NOT NULL,
         consumed_at INTEGER
     ) STRICT;",
+    // V3: tenancy. A Discord guild is a tenant; telescopes belong to a guild;
+    // pairing tokens are one-time secrets exchanged for rig credentials.
+    // Only the SHA-256 of a pairing token is stored.
+    "CREATE TABLE guilds (
+        guild_id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        registered_by INTEGER NOT NULL REFERENCES users(discord_user_id),
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+    ) STRICT;
+    CREATE TABLE telescopes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        guild_id INTEGER NOT NULL REFERENCES guilds(guild_id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        discord_channel_id INTEGER,
+        image_cooldown_seconds INTEGER NOT NULL DEFAULT 60,
+        write_policy TEXT NOT NULL DEFAULT 'disabled'
+            CHECK (write_policy IN ('disabled', 'roles')),
+        allowed_role_ids TEXT NOT NULL DEFAULT '[]',
+        created_by INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        UNIQUE (guild_id, name)
+    ) STRICT;
+    CREATE INDEX idx_telescopes_guild ON telescopes(guild_id);
+    CREATE TABLE pairing_tokens (
+        token_hash TEXT PRIMARY KEY,
+        telescope_id INTEGER NOT NULL REFERENCES telescopes(id) ON DELETE CASCADE,
+        created_by INTEGER NOT NULL,
+        issued_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        consumed_at INTEGER
+    ) STRICT;
+    CREATE INDEX idx_pairing_tokens_telescope ON pairing_tokens(telescope_id);",
 ];
 
 #[derive(Debug, thiserror::Error)]
