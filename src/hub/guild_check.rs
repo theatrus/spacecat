@@ -77,12 +77,17 @@ impl GuildChecker for SerenityGuildChecker {
 
     async fn guild_channels(&self, guild_id: u64) -> Vec<NamedId> {
         use serenity::model::channel::ChannelType;
-        let Ok(channels) = self
+        let channels = match self
             .http
             .get_channels(serenity::model::id::GuildId::new(guild_id))
             .await
-        else {
-            return Vec::new();
+        {
+            Ok(channels) => channels,
+            Err(e) => {
+                // An empty picker with no trace is undebuggable; say why.
+                eprintln!("Warning: channel listing for guild {guild_id} failed: {e}");
+                return Vec::new();
+            }
         };
         let mut out: Vec<NamedId> = channels
             .into_iter()
@@ -97,12 +102,16 @@ impl GuildChecker for SerenityGuildChecker {
     }
 
     async fn guild_roles(&self, guild_id: u64) -> Vec<NamedId> {
-        let Ok(roles) = self
+        let roles = match self
             .http
             .get_guild_roles(serenity::model::id::GuildId::new(guild_id))
             .await
-        else {
-            return Vec::new();
+        {
+            Ok(roles) => roles,
+            Err(e) => {
+                eprintln!("Warning: role listing for guild {guild_id} failed: {e}");
+                return Vec::new();
+            }
         };
         let mut out: Vec<NamedId> = roles
             .into_iter()

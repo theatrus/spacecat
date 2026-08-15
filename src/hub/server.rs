@@ -171,6 +171,7 @@ async fn healthz(State(state): State<HubState>) -> (StatusCode, Json<serde_json:
                 "version": crate::version::VERSION_STRING,
                 "schema_version": version,
                 "oauth_configured": state.oauth.is_some(),
+                "bot_configured": state.guild_checker.is_some(),
             })),
         ),
         Err(e) => (
@@ -501,7 +502,14 @@ async fn api_list_guilds(State(state): State<HubState>, headers: HeaderMap) -> R
             "install_url": install_url,
         }));
     }
-    Json(serde_json::json!({ "guilds": out })).into_response()
+    Json(serde_json::json!({
+        "guilds": out,
+        // False means the hub runs without a bot token: pickers, install
+        // badges, notifications, and commands are all inert. The UI shows
+        // an operator-facing banner instead of quietly looking broken.
+        "bot_configured": state.guild_checker.is_some(),
+    }))
+    .into_response()
 }
 
 /// Register a guild as a tenant. Requires the bot to be installed when a
@@ -906,6 +914,7 @@ async fn api_guild_options(
     Json(serde_json::json!({
         "channels": to_json(channels),
         "roles": to_json(roles),
+        "bot_configured": state.guild_checker.is_some(),
     }))
     .into_response()
 }
@@ -989,7 +998,21 @@ pub async fn serve(
     db: Db,
 ) -> Result<(), HubError> {
     let guild_checker: Option<Arc<dyn GuildChecker>> = if config.discord.bot_token.is_empty() {
-        println!("No bot token configured; live guild checks are disabled");
+        if config.oauth_configured() {
+            // Half-configured is the worst state: login works, so the hub
+            // *looks* alive while pickers, badges, notifications, and
+            // commands are all inert. Be impossible to miss.
+            eprintln!("==========================================================");
+            eprintln!("WARNING: discord.bot_token is EMPTY in the hub config.");
+            eprintln!("Web login works, but everything the bot powers is OFF:");
+            eprintln!("  - channel/role pickers show nothing");
+            eprintln!("  - bot-installed badges and install checks are skipped");
+            eprintln!("  - no notifications are posted, no slash commands work");
+            eprintln!("Set discord.bot_token (Developer Portal -> Bot) and restart.");
+            eprintln!("==========================================================");
+        } else {
+            println!("No bot token configured; live guild checks are disabled");
+        }
         None
     } else {
         Some(Arc::new(CachedGuildChecker::new(
@@ -1131,6 +1154,7 @@ mod tests {
         assert_eq!(body["status"], "ok");
         assert!(body["schema_version"].as_u64().unwrap() >= 2);
         assert_eq!(body["oauth_configured"], false);
+        assert_eq!(body["bot_configured"], false);
     }
 
     #[tokio::test]
@@ -1730,6 +1754,7 @@ mod tests {
         assert_eq!(body["channels"][0]["name"], "observatory");
         assert_eq!(body["roles"][0]["id"], "1111");
         assert_eq!(body["roles"][0]["name"], "astronomers");
+        assert_eq!(body["bot_configured"], true);
 
         // Options are manage-gated like everything else.
         let anonymous = reqwest::get(format!("{base}/api/guilds/{OWNED_GUILD}/options"))
