@@ -1,6 +1,6 @@
 //! Versioned messages exchanged between N.I.N.A. plugins and a Chatstronomy hub.
 
-use crate::source::RigCapabilities;
+use crate::source::{RigCapabilities, RigCommand};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -87,7 +87,7 @@ pub struct AuthRequest {
 
 /// A read or command the hub asks the connected rig to perform. The rig
 /// answers with a [`QueryResult`] carrying the same `id`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct QueryRequest {
     pub id: Uuid,
     #[serde(flatten)]
@@ -97,15 +97,13 @@ pub struct QueryRequest {
 /// The operations a rig can be asked to perform. These mirror the
 /// [`crate::source::RigSource`] surface; each result payload is the JSON of
 /// the corresponding response type.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum QueryKind {
     EventHistory,
     ImageHistory,
     Sequence,
-    Thumbnail {
-        index: u32,
-    },
+    Thumbnail { index: u32 },
     LastAutofocus,
     MountInfo,
     FilterwheelInfo,
@@ -113,10 +111,7 @@ pub enum QueryKind {
     GuiderGraph,
     RotatorInfo,
     FocuserInfo,
-    Command {
-        endpoint: String,
-        params: Vec<(String, String)>,
-    },
+    Command { command: RigCommand },
 }
 
 /// Answer to a [`QueryRequest`]. On success `payload` holds the JSON of the
@@ -225,13 +220,16 @@ mod tests {
         let message = DirectMessage::Query(QueryRequest {
             id: Uuid::new_v4(),
             kind: QueryKind::Command {
-                endpoint: "equipment/mount/unpark".to_string(),
-                params: vec![("wait".to_string(), "true".to_string())],
+                command: RigCommand::StartSequence {
+                    skip_validation: true,
+                },
             },
         });
         let json = serde_json::to_string(&message).unwrap();
         let back: DirectMessage = serde_json::from_str(&json).unwrap();
         assert_eq!(back, message);
+        assert!(json.contains("start_sequence"));
+        assert!(!json.contains("/sequence/start"));
     }
 
     #[test]

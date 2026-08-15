@@ -4,6 +4,8 @@
 //! identity, registration, and JSON compatibility can be tested on every CI
 //! platform before the Windows named-pipe listener is introduced.
 
+#[cfg(windows)]
+pub mod pipe_source;
 pub mod protocol;
 pub mod registry;
 

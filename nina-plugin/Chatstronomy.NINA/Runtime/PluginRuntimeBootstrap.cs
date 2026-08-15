@@ -2,6 +2,7 @@ using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Chatstronomy.NINA.Configuration;
+using Chatstronomy.NINA.Protocol;
 
 namespace Chatstronomy.NINA.Runtime;
 
@@ -17,7 +18,9 @@ internal static class PluginRuntimeBootstrap
 
     internal static string Serialize(
         ChatstronomyConfiguration configuration,
-        LocalRuntimeIdentity identity)
+        LocalRuntimeIdentity identity,
+        string? directPipeName = null,
+        DirectCapabilities? directCapabilities = null)
     {
         var localRuntime = configuration.LocalRuntime
             ?? throw new InvalidOperationException(
@@ -25,6 +28,17 @@ internal static class PluginRuntimeBootstrap
 
         var source = localRuntime.Source switch
         {
+            NinaDirectSourceConfiguration => new RuntimeSourcePayload
+            {
+                Kind = "nina_direct",
+                PipeName = string.IsNullOrWhiteSpace(directPipeName)
+                    ? throw new InvalidOperationException(
+                        "A Direct data pipe is required for native N.I.N.A. mode.")
+                    : directPipeName,
+                Capabilities = directCapabilities
+                    ?? throw new InvalidOperationException(
+                        "Direct capabilities are required for native N.I.N.A. mode."),
+            },
             AdvancedApiPollingSourceConfiguration advancedApi => new RuntimeSourcePayload
             {
                 Kind = "advanced_api_polling",
@@ -118,9 +132,13 @@ internal static class PluginRuntimeBootstrap
     {
         public required string Kind { get; init; }
 
-        public required string BaseUrl { get; init; }
+        public string? PipeName { get; init; }
 
-        public required uint PollIntervalSeconds { get; init; }
+        public DirectCapabilities? Capabilities { get; init; }
+
+        public string? BaseUrl { get; init; }
+
+        public uint? PollIntervalSeconds { get; init; }
     }
 
     private sealed class RuntimeDeliveryPayload

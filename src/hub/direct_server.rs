@@ -471,7 +471,7 @@ mod tests {
 
         // Command path.
         let result = source
-            .execute_command("/equipment/mount/unpark", &[])
+            .execute_command(crate::source::RigCommand::UnparkMount)
             .await
             .unwrap();
         assert!(result.success);

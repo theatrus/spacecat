@@ -119,6 +119,20 @@ internal sealed class ChatstronomySettings
         set => options.SetValueString(nameof(AdvancedApiBaseUrl), value?.Trim() ?? string.Empty);
     }
 
+    public RuntimeSourceMode RuntimeSourceMode
+    {
+        get
+        {
+            var value = options.GetValueString(
+                nameof(RuntimeSourceMode),
+                global::Chatstronomy.NINA.Settings.RuntimeSourceMode.Direct.ToString());
+            return Enum.TryParse<RuntimeSourceMode>(value, out var mode)
+                ? mode
+                : global::Chatstronomy.NINA.Settings.RuntimeSourceMode.Direct;
+        }
+        set => options.SetValueString(nameof(RuntimeSourceMode), value.ToString());
+    }
+
     public string PollingIntervalSeconds
     {
         get => options.GetValueString(nameof(PollingIntervalSeconds), "5");

@@ -95,6 +95,88 @@ pub enum RigSourceError {
 pub type RigSourceResult<T> = Result<T, RigSourceError>;
 pub type SharedRigSource = Arc<dyn RigSource>;
 
+/// Closed, transport-neutral write surface exposed to chat commands.
+///
+/// Advanced API sources translate these operations to their legacy HTTP
+/// routes. Direct sources send the typed value to the N.I.N.A. plugin, which
+/// never needs to parse or authorize arbitrary endpoint strings.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RigCommand {
+    UnparkMount,
+    HomeMount,
+    ChangeFilter { filter_id: i32 },
+    StartGuiding { calibrate: bool },
+    StopGuiding,
+    CoolCamera { temperature: f64, minutes: f64 },
+    WarmCamera { minutes: f64 },
+    StartAutofocus,
+    CancelAutofocus,
+    ParkMount,
+    AbortExposure,
+    StopSequence,
+    StartSequence { skip_validation: bool },
+}
+
+impl RigCommand {
+    fn advanced_api_request(&self) -> (&'static str, Vec<(&'static str, String)>) {
+        match self {
+            Self::UnparkMount => ("/equipment/mount/unpark", Vec::new()),
+            Self::HomeMount => ("/equipment/mount/home", Vec::new()),
+            Self::ChangeFilter { filter_id } => (
+                "/equipment/filterwheel/change-filter",
+                vec![("filterId", filter_id.to_string())],
+            ),
+            Self::StartGuiding { calibrate } => (
+                "/equipment/guider/start",
+                vec![("calibrate", calibrate.to_string())],
+            ),
+            Self::StopGuiding => ("/equipment/guider/stop", Vec::new()),
+            Self::CoolCamera {
+                temperature,
+                minutes,
+            } => (
+                "/equipment/camera/cool",
+                vec![
+                    ("temperature", temperature.to_string()),
+                    ("minutes", minutes.to_string()),
+                ],
+            ),
+            Self::WarmCamera { minutes } => (
+                "/equipment/camera/warm",
+                vec![("minutes", minutes.to_string())],
+            ),
+            Self::StartAutofocus => (
+                "/equipment/focuser/auto-focus",
+                vec![("cancel", "false".to_string())],
+            ),
+            Self::CancelAutofocus => (
+                "/equipment/focuser/auto-focus",
+                vec![("cancel", "true".to_string())],
+            ),
+            Self::ParkMount => ("/equipment/mount/park", Vec::new()),
+            Self::AbortExposure => ("/equipment/camera/abort-exposure", Vec::new()),
+            Self::StopSequence => ("/sequence/stop", Vec::new()),
+            Self::StartSequence { skip_validation } => (
+                "/sequence/start",
+                vec![("skipValidation", skip_validation.to_string())],
+            ),
+        }
+    }
+
+    pub async fn execute_with_advanced_api(
+        &self,
+        client: &ChatstronomyApiClient,
+    ) -> Result<CommandResponse, ApiError> {
+        let (endpoint, params) = self.advanced_api_request();
+        let borrowed: Vec<(&str, &str)> = params
+            .iter()
+            .map(|(key, value)| (*key, value.as_str()))
+            .collect();
+        client.execute_command(endpoint, &borrowed).await
+    }
+}
+
 /// Source-neutral read and command surface used by Chatstronomy's runtime.
 ///
 /// This intentionally describes the capabilities Chatstronomy consumes rather
@@ -116,11 +198,7 @@ pub trait RigSource: Send + Sync {
     async fn get_guider_graph(&self) -> RigSourceResult<GuiderGraphResponse>;
     async fn get_rotator_info(&self) -> RigSourceResult<RotatorInfoResponse>;
     async fn get_focuser_info(&self) -> RigSourceResult<FocuserInfoResponse>;
-    async fn execute_command(
-        &self,
-        endpoint: &str,
-        params: &[(&str, &str)],
-    ) -> RigSourceResult<CommandResponse>;
+    async fn execute_command(&self, command: RigCommand) -> RigSourceResult<CommandResponse>;
 }
 
 /// Existing Advanced API behavior exposed through [`RigSource`].
@@ -199,12 +277,8 @@ impl RigSource for AdvancedApiSource {
         Ok(self.client.get_focuser_info().await?)
     }
 
-    async fn execute_command(
-        &self,
-        endpoint: &str,
-        params: &[(&str, &str)],
-    ) -> RigSourceResult<CommandResponse> {
-        Ok(self.client.execute_command(endpoint, params).await?)
+    async fn execute_command(&self, command: RigCommand) -> RigSourceResult<CommandResponse> {
+        Ok(command.execute_with_advanced_api(&self.client).await?)
     }
 }
 
@@ -234,6 +308,26 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&RigSourceKind::NinaDirect).unwrap(),
             r#""nina_direct""#
+        );
+    }
+
+    #[test]
+    fn commands_have_stable_semantic_wire_names() {
+        assert_eq!(
+            serde_json::to_value(RigCommand::CoolCamera {
+                temperature: -10.0,
+                minutes: 15.0,
+            })
+            .unwrap(),
+            serde_json::json!({
+                "kind": "cool_camera",
+                "temperature": -10.0,
+                "minutes": 15.0,
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(RigCommand::ParkMount).unwrap(),
+            serde_json::json!({"kind": "park_mount"})
         );
     }
 }

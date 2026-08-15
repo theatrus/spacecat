@@ -10,6 +10,7 @@ use crate::chat::{
 use crate::config::{
     ApiConfig, Config, TelescopeConfig, is_valid_discord_webhook_url, is_valid_https_url,
 };
+use crate::source::RigCapabilities;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use url::Url;
@@ -42,6 +43,10 @@ pub struct PluginRuntimeProfile {
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PluginRuntimeSource {
+    NinaDirect {
+        pipe_name: String,
+        capabilities: RigCapabilities,
+    },
     AdvancedApiPolling {
         base_url: String,
         poll_interval_seconds: u64,
@@ -105,6 +110,9 @@ impl PluginRuntimeBootstrap {
         }
 
         match &self.source {
+            PluginRuntimeSource::NinaDirect { pipe_name, .. } => {
+                validate_pipe_name(pipe_name)?;
+            }
             PluginRuntimeSource::AdvancedApiPolling {
                 base_url,
                 poll_interval_seconds,
@@ -159,6 +167,7 @@ impl PluginRuntimeBootstrap {
 
     pub fn poll_interval_seconds(&self) -> u64 {
         match &self.source {
+            PluginRuntimeSource::NinaDirect { .. } => 5,
             PluginRuntimeSource::AdvancedApiPolling {
                 poll_interval_seconds,
                 ..
@@ -217,6 +226,11 @@ impl PluginRuntimeBootstrap {
         }
 
         let (base_url, _) = match self.source {
+            // The source override passed to ServiceWrapper owns all I/O in
+            // Direct mode. Config still carries an ApiConfig for compatibility
+            // with the existing on-disk telescope schema, but this loopback
+            // value is never contacted.
+            PluginRuntimeSource::NinaDirect { .. } => ("http://127.0.0.1:1/".to_string(), 5),
             PluginRuntimeSource::AdvancedApiPolling {
                 base_url,
                 poll_interval_seconds,
@@ -252,12 +266,29 @@ fn validate_http_url(value: &str, label: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_pipe_name(value: &str) -> Result<(), String> {
+    if value.is_empty()
+        || value.len() > 200
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    {
+        return Err(
+            "Direct pipe name must contain only ASCII letters, digits, '-' or '_'".to_string(),
+        );
+    }
+    Ok(())
+}
+
 #[cfg(windows)]
 pub async fn run_from_named_pipe(
     pipe_name: &str,
     log_file: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    use crate::direct::pipe_source::DirectPipeRigSource;
     use crate::service_wrapper::ServiceWrapper;
+    use crate::source::SharedRigSource;
+    use std::collections::HashMap;
     use std::fs::{self, OpenOptions};
     use std::os::windows::io::AsRawHandle;
     use std::time::{Duration, Instant};
@@ -315,6 +346,16 @@ pub async fn run_from_named_pipe(
     bootstrap.validate()?;
     let poll_interval = bootstrap.poll_interval_seconds();
     let exit_on_disconnect = bootstrap.exit_on_control_disconnect;
+    let telescope_name = bootstrap.profile.profile_name.clone();
+    let direct_source: Option<SharedRigSource> = match &bootstrap.source {
+        PluginRuntimeSource::NinaDirect {
+            pipe_name,
+            capabilities,
+        } => Some(std::sync::Arc::new(
+            DirectPipeRigSource::connect(pipe_name, *capabilities).await?,
+        )),
+        PluginRuntimeSource::AdvancedApiPolling { .. } => None,
+    };
     let config = bootstrap.into_config()?;
 
     write_half
@@ -328,6 +369,10 @@ pub async fn run_from_named_pipe(
     write_half.flush().await?;
 
     let service = ServiceWrapper::new(config)?;
+    let mut source_overrides = HashMap::new();
+    if let Some(source) = direct_source {
+        source_overrides.insert(telescope_name, source);
+    }
     let control = async move {
         loop {
             match lines.next_line().await? {
@@ -349,7 +394,7 @@ pub async fn run_from_named_pipe(
     };
 
     tokio::select! {
-        result = service.run_cli(poll_interval) => result.map_err(Into::into),
+        result = service.run_cli_with_sources(poll_interval, source_overrides) => result.map_err(Into::into),
         result = control => result,
     }
 }
@@ -452,5 +497,40 @@ mod tests {
             .validate()
             .unwrap_err();
         assert!(error.contains("polling interval"));
+    }
+
+    #[test]
+    fn native_direct_source_has_no_http_dependency() {
+        let json = sample_json(
+            r#"{"kind":"discord_webhook","webhook_url":"https://discord.com/api/webhooks/123/token"}"#,
+            "null",
+        )
+        .replace(
+            r#""source": {
+                    "kind": "advanced_api_polling",
+                    "base_url": "http://127.0.0.1:1888/",
+                    "poll_interval_seconds": 7
+                }"#,
+            r#""source": {
+                    "kind": "nina_direct",
+                    "pipe_name": "chatstronomy-direct-test",
+                    "capabilities": {
+                        "event_history": true,
+                        "image_history": true,
+                        "thumbnails": false,
+                        "sequence": false,
+                        "equipment_snapshots": true,
+                        "autofocus_details": false,
+                        "guider_graph": false,
+                        "commands": false
+                    }
+                }"#,
+        );
+        let bootstrap = PluginRuntimeBootstrap::from_json(&json).unwrap();
+        bootstrap.validate().unwrap();
+        assert_eq!(bootstrap.poll_interval_seconds(), 5);
+        let config = bootstrap.into_config().unwrap();
+        assert_eq!(config.telescopes[0].name, "North Rig");
+        assert!(!json.contains("127.0.0.1:1888"));
     }
 }

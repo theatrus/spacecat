@@ -69,10 +69,10 @@ The source-neutral interface consumed by polling, state tracking, chat commands,
 and image delivery. `AdvancedApiSource` is the first implementation and delegates
 to the existing `ChatstronomyApiClient`.
 
-`NinaDirectSource` will satisfy the same operations from the latest native
-snapshot and request/response messages carried over the Direct protocol. Each
-source advertises capabilities so callers can report unsupported operations
-clearly.
+`DirectPipeRigSource` satisfies native operations from snapshots and
+request/response messages carried over the plugin-owned data pipe. Each source
+advertises capabilities so callers skip unsupported operations and report an
+unsupported write clearly.
 
 The parity boundary is the `RigSource` operation set, not the Advanced API wire
 format:
@@ -93,10 +93,11 @@ history, while allowing incremental events to be pushed as the protocol grows.
 Any refresh cadence used by the Rust state reducer is independent of the HTTP
 transport and must not require an Advanced API URL in Direct mode.
 
-Before native command execution is enabled, the protocol's temporary generic
-`Command { endpoint, params }` request will be replaced with typed command
-variants. This keeps Advanced API route strings out of the N.I.N.A. plugin and
-makes the allowed Direct write surface auditable on both sides.
+The protocol carries typed command variants such as `park_mount`, `cool_camera`,
+and `start_sequence`. Advanced API sources translate those semantic operations
+to legacy routes internally; route strings never cross into the N.I.N.A. plugin.
+Native execution remains disabled until every advertised write has a tested
+mediator implementation, keeping the allowlist auditable on both sides.
 
 Only one source is authoritative for a rig. Chatstronomy will not automatically
 merge or fail over between Direct and Advanced API sources because duplicate
@@ -157,7 +158,8 @@ Local is the simple all-in-one path for a single imaging computer:
 2. Leave **Connection mode** set to **Local**.
 3. Select Discord webhook, Discord app / bot, or Matrix-only delivery. Matrix can
    also be enabled alongside either Discord choice.
-4. In Advanced API polling mode, leave the endpoint at
+4. Leave **N.I.N.A. data source** set to **Direct** for the simple setup. In
+   Advanced API compatibility mode, leave the endpoint at
    `http://127.0.0.1:1888/` or enter the configured API address and choose the
    polling interval.
 5. The plugin starts the bundled Chatstronomy runtime, transfers the in-memory
@@ -168,6 +170,9 @@ installation because the plugin implements Chatstronomy's required source hooks
 directly from N.I.N.A. The initial working compatibility path continues to poll
 the separately installed Advanced API plugin. Chat credentials remain on that
 computer in Windows Credential Manager rather than normal profile JSON.
+The local Direct runtime is necessarily supervised for the lifetime of the
+N.I.N.A. plugin session; only Advanced API mode can detach and continue after
+N.I.N.A. exits.
 
 ### Remote
 
@@ -214,7 +219,7 @@ N.I.N.A. PC B / profile Remote  --WSS-->
 
 ## Protocol direction
 
-The Direct protocol will use versioned envelopes for:
+The Direct protocol uses versioned envelopes for:
 
 - agent/plugin hello and capability negotiation;
 - full snapshots and incremental events;
@@ -223,8 +228,10 @@ The Direct protocol will use versioned envelopes for:
 - commands and command results;
 - acknowledgements and heartbeats.
 
-Local communication uses a Windows named pipe named
-`chatstronomy-agent-v1-<node-id>` so installations cannot collide.
+The supervised local runtime uses a random current-user-only data pipe whose name
+is transferred through the separate secure bootstrap pipe. The node-scoped
+`chatstronomy-agent-v1-<node-id>` name remains reserved for independently managed
+local agent discovery.
 Cross-system communication uses the same logical envelopes over an outbound TLS
 WebSocket at `/v1/direct`. The initial wire representation is JSON so both
 implementations can be inspected and evolved easily.
@@ -249,10 +256,11 @@ implementations can be inspected and evolved easily.
 2. Remove concrete API-client dependencies from chat polling and commands.
 3. Define and test Direct identities, registration, and transport-neutral
    envelopes.
-4. Implement every consumed Advanced API hook through N.I.N.A. mediators, bounded
-   history caches, and typed read-only operations.
-5. Add local named-pipe and remote WebSocket transports plus plugin settings.
-6. Validate feature parity, including autofocus and guide graphs.
+4. Complete the remaining sequence, autofocus-result, and native command hooks;
+   event/image/thumbnail/guide histories and equipment snapshots are implemented.
+5. Extend the working local named-pipe transport with the remote plugin WebSocket
+   client and hosted settings.
+6. Validate full feature parity, including sequence and autofocus details.
 7. Add pairing, node-bound credentials, and relay hardening.
 8. Package the plugin DLL and optional Windows runtime into a checksummed
    N.I.N.A. plugin ZIP.

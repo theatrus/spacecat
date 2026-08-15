@@ -64,12 +64,16 @@ tokens, and Matrix passwords are never placed in arguments or a temporary JSON
 file. The same pipe carries graceful shutdown, while the opt-out setting allows
 the runtime to detach and continue independently.
 
-The working source in this runtime slice is `advanced_api_polling`, with a URL
-and 1–300 second interval. The source is tagged independently in the bootstrap
-protocol so native Direct can replace every consumed Advanced API hook without
-changing the process or delivery lifecycle. Direct will answer the same logical
-`RigSource` operations from mediator snapshots and plugin-maintained history; it
-will not expose a duplicate HTTP API.
+The supervised runtime supports both source payloads. `advanced_api_polling`
+carries a URL and 1–300 second interval. `nina_direct` carries a random
+current-user-only data-pipe name plus negotiated capabilities and requires no
+Advanced API URL. Direct answers the same logical `RigSource` operations from
+mediator snapshots and plugin-maintained history; it does not expose a duplicate
+HTTP API.
+
+Local Direct mode always starts and stops the bundled runtime with N.I.N.A.
+because the native data pipe belongs to the loaded plugin session. Advanced API
+mode may instead point at a separately managed Chatstronomy process.
 
 ## Build
 
@@ -115,7 +119,8 @@ artwork. Windows surfaces use the multi-resolution
 
 The project exports the N.I.N.A. plugin manifest, options UI, validated
 source/delivery configuration, Windows-protected local secret storage, supervised
-process controller, secure bootstrap pipe, bundled runtime, and shared
-multi-system identity handshake. Native event collection, the stable Direct data
-pipe, the plugin's remote WebSocket client, and hosted credential acquisition
-remain follow-up implementation stages.
+process controller, secure bootstrap and Direct data pipes, bounded native event,
+image, thumbnail, and guider histories, live equipment snapshots, the bundled
+runtime, and the shared multi-system identity handshake. Sequence normalization,
+native autofocus result details and command execution, the plugin's remote
+WebSocket client, and hosted credential acquisition remain follow-up stages.

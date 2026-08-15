@@ -24,6 +24,17 @@ impl ServiceWrapper {
     /// one Discord bot) is built once and shared by reference across every
     /// telescope task.
     pub async fn run_cli(&self, interval: u64) -> ServiceResult<()> {
+        self.run_cli_with_sources(interval, HashMap::new()).await
+    }
+
+    /// Run with explicit per-telescope sources. The plugin-owned runtime uses
+    /// this to supply a native named-pipe source without changing chat routing
+    /// or the updater's source-neutral behavior.
+    pub async fn run_cli_with_sources(
+        &self,
+        interval: u64,
+        source_overrides: HashMap<String, SharedRigSource>,
+    ) -> ServiceResult<()> {
         if self.config.telescopes.is_empty() {
             return Err(ServiceError::Initialization {
                 reason: "No telescopes configured.".to_string(),
@@ -31,11 +42,11 @@ impl ServiceWrapper {
         }
 
         let (chat_manager, _bot_join) =
-            build_shared_chat_manager(&self.config).await.map_err(|e| {
-                ServiceError::Initialization {
+            build_shared_chat_manager_with_sources(&self.config, &source_overrides)
+                .await
+                .map_err(|e| ServiceError::Initialization {
                     reason: e.to_string(),
-                }
-            })?;
+                })?;
         let chat_manager = Arc::new(chat_manager);
 
         let poll_interval = Duration::from_secs(interval);
@@ -43,8 +54,10 @@ impl ServiceWrapper {
         for telescope in &self.config.telescopes {
             let telescope = telescope.clone();
             let chat_manager = chat_manager.clone();
+            let source = source_overrides.get(&telescope.name).cloned();
             let handle = tokio::spawn(async move {
-                match build_chat_updater(telescope.clone(), chat_manager).await {
+                match build_chat_updater_with_source(telescope.clone(), chat_manager, source).await
+                {
                     Ok(mut updater) => {
                         updater.start_polling(poll_interval).await;
                     }
@@ -73,6 +86,13 @@ impl ServiceWrapper {
 /// the bot task alive for the life of the process; drop it to detach.
 pub async fn build_shared_chat_manager(
     config: &Config,
+) -> Result<(ChatServiceManager, Option<tokio::task::JoinHandle<()>>), ChatstronomyError> {
+    build_shared_chat_manager_with_sources(config, &HashMap::new()).await
+}
+
+async fn build_shared_chat_manager_with_sources(
+    config: &Config,
+    source_overrides: &HashMap<String, SharedRigSource>,
 ) -> Result<(ChatServiceManager, Option<tokio::task::JoinHandle<()>>), ChatstronomyError> {
     let chat = &config.chat;
     let mut manager = ChatServiceManager::new();
@@ -123,16 +143,20 @@ pub async fn build_shared_chat_manager(
         );
 
         // Build the per-telescope source map and the channel routing table the
-        // bot needs for slash commands. Advanced API remains the configured
-        // source until direct-mode configuration is introduced. Warn (don't error) if a
-        // telescope has both a channel_id and a webhook_url — the channel
-        // takes precedence and the webhook is ignored.
+        // bot needs for slash commands. A plugin runtime can override a rig
+        // with its native Direct pipe; independently configured deployments
+        // keep using Advanced API. Warn (don't error) if a telescope has both
+        // a channel_id and a webhook_url — the channel takes precedence.
         let mut rig_sources: HashMap<String, SharedRigSource> = HashMap::new();
         let mut channel_to_telescope = HashMap::new();
         for telescope in &config.telescopes {
-            let source: SharedRigSource = Arc::new(
-                AdvancedApiSource::new(telescope.api.clone()).map_err(ChatstronomyError::Api)?,
-            );
+            let source: SharedRigSource = match source_overrides.get(&telescope.name) {
+                Some(source) => source.clone(),
+                None => Arc::new(
+                    AdvancedApiSource::new(telescope.api.clone())
+                        .map_err(ChatstronomyError::Api)?,
+                ),
+            };
             rig_sources.insert(telescope.name.clone(), source);
             if let Some(channel_id) = telescope.chat.discord_channel_id {
                 channel_to_telescope.insert(channel_id, telescope.name.clone());
@@ -165,8 +189,20 @@ pub async fn build_chat_updater(
     telescope: TelescopeConfig,
     chat_manager: Arc<ChatServiceManager>,
 ) -> Result<ChatUpdater, ChatstronomyError> {
-    let source: SharedRigSource =
-        Arc::new(AdvancedApiSource::new(telescope.api.clone()).map_err(ChatstronomyError::Api)?);
+    build_chat_updater_with_source(telescope, chat_manager, None).await
+}
+
+async fn build_chat_updater_with_source(
+    telescope: TelescopeConfig,
+    chat_manager: Arc<ChatServiceManager>,
+    source: Option<SharedRigSource>,
+) -> Result<ChatUpdater, ChatstronomyError> {
+    let source: SharedRigSource = match source {
+        Some(source) => source,
+        None => {
+            Arc::new(AdvancedApiSource::new(telescope.api.clone()).map_err(ChatstronomyError::Api)?)
+        }
+    };
     let target = telescope.chat.to_chat_target();
     Ok(
         ChatUpdater::new(source, telescope.name.clone(), target, chat_manager)

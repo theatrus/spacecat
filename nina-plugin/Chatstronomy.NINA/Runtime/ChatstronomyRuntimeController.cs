@@ -4,6 +4,7 @@ using System.IO.Pipes;
 using System.Text;
 using System.Text.Json;
 using Chatstronomy.NINA.Configuration;
+using Chatstronomy.NINA.Direct;
 
 namespace Chatstronomy.NINA.Runtime;
 
@@ -20,10 +21,17 @@ internal sealed class ChatstronomyRuntimeController : IChatstronomyRuntimeContro
 
     private readonly SemaphoreSlim lifecycleGate = new(1, 1);
     private readonly object stateGate = new();
+    private readonly INinaDirectDataProvider? directDataProvider;
     private Process? ownedProcess;
     private NamedPipeServerStream? controlPipe;
     private StreamWriter? controlWriter;
+    private NinaDirectPipeServer? directPipeServer;
     private string statusMessage = "Local runtime is stopped.";
+
+    internal ChatstronomyRuntimeController(INinaDirectDataProvider? directDataProvider = null)
+    {
+        this.directDataProvider = directDataProvider;
+    }
 
     public event EventHandler? StateChanged;
 
@@ -83,7 +91,23 @@ internal sealed class ChatstronomyRuntimeController : IChatstronomyRuntimeContro
                     "The configured Chatstronomy runtime executable was not found.");
             }
 
-            var payload = PluginRuntimeBootstrap.Serialize(configuration, identity);
+            NinaDirectPipeServer? pendingDirectPipe = null;
+            if (runtime.Source is NinaDirectSourceConfiguration)
+            {
+                var provider = directDataProvider
+                    ?? throw new InvalidOperationException(
+                        "The native N.I.N.A. Direct provider is unavailable.");
+                pendingDirectPipe = new NinaDirectPipeServer(
+                    provider,
+                    NinaDirectPipeServer.CreatePipeName());
+                pendingDirectPipe.Start();
+            }
+
+            var payload = PluginRuntimeBootstrap.Serialize(
+                configuration,
+                identity,
+                pendingDirectPipe?.PipeName,
+                pendingDirectPipe is null ? null : directDataProvider?.Capabilities);
             var pipeName = $"chatstronomy-bootstrap-{Guid.NewGuid():N}";
             var pipe = new NamedPipeServerStream(
                 pipeName,
@@ -161,12 +185,14 @@ internal sealed class ChatstronomyRuntimeController : IChatstronomyRuntimeContro
                     ownedProcess = process;
                     controlPipe = pipe;
                     controlWriter = writer;
+                    directPipeServer = pendingDirectPipe;
                     statusMessage = $"Local runtime is running (process {process.Id}).";
                 }
                 process.Exited += OwnedProcessExited;
                 process.EnableRaisingEvents = true;
                 process = null;
                 pipe = null!;
+                pendingDirectPipe = null;
                 RaiseStateChanged();
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -183,6 +209,7 @@ internal sealed class ChatstronomyRuntimeController : IChatstronomyRuntimeContro
                 }
                 process?.Dispose();
                 pipe.Dispose();
+                pendingDirectPipe?.Dispose();
                 throw;
             }
         }
@@ -341,6 +368,7 @@ internal sealed class ChatstronomyRuntimeController : IChatstronomyRuntimeContro
     {
         NamedPipeServerStream? pipe = null;
         StreamWriter? writer = null;
+        NinaDirectPipeServer? directServer = null;
         var shouldDispose = false;
         lock (stateGate)
         {
@@ -352,6 +380,8 @@ internal sealed class ChatstronomyRuntimeController : IChatstronomyRuntimeContro
                 writer = controlWriter;
                 controlPipe = null;
                 controlWriter = null;
+                directServer = directPipeServer;
+                directPipeServer = null;
                 shouldDispose = true;
             }
         }
@@ -360,6 +390,7 @@ internal sealed class ChatstronomyRuntimeController : IChatstronomyRuntimeContro
         {
             writer?.Dispose();
             pipe?.Dispose();
+            directServer?.Dispose();
             process.Dispose();
         }
     }

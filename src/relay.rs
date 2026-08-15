@@ -333,12 +333,8 @@ pub async fn answer_query(api: &ChatstronomyApiClient, query: QueryRequest) -> Q
         QueryKind::GuiderGraph => to_result(id, api.get_guider_graph().await),
         QueryKind::RotatorInfo => to_result(id, api.get_rotator_info().await),
         QueryKind::FocuserInfo => to_result(id, api.get_focuser_info().await),
-        QueryKind::Command { endpoint, params } => {
-            let borrowed: Vec<(&str, &str)> = params
-                .iter()
-                .map(|(k, v)| (k.as_str(), v.as_str()))
-                .collect();
-            to_result(id, api.execute_command(&endpoint, &borrowed).await)
+        QueryKind::Command { command } => {
+            to_result(id, command.execute_with_advanced_api(api).await)
         }
     }
 }

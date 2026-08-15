@@ -1,5 +1,8 @@
 using Chatstronomy.NINA.Configuration;
+using Chatstronomy.NINA.Direct;
+using Chatstronomy.NINA.Protocol;
 using Chatstronomy.NINA.Runtime;
+using Chatstronomy.NINA.Settings;
 using System.Text.Json;
 
 namespace Chatstronomy.NINA.Tests;
@@ -16,7 +19,12 @@ internal static class Program
         Run("Discord rejects incomplete webhook URLs", DiscordRejectsIncompleteWebhookUrls);
         Run("Discord application ID is optional", DiscordApplicationIdIsOptional);
         Run("Advanced API polling settings are validated", AdvancedApiPollingIsValidated);
+        Run("Direct source does not require Advanced API settings", DirectSourceNeedsNoAdvancedApi);
         Run("Plugin runtime bootstrap is source-explicit", PluginRuntimeBootstrapIsSourceExplicit);
+        Run("Direct runtime bootstrap carries only its pipe", DirectRuntimeBootstrapCarriesOnlyPipe);
+        Run("Direct commands use semantic wire names", DirectCommandsUseSemanticWireNames);
+        Run("Direct query results match Rust envelope", DirectQueryResultsMatchRustEnvelope);
+        Run("Direct histories stay insertion ordered and bounded", DirectHistoriesAreBounded);
 
         var runtimePath = Environment.GetEnvironmentVariable("CHATSTRONOMY_RUNTIME_EXE");
         if (!string.IsNullOrWhiteSpace(runtimePath) && File.Exists(runtimePath))
@@ -27,6 +35,9 @@ internal static class Program
             await RunAsync(
                 "Plugin runtime can detach when configured to outlive N.I.N.A.",
                 () => PluginRuntimeDetaches(runtimePath));
+            await RunAsync(
+                "Plugin runtime queries the native Direct data pipe",
+                () => PluginRuntimeUsesDirectPipe(runtimePath));
         }
         else
         {
@@ -101,6 +112,7 @@ internal static class Program
     {
         var configuration = ChatstronomyConfigurationValidator.BuildLocalRuntime(
             Environment.ProcessPath ?? "test-runtime.exe",
+            RuntimeSourceMode.AdvancedApi,
             "http://127.0.0.1:1888/",
             "7",
             startWithNina: false,
@@ -112,10 +124,33 @@ internal static class Program
         AssertThrows<InvalidOperationException>(() =>
             ChatstronomyConfigurationValidator.BuildLocalRuntime(
                 Environment.ProcessPath ?? "test-runtime.exe",
+                RuntimeSourceMode.AdvancedApi,
                 "http://127.0.0.1:1888/",
                 "0",
                 startWithNina: false,
                 stopWithNina: true));
+    }
+
+    private static void DirectSourceNeedsNoAdvancedApi()
+    {
+        var configuration = ChatstronomyConfigurationValidator.BuildLocalRuntime(
+            Environment.ProcessPath ?? "test-runtime.exe",
+            RuntimeSourceMode.Direct,
+            advancedApiBaseUrl: string.Empty,
+            pollingIntervalSeconds: string.Empty,
+            startWithNina: true,
+            stopWithNina: false);
+
+        AssertType<NinaDirectSourceConfiguration>(configuration.Source);
+        AssertTrue(configuration.StopWithNina);
+        AssertThrows<InvalidOperationException>(() =>
+            ChatstronomyConfigurationValidator.BuildLocalRuntime(
+                Environment.ProcessPath ?? "test-runtime.exe",
+                RuntimeSourceMode.Direct,
+                advancedApiBaseUrl: string.Empty,
+                pollingIntervalSeconds: string.Empty,
+                startWithNina: false,
+                stopWithNina: false));
     }
 
     private static void PluginRuntimeBootstrapIsSourceExplicit()
@@ -140,6 +175,104 @@ internal static class Program
         AssertEqual("discord_webhook",
             root.GetProperty("delivery").GetProperty("kind").GetString());
         AssertFalse(json.Contains("test-runtime.exe", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static void DirectCommandsUseSemanticWireNames()
+    {
+        const string json = """
+            {
+              "type": "query",
+              "payload": {
+                "id": "7afcde18-b5a8-46fd-ad1f-ed54cf3bbc4e",
+                "kind": "command",
+                "command": {
+                  "kind": "cool_camera",
+                  "temperature": -10.0,
+                  "minutes": 15.0
+                }
+              }
+            }
+            """;
+
+        var query = DirectProtocol.ParseQuery(json);
+        AssertEqual(DirectQueryKind.Command, query.Kind);
+        AssertEqual(DirectRigCommandKind.CoolCamera, query.Command!.Kind);
+        AssertEqual(-10.0, query.Command.Temperature);
+        AssertEqual(15.0, query.Command.Minutes);
+        AssertFalse(json.Contains("/equipment/", StringComparison.Ordinal));
+
+        AssertThrows<DirectProtocolException>(() => DirectProtocol.ParseQuery(
+            json.Replace("cool_camera", "/equipment/camera/cool")));
+    }
+
+    private static void DirectRuntimeBootstrapCarriesOnlyPipe()
+    {
+        var runtimePath = Environment.ProcessPath ?? "test-runtime.exe";
+        var configuration = new ChatstronomyConfiguration(
+            new DiscordWebhookDeliveryConfiguration(
+                new Uri("https://discord.com/api/webhooks/123/token")),
+            Matrix: null,
+            new LocalRuntimeConfiguration(
+                runtimePath,
+                new NinaDirectSourceConfiguration(),
+                StartWithNina: false,
+                StopWithNina: false));
+        var json = PluginRuntimeBootstrap.Serialize(
+            configuration,
+            new LocalRuntimeIdentity(Guid.NewGuid(), Guid.NewGuid(), "Direct Rig"),
+            directPipeName: "chatstronomy-direct-test",
+            directCapabilities: new DirectCapabilities(
+                EventHistory: true,
+                ImageHistory: true,
+                Thumbnails: false,
+                Sequence: false,
+                EquipmentSnapshots: true,
+                AutofocusDetails: false,
+                GuiderGraph: false,
+                Commands: false));
+
+        using var document = JsonDocument.Parse(json);
+        var source = document.RootElement.GetProperty("source");
+        AssertEqual("nina_direct", source.GetProperty("kind").GetString());
+        AssertEqual("chatstronomy-direct-test", source.GetProperty("pipe_name").GetString());
+        AssertTrue(source.GetProperty("capabilities").GetProperty("event_history").GetBoolean());
+        AssertFalse(source.TryGetProperty("base_url", out _));
+        AssertFalse(json.Contains("127.0.0.1:1888", StringComparison.Ordinal));
+    }
+
+    private static void DirectQueryResultsMatchRustEnvelope()
+    {
+        var id = Guid.Parse("7afcde18-b5a8-46fd-ad1f-ed54cf3bbc4e");
+        var json = DirectProtocol.SerializeSuccess(
+            id,
+            DirectApiEnvelope<IReadOnlyList<object>>.Ok(Array.Empty<object>()));
+
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+        AssertEqual("query_result", root.GetProperty("type").GetString());
+        var payload = root.GetProperty("payload");
+        AssertEqual(id, payload.GetProperty("id").GetGuid());
+        AssertTrue(payload.GetProperty("ok").GetBoolean());
+        var envelope = payload.GetProperty("payload");
+        AssertTrue(envelope.GetProperty("Success").GetBoolean());
+        AssertEqual("API", envelope.GetProperty("Type").GetString());
+        AssertEqual(0, envelope.GetProperty("Response").GetArrayLength());
+    }
+
+    private static void DirectHistoriesAreBounded()
+    {
+        var history = new BoundedHistory<int>(capacity: 2);
+        history.Add(1);
+        history.Add(2);
+        history.Add(3);
+
+        AssertEqual(2, history.Count);
+        AssertTrue(history.Snapshot().SequenceEqual(new[] { 2, 3 }));
+        AssertTrue(history.TryGetAt(1, out var item));
+        AssertEqual(3, item);
+        AssertFalse(history.TryGetAt(2, out _));
+        history.Clear();
+        AssertEqual(0, history.Count);
     }
 
     private static async Task PluginRuntimeStartsAndStops(string runtimePath)
@@ -226,6 +359,38 @@ internal static class Program
         }
     }
 
+    private static async Task PluginRuntimeUsesDirectPipe(string runtimePath)
+    {
+        var provider = new FakeDirectDataProvider();
+        var controller = new ChatstronomyRuntimeController(provider);
+        try
+        {
+            provider.Start();
+            await controller.StartAsync(
+                BuildDirectRuntimeConfiguration(runtimePath),
+                new LocalRuntimeIdentity(Guid.NewGuid(), Guid.NewGuid(), "Direct Pipe Test"),
+                CancellationToken.None);
+            AssertTrue(controller.IsRunning);
+
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            while (provider.QueryCount < 2)
+            {
+                await Task.Delay(50, timeout.Token);
+            }
+
+            await controller.StopAsync(CancellationToken.None);
+            AssertFalse(controller.IsRunning);
+        }
+        finally
+        {
+            if (controller.IsRunning)
+            {
+                await controller.StopAsync(CancellationToken.None);
+            }
+            provider.Dispose();
+        }
+    }
+
     private static ChatstronomyConfiguration BuildRuntimeConfiguration(
         string runtimePath,
         bool stopWithNina = true) =>
@@ -240,6 +405,17 @@ internal static class Program
                     PollIntervalSeconds: 5),
                 StartWithNina: true,
                 StopWithNina: stopWithNina));
+
+    private static ChatstronomyConfiguration BuildDirectRuntimeConfiguration(string runtimePath) =>
+        new(
+            new DiscordWebhookDeliveryConfiguration(
+                new Uri("https://discord.com/api/webhooks/123/token")),
+            Matrix: null,
+            new LocalRuntimeConfiguration(
+                runtimePath,
+                new NinaDirectSourceConfiguration(),
+                StartWithNina: true,
+                StopWithNina: true));
 
     private static void Run(string name, Action test)
     {
@@ -313,5 +489,53 @@ internal static class Program
 
         throw new InvalidOperationException(
             $"Expected {typeof(TException).Name} to be thrown.");
+    }
+
+    private sealed class FakeDirectDataProvider : INinaDirectDataProvider
+    {
+        private int queryCount;
+
+        public DirectCapabilities Capabilities { get; } = new(
+            EventHistory: true,
+            ImageHistory: true,
+            Thumbnails: false,
+            Sequence: false,
+            EquipmentSnapshots: false,
+            AutofocusDetails: false,
+            GuiderGraph: false,
+            Commands: false);
+
+        public int QueryCount => Volatile.Read(ref queryCount);
+
+        public void Start()
+        {
+        }
+
+        public void Stop()
+        {
+        }
+
+        public void Reset()
+        {
+        }
+
+        public Task<object?> ExecuteAsync(
+            DirectQuery query,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Interlocked.Increment(ref queryCount);
+            object response = query.Kind switch
+            {
+                DirectQueryKind.EventHistory =>
+                    DirectApiEnvelope<IReadOnlyList<object>>.Ok(Array.Empty<object>()),
+                DirectQueryKind.ImageHistory =>
+                    DirectApiEnvelope<IReadOnlyList<object>>.Ok(Array.Empty<object>()),
+                _ => throw new NotSupportedException(),
+            };
+            return Task.FromResult<object?>(response);
+        }
+
+        public void Dispose() => Stop();
     }
 }

@@ -5,7 +5,11 @@ using System.Windows.Input;
 using NINA.Plugin;
 using NINA.Plugin.Interfaces;
 using NINA.Profile.Interfaces;
+using NINA.Equipment.Interfaces.Mediator;
+using NINA.Sequencer.Interfaces.Mediator;
+using NINA.WPF.Base.Interfaces.Mediator;
 using Chatstronomy.NINA.Configuration;
+using Chatstronomy.NINA.Direct;
 using Chatstronomy.NINA.Protocol;
 using Chatstronomy.NINA.Runtime;
 using Chatstronomy.NINA.Settings;
@@ -16,10 +20,10 @@ namespace Chatstronomy.NINA;
 /// <summary>
 /// N.I.N.A. lifecycle entry point for Chatstronomy.
 ///
-/// Direct event subscriptions and local/remote transports will be added behind
-/// this manifest in follow-up changes. Keeping the manifest in the main Chatstronomy
-/// repository allows the native plugin and Rust protocol to be released and
-/// tested together.
+/// The local Direct provider and supervised runtime live behind this manifest;
+/// the remote transport can reuse the same protocol and native data provider.
+/// Keeping the manifest in the main Chatstronomy repository allows the C# and
+/// Rust sides to be released and tested together.
 /// </summary>
 [Export(typeof(IPluginManifest))]
 public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
@@ -27,6 +31,7 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
     private readonly IProfileService profileService;
     private readonly ChatstronomySettings settings;
     private readonly IChatstronomyRuntimeController runtimeController;
+    private readonly INinaDirectDataProvider directDataProvider;
     private readonly AsyncCommand startRuntimeCommand;
     private readonly AsyncCommand stopRuntimeCommand;
     private readonly Guid nodeId = NodeIdentityStore.LoadOrCreate();
@@ -34,11 +39,30 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
     private DirectConnectionSettings connectionSettings = DirectConnectionSettings.Local;
 
     [ImportingConstructor]
-    public ChatstronomyPlugin(IProfileService profileService)
+    public ChatstronomyPlugin(
+        IProfileService profileService,
+        ITelescopeMediator telescope,
+        ICameraMediator camera,
+        IFilterWheelMediator filterWheel,
+        IGuiderMediator guider,
+        IRotatorMediator rotator,
+        IFocuserMediator focuser,
+        ISequenceMediator sequence,
+        IImageSaveMediator imageSave)
     {
         this.profileService = profileService;
         settings = new ChatstronomySettings(profileService);
-        runtimeController = new ChatstronomyRuntimeController();
+        directDataProvider = new NinaDirectDataProvider(
+            profileService,
+            telescope,
+            camera,
+            filterWheel,
+            guider,
+            rotator,
+            focuser,
+            sequence,
+            imageSave);
+        runtimeController = new ChatstronomyRuntimeController(directDataProvider);
         startRuntimeCommand = new AsyncCommand(
             RestartLocalRuntimeAsync,
             () => UsesLocalRuntime && IsConfigurationValid);
@@ -251,6 +275,30 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
         }
     }
 
+    public bool UseDirectSource
+    {
+        get => settings.RuntimeSourceMode == RuntimeSourceMode.Direct;
+        set
+        {
+            if (value)
+            {
+                SetRuntimeSourceMode(RuntimeSourceMode.Direct);
+            }
+        }
+    }
+
+    public bool UseAdvancedApiSource
+    {
+        get => settings.RuntimeSourceMode == RuntimeSourceMode.AdvancedApi;
+        set
+        {
+            if (value)
+            {
+                SetRuntimeSourceMode(RuntimeSourceMode.AdvancedApi);
+            }
+        }
+    }
+
     public string PollingIntervalSeconds
     {
         get => settings.PollingIntervalSeconds;
@@ -264,10 +312,13 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
 
     public bool StartLocalRuntime
     {
-        get => settings.StartLocalRuntime;
+        get => UseDirectSource || settings.StartLocalRuntime;
         set
         {
-            settings.StartLocalRuntime = value;
+            if (UseAdvancedApiSource)
+            {
+                settings.StartLocalRuntime = value;
+            }
             RaisePropertyChanged();
             RefreshStatus();
         }
@@ -275,10 +326,13 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
 
     public bool StopLocalRuntimeWithNina
     {
-        get => settings.StopLocalRuntimeWithNina;
+        get => UseDirectSource || settings.StopLocalRuntimeWithNina;
         set
         {
-            settings.StopLocalRuntimeWithNina = value;
+            if (UseAdvancedApiSource)
+            {
+                settings.StopLocalRuntimeWithNina = value;
+            }
             RaisePropertyChanged();
             RefreshStatus();
         }
@@ -328,6 +382,7 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
 
     public override async Task Initialize()
     {
+        directDataProvider.Start();
         profileService.ProfileChanged += ProfileServiceProfileChanged;
         runtimeController.StateChanged += RuntimeControllerStateChanged;
         await base.Initialize();
@@ -349,6 +404,7 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
                 await runtimeController.DetachAsync(CancellationToken.None);
             }
         }
+        directDataProvider.Stop();
         await base.Teardown();
     }
 
@@ -380,6 +436,7 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
         var localRuntime = UsesLocalRuntime
             ? ChatstronomyConfigurationValidator.BuildLocalRuntime(
                 LocalRuntimePath,
+                settings.RuntimeSourceMode,
                 AdvancedApiBaseUrl,
                 PollingIntervalSeconds,
                 StartLocalRuntime,
@@ -432,7 +489,18 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
             ProfileName: activeProfile.Name,
             PluginVersion: pluginVersion,
             NinaVersion: ninaVersion,
-            Capabilities: DirectCapabilities.None);
+            Capabilities: directDataProvider.Capabilities);
+    }
+
+    private void SetRuntimeSourceMode(RuntimeSourceMode mode)
+    {
+        if (settings.RuntimeSourceMode == mode)
+        {
+            return;
+        }
+
+        settings.RuntimeSourceMode = mode;
+        RefreshAllProperties();
     }
 
     private void SetDeliveryMode(ChatDeliveryMode mode)
@@ -454,6 +522,7 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
             {
                 await runtimeController.StopAsync(CancellationToken.None);
             }
+            directDataProvider.Reset();
             RefreshAllProperties();
             await StartConfiguredRuntimeAsync(CancellationToken.None);
         }
@@ -564,6 +633,8 @@ public sealed class ChatstronomyPlugin : PluginBase, INotifyPropertyChanged
             nameof(HostedCredentialReference),
             nameof(HostedCredentialStatus),
             nameof(LocalRuntimePath),
+            nameof(UseDirectSource),
+            nameof(UseAdvancedApiSource),
             nameof(AdvancedApiBaseUrl),
             nameof(PollingIntervalSeconds),
             nameof(StartLocalRuntime),
