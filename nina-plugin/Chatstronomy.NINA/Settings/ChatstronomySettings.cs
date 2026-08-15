@@ -12,6 +12,7 @@ internal sealed class ChatstronomySettings
 {
     internal static readonly Guid PluginId =
         Guid.Parse("5e7c25c4-f654-4e22-9e21-3127048221c0");
+    internal const string DefaultHostedServiceUrl = "https://hub.chatstronomy.com/";
 
     private const string CredentialPrefix = "Chatstronomy.NINA";
     private readonly IProfileService profileService;
@@ -93,7 +94,7 @@ internal sealed class ChatstronomySettings
 
     public string HostedServiceUrl
     {
-        get => options.GetValueString(nameof(HostedServiceUrl), "https://chatstronomy.com/");
+        get => options.GetValueString(nameof(HostedServiceUrl), DefaultHostedServiceUrl);
         set => options.SetValueString(nameof(HostedServiceUrl), value?.Trim() ?? string.Empty);
     }
 

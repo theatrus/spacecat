@@ -21,6 +21,7 @@ internal static class Program
         Run("Discord rejects incomplete webhook URLs", DiscordRejectsIncompleteWebhookUrls);
         Run("Discord application ID is optional", DiscordApplicationIdIsOptional);
         Run("Advanced API polling settings are validated", AdvancedApiPollingIsValidated);
+        Run("Hosted mode defaults to the Chatstronomy hub", HostedModeDefaultsToHub);
         Run("Hosted hub URLs require TLS and map to Direct WSS", HostedHubUrlsAreSecure);
         Run("Hosted pair and auth frames match the Rust contract", HostedHandshakeFramesMatchRust);
         Run("Hosted secrets are scoped to profile and hub origin", HostedSecretsAreOriginScoped);
@@ -165,6 +166,17 @@ internal static class Program
         AssertThrows<InvalidOperationException>(() =>
             HubConnectionConfiguration.BuildWebSocketUrl(
                 new Uri("https://hub.example.test/unexpected")));
+    }
+
+    private static void HostedModeDefaultsToHub()
+    {
+        var serviceUrl = ChatstronomyConfigurationValidator.RequireHostedUrl(
+            ChatstronomySettings.DefaultHostedServiceUrl);
+
+        AssertEqual("hub.chatstronomy.com", serviceUrl.Host);
+        AssertEqual(
+            "wss://hub.chatstronomy.com/v1/direct",
+            HubConnectionConfiguration.BuildWebSocketUrl(serviceUrl).AbsoluteUri);
     }
 
     private static void HostedHandshakeFramesMatchRust()
