@@ -27,12 +27,16 @@ pub struct HubConfig {
     /// configured.
     #[serde(default)]
     pub public_base_url: String,
+    /// Trust the last X-Forwarded-For hop as the client IP. Enable only
+    /// when the hub sits behind a reverse proxy that overwrites or appends
+    /// that header; otherwise the client controls it and rate limits key on
+    /// attacker-chosen values.
+    #[serde(default)]
+    pub trust_x_forwarded_for: bool,
     #[serde(default)]
     pub discord: HubDiscordConfig,
     #[serde(default)]
     pub session: HubSessionConfig,
-    #[serde(default)]
-    pub logging: crate::config::LoggingConfig,
 }
 
 /// Credentials of the central Discord application. All empty until the
@@ -135,23 +139,16 @@ impl Default for HubConfig {
             bind_address: default_bind_address(),
             database_path: default_database_path(),
             public_base_url: String::new(),
+            trust_x_forwarded_for: false,
             discord: HubDiscordConfig::default(),
             session: HubSessionConfig::default(),
-            logging: crate::config::LoggingConfig::default(),
         }
     }
 }
 
 impl HubConfig {
     pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self, ConfigError> {
-        let path_ref = path.as_ref();
-        if !path_ref.exists() {
-            return Err(ConfigError::FileNotFound(
-                path_ref.to_string_lossy().to_string(),
-            ));
-        }
-        let content = fs::read_to_string(path_ref)?;
-        Ok(serde_json::from_str(&content)?)
+        crate::config::load_json_file(path)
     }
 
     pub fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), ConfigError> {
@@ -207,14 +204,6 @@ impl HubConfig {
                  public_base_url, and session.signing_key all set"
                     .to_string(),
             );
-        }
-
-        let valid_levels = ["error", "warn", "info", "debug", "trace"];
-        if !valid_levels.contains(&self.logging.level.as_str()) {
-            return Err(format!(
-                "Invalid logging level '{}'. Valid levels: {:?}",
-                self.logging.level, valid_levels
-            ));
         }
 
         Ok(())

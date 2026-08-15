@@ -47,6 +47,12 @@ pub struct DiscordUser {
     pub verified: bool,
 }
 
+// NOTE: every Discord API path here is pinned to /api/v10. An unversioned
+// /api/... path is served as the OLDEST version Discord still honours, where
+// `permissions` on a guild is an integer rather than the decimal string below --
+// so the response decodes cleanly right up until serde reaches that field, and
+// the login fails with "error decoding response body" rather than anything that
+// names a version.
 #[derive(Debug, Deserialize)]
 pub struct DiscordGuild {
     pub id: String,
@@ -128,7 +134,7 @@ impl DiscordOauthClient {
     ) -> Result<TokenResponse, DiscordApiError> {
         let response = self
             .http
-            .post(format!("{}/api/oauth2/token", self.base_url))
+            .post(format!("{}/api/v10/oauth2/token", self.base_url))
             .form(&[
                 ("client_id", self.client_id.as_str()),
                 ("client_secret", self.client_secret.as_str()),
@@ -146,14 +152,15 @@ impl DiscordOauthClient {
     }
 
     pub async fn fetch_user(&self, access_token: &str) -> Result<DiscordUser, DiscordApiError> {
-        self.get_json(access_token, "/api/users/@me").await
+        self.get_json(access_token, "/api/v10/users/@me").await
     }
 
     pub async fn fetch_guilds(
         &self,
         access_token: &str,
     ) -> Result<Vec<DiscordGuild>, DiscordApiError> {
-        self.get_json(access_token, "/api/users/@me/guilds").await
+        self.get_json(access_token, "/api/v10/users/@me/guilds")
+            .await
     }
 
     async fn get_json<T: serde::de::DeserializeOwned>(

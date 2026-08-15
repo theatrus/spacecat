@@ -11,70 +11,23 @@
 //!   /status, /sequence, /target, /mount, /filter, /focus, /guider,
 //!   /events, /last-image.
 
+use super::rig_resolver::{CommandContext, RigResolver};
 use super::status_state::{StatusMessage, StatusState};
 use super::{ChatAttachment, ChatMessage, ChatService, ChatTarget, DiscordBotConfig};
 use crate::error::ChatError;
 use crate::source::{RigCommand, SharedRigSource};
 use async_trait::async_trait;
 use poise::serenity_prelude::{self as serenity, CreateAttachment, CreateMessage};
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
 /// Per-bot state carried by the Poise framework. Each slash command has
-/// `ctx.data()` access to this.
+/// `ctx.data()` access to this. Telescope lookup and write authorization go
+/// through the resolver so one command set serves both the self-hosted bot
+/// (static config) and the hub (database-backed tenancy).
 pub struct BotData {
-    /// One source-neutral rig connection per telescope, keyed by name.
-    pub rig_sources: HashMap<String, SharedRigSource>,
-    /// Discord channel ID -> telescope name. Slash commands invoked in a
-    /// mapped channel default to that telescope.
-    pub channel_to_telescope: HashMap<u64, String>,
-    /// Discord user IDs allowed to invoke write commands.
-    pub write_acl: std::collections::HashSet<u64>,
-}
-
-impl BotData {
-    fn known_names(&self) -> Vec<&str> {
-        let mut v: Vec<&str> = self.rig_sources.keys().map(|s| s.as_str()).collect();
-        v.sort();
-        v
-    }
-
-    /// Resolve a telescope from an explicit override or the channel a
-    /// command was invoked in. Returns a user-facing error string if the
-    /// channel isn't mapped and no override was provided.
-    fn resolve_source(
-        &self,
-        override_name: Option<&str>,
-        channel_id: u64,
-    ) -> Result<(String, SharedRigSource), String> {
-        if let Some(name) = override_name {
-            return self
-                .rig_sources
-                .get(name)
-                .cloned()
-                .map(|c| (name.to_string(), c))
-                .ok_or_else(|| {
-                    format!(
-                        "Unknown telescope '{name}'. Known: {:?}",
-                        self.known_names()
-                    )
-                });
-        }
-        if let Some(name) = self.channel_to_telescope.get(&channel_id) {
-            let client = self
-                .rig_sources
-                .get(name)
-                .cloned()
-                .expect("channel_to_telescope -> rig_sources invariant");
-            return Ok((name.clone(), client));
-        }
-        Err(format!(
-            "No telescope mapped to this channel. Pass `telescope:<name>`. Known: {:?}",
-            self.known_names()
-        ))
-    }
+    pub resolver: Arc<dyn RigResolver>,
 }
 
 pub type BotError = Box<dyn std::error::Error + Send + Sync>;
@@ -322,10 +275,8 @@ impl ChatService for DiscordBotService {
 /// alive for the life of the process.
 pub async fn run_bot(
     bot_config: &DiscordBotConfig,
-    rig_sources: HashMap<String, SharedRigSource>,
-    channel_to_telescope: HashMap<u64, String>,
+    resolver: Arc<dyn RigResolver>,
 ) -> Result<(DiscordBotService, tokio::task::JoinHandle<()>), ChatError> {
-    let write_acl: std::collections::HashSet<u64> = bot_config.write_acl.iter().copied().collect();
     let token = bot_config.token.clone();
     let default_channel_id = bot_config.default_channel_id;
     let state_file = PathBuf::from(&bot_config.state_file);
@@ -354,11 +305,7 @@ pub async fn run_bot(
                 poise::builtins::register_globally(ctx, &framework.options().commands)
                     .await
                     .map_err(|e| -> BotError { Box::new(e) })?;
-                Ok(BotData {
-                    rig_sources,
-                    channel_to_telescope,
-                    write_acl,
-                })
+                Ok(BotData { resolver })
             })
         })
         .build();
@@ -432,21 +379,66 @@ fn phase1_commands() -> Vec<poise::Command<BotData, BotError>> {
     vec![chatstronomy()]
 }
 
+/// Facts about this invocation for the resolver: where it happened and who
+/// invoked it, including the member's roles when in a guild.
+async fn command_context(ctx: Context<'_>) -> CommandContext {
+    let role_ids = match ctx.author_member().await {
+        Some(member) => member.roles.iter().map(|r| r.get()).collect(),
+        None => Vec::new(),
+    };
+    CommandContext {
+        guild_id: ctx.guild_id().map(|g| g.get()),
+        channel_id: ctx.channel_id().get(),
+        user_id: ctx.author().id.get(),
+        role_ids,
+    }
+}
+
 /// Shorthand for "resolve telescope, send an ephemeral error to the user if
 /// it fails."
 async fn resolve_or_reply<'a>(
     ctx: Context<'a>,
     telescope: Option<String>,
 ) -> Result<(String, SharedRigSource), BotError> {
+    let invocation = command_context(ctx).await;
     match ctx
         .data()
-        .resolve_source(telescope.as_deref(), ctx.channel_id().get())
+        .resolver
+        .resolve(&invocation, telescope.as_deref())
     {
         Ok(v) => Ok(v),
         Err(msg) => {
             ctx.send(poise::CreateReply::default().content(msg).ephemeral(true))
                 .await?;
             Err("telescope resolution failed".into())
+        }
+    }
+}
+
+/// Resolve the telescope, then check write authorization for it. Sends an
+/// ephemeral error on either failure. Write commands call this instead of
+/// `resolve_or_reply`.
+async fn resolve_write_or_reply<'a>(
+    ctx: Context<'a>,
+    telescope: Option<String>,
+) -> Result<(String, SharedRigSource), BotError> {
+    let invocation = command_context(ctx).await;
+    // One resolver call so the authorization decision provably applies to
+    // the rig the command will actuate.
+    match ctx
+        .data()
+        .resolver
+        .resolve_for_write(&invocation, telescope.as_deref())
+    {
+        Ok(v) => Ok(v),
+        Err(msg) => {
+            ctx.send(
+                poise::CreateReply::default()
+                    .content(format!("❌ {msg}"))
+                    .ephemeral(true),
+            )
+            .await?;
+            Err("write resolution or authorization failed".into())
         }
     }
 }
@@ -845,25 +837,6 @@ async fn last_image(
 
 // ---------- Phase 3: write commands (ACL-gated) ----------
 
-/// Reject the invocation with an ephemeral message if the invoking user is
-/// not in `chat.discord_bot.write_acl`. Returns `Ok(())` when authorized.
-async fn require_write_acl(ctx: Context<'_>) -> Result<(), BotError> {
-    let user_id = ctx.author().id.get();
-    if ctx.data().write_acl.contains(&user_id) {
-        return Ok(());
-    }
-    ctx.send(
-        poise::CreateReply::default()
-            .content(format!(
-                "🔒 You are not authorized to issue write commands. \
-                 Your user ID `{user_id}` is not in `chat.discord_bot.write_acl`."
-            ))
-            .ephemeral(true),
-    )
-    .await?;
-    Err("user not in write_acl".into())
-}
-
 /// Post a Confirm / Cancel button pair and wait for the invoker to click.
 /// Returns `Ok(true)` on Confirm, `Ok(false)` on Cancel or 30s timeout.
 async fn confirm_destructive(ctx: Context<'_>, action: &str) -> Result<bool, BotError> {
@@ -968,10 +941,7 @@ async fn unpark(
     ctx: Context<'_>,
     #[description = "Telescope name"] telescope: Option<String>,
 ) -> Result<(), BotError> {
-    if require_write_acl(ctx).await.is_err() {
-        return Ok(());
-    }
-    let (name, client) = match resolve_or_reply(ctx, telescope).await {
+    let (name, client) = match resolve_write_or_reply(ctx, telescope).await {
         Ok(v) => v,
         Err(_) => return Ok(()),
     };
@@ -985,10 +955,7 @@ async fn home(
     ctx: Context<'_>,
     #[description = "Telescope name"] telescope: Option<String>,
 ) -> Result<(), BotError> {
-    if require_write_acl(ctx).await.is_err() {
-        return Ok(());
-    }
-    let (name, client) = match resolve_or_reply(ctx, telescope).await {
+    let (name, client) = match resolve_write_or_reply(ctx, telescope).await {
         Ok(v) => v,
         Err(_) => return Ok(()),
     };
@@ -1004,10 +971,7 @@ async fn change_filter(
     #[description = "Filter name (e.g. L, R, G, B, HA)"] filter: String,
     #[description = "Telescope name"] telescope: Option<String>,
 ) -> Result<(), BotError> {
-    if require_write_acl(ctx).await.is_err() {
-        return Ok(());
-    }
-    let (name, client) = match resolve_or_reply(ctx, telescope).await {
+    let (name, client) = match resolve_write_or_reply(ctx, telescope).await {
         Ok(v) => v,
         Err(_) => return Ok(()),
     };
@@ -1068,10 +1032,7 @@ async fn guider_start(
     #[description = "Run calibration first"] calibrate: Option<bool>,
     #[description = "Telescope name"] telescope: Option<String>,
 ) -> Result<(), BotError> {
-    if require_write_acl(ctx).await.is_err() {
-        return Ok(());
-    }
-    let (name, client) = match resolve_or_reply(ctx, telescope).await {
+    let (name, client) = match resolve_write_or_reply(ctx, telescope).await {
         Ok(v) => v,
         Err(_) => return Ok(()),
     };
@@ -1094,10 +1055,7 @@ async fn guider_stop(
     ctx: Context<'_>,
     #[description = "Telescope name"] telescope: Option<String>,
 ) -> Result<(), BotError> {
-    if require_write_acl(ctx).await.is_err() {
-        return Ok(());
-    }
-    let (name, client) = match resolve_or_reply(ctx, telescope).await {
+    let (name, client) = match resolve_write_or_reply(ctx, telescope).await {
         Ok(v) => v,
         Err(_) => return Ok(()),
     };
@@ -1113,10 +1071,7 @@ async fn cool(
     #[description = "Minutes to ramp down (default 10)"] minutes: Option<f64>,
     #[description = "Telescope name"] telescope: Option<String>,
 ) -> Result<(), BotError> {
-    if require_write_acl(ctx).await.is_err() {
-        return Ok(());
-    }
-    let (name, client) = match resolve_or_reply(ctx, telescope).await {
+    let (name, client) = match resolve_write_or_reply(ctx, telescope).await {
         Ok(v) => v,
         Err(_) => return Ok(()),
     };
@@ -1144,10 +1099,7 @@ async fn warm(
     #[description = "Minutes to warm (default 10)"] minutes: Option<f64>,
     #[description = "Telescope name"] telescope: Option<String>,
 ) -> Result<(), BotError> {
-    if require_write_acl(ctx).await.is_err() {
-        return Ok(());
-    }
-    let (name, client) = match resolve_or_reply(ctx, telescope).await {
+    let (name, client) = match resolve_write_or_reply(ctx, telescope).await {
         Ok(v) => v,
         Err(_) => return Ok(()),
     };
@@ -1173,10 +1125,7 @@ async fn autofocus(
     #[description = "Cancel a running API-triggered autofocus"] cancel: Option<bool>,
     #[description = "Telescope name"] telescope: Option<String>,
 ) -> Result<(), BotError> {
-    if require_write_acl(ctx).await.is_err() {
-        return Ok(());
-    }
-    let (name, client) = match resolve_or_reply(ctx, telescope).await {
+    let (name, client) = match resolve_write_or_reply(ctx, telescope).await {
         Ok(v) => v,
         Err(_) => return Ok(()),
     };
@@ -1209,10 +1158,7 @@ async fn park(
     ctx: Context<'_>,
     #[description = "Telescope name"] telescope: Option<String>,
 ) -> Result<(), BotError> {
-    if require_write_acl(ctx).await.is_err() {
-        return Ok(());
-    }
-    let (name, client) = match resolve_or_reply(ctx, telescope).await {
+    let (name, client) = match resolve_write_or_reply(ctx, telescope).await {
         Ok(v) => v,
         Err(_) => return Ok(()),
     };
@@ -1228,10 +1174,7 @@ async fn abort_capture(
     ctx: Context<'_>,
     #[description = "Telescope name"] telescope: Option<String>,
 ) -> Result<(), BotError> {
-    if require_write_acl(ctx).await.is_err() {
-        return Ok(());
-    }
-    let (name, client) = match resolve_or_reply(ctx, telescope).await {
+    let (name, client) = match resolve_write_or_reply(ctx, telescope).await {
         Ok(v) => v,
         Err(_) => return Ok(()),
     };
@@ -1254,10 +1197,7 @@ async fn stop_sequence(
     ctx: Context<'_>,
     #[description = "Telescope name"] telescope: Option<String>,
 ) -> Result<(), BotError> {
-    if require_write_acl(ctx).await.is_err() {
-        return Ok(());
-    }
-    let (name, client) = match resolve_or_reply(ctx, telescope).await {
+    let (name, client) = match resolve_write_or_reply(ctx, telescope).await {
         Ok(v) => v,
         Err(_) => return Ok(()),
     };
@@ -1281,10 +1221,7 @@ async fn start_sequence(
     #[description = "Skip pre-run validation"] skip_validation: Option<bool>,
     #[description = "Telescope name"] telescope: Option<String>,
 ) -> Result<(), BotError> {
-    if require_write_acl(ctx).await.is_err() {
-        return Ok(());
-    }
-    let (name, client) = match resolve_or_reply(ctx, telescope).await {
+    let (name, client) = match resolve_write_or_reply(ctx, telescope).await {
         Ok(v) => v,
         Err(_) => return Ok(()),
     };

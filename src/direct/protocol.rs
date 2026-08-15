@@ -90,8 +90,37 @@ pub struct AuthRequest {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct QueryRequest {
     pub id: Uuid,
+    /// Unix time after which the rig must not execute this query. Guards
+    /// against stale commands running after a hang or reconnect.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<i64>,
     #[serde(flatten)]
     pub kind: QueryKind,
+}
+
+/// Grace the executing side adds to `expires_at`, absorbing clock skew
+/// between the hub and the rig. A rig whose clock runs a little ahead must
+/// not reject every query as stale; multi-minute staleness is still caught.
+pub const EXPIRY_CLOCK_SKEW_GRACE_SECONDS: i64 = 120;
+
+/// Current unix time in seconds. Both sides of the expiry contract use this
+/// one definition. Returns 0 when the system clock is before the epoch,
+/// which reads as "nothing is expired".
+pub fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+impl QueryRequest {
+    /// True when the query must be rejected rather than executed. `now` is
+    /// the executing side's clock; the skew grace keeps a slightly-fast rig
+    /// clock from rejecting everything.
+    pub fn expired_at(&self, now: i64) -> bool {
+        self.expires_at
+            .is_some_and(|deadline| now > deadline + EXPIRY_CLOCK_SKEW_GRACE_SECONDS)
+    }
 }
 
 /// The operations a rig can be asked to perform. These mirror the
@@ -144,9 +173,14 @@ pub enum DirectMessage {
     HeartbeatAck {
         seq: u64,
     },
-    /// Fatal protocol or authentication error; the sender closes after this.
+    /// Protocol or authentication error; the sender closes after this.
+    /// `retryable` distinguishes transient conditions (rate limit, replaced
+    /// connection) from ones where reconnecting can never help (bad
+    /// credential). Absent on old hubs, which reads as fatal.
     Error {
         message: String,
+        #[serde(default)]
+        retryable: bool,
     },
 }
 
@@ -205,6 +239,7 @@ mod tests {
     fn query_request_has_stable_json_contract() {
         let message = DirectMessage::Query(QueryRequest {
             id: Uuid::parse_str("7afcde18-b5a8-46fd-ad1f-ed54cf3bbc4e").unwrap(),
+            expires_at: None,
             kind: QueryKind::Thumbnail { index: 3 },
         });
         let value = serde_json::to_value(&message).unwrap();
@@ -219,6 +254,7 @@ mod tests {
     fn command_query_roundtrips() {
         let message = DirectMessage::Query(QueryRequest {
             id: Uuid::new_v4(),
+            expires_at: Some(1_900_000_000),
             kind: QueryKind::Command {
                 command: RigCommand::StartSequence {
                     skip_validation: true,
@@ -242,6 +278,38 @@ mod tests {
         assert!(result.ok);
         assert!(result.payload.is_null());
         assert!(result.error.is_none());
+    }
+
+    #[test]
+    fn query_expiry_semantics() {
+        let no_deadline = QueryRequest {
+            id: Uuid::new_v4(),
+            expires_at: None,
+            kind: QueryKind::EventHistory,
+        };
+        assert!(!no_deadline.expired_at(i64::MAX));
+
+        let with_deadline = QueryRequest {
+            id: Uuid::new_v4(),
+            expires_at: Some(100),
+            kind: QueryKind::EventHistory,
+        };
+        // Within the deadline plus skew grace: executes.
+        assert!(!with_deadline.expired_at(100));
+        assert!(!with_deadline.expired_at(100 + EXPIRY_CLOCK_SKEW_GRACE_SECONDS));
+        // Past deadline plus grace: rejected.
+        assert!(with_deadline.expired_at(101 + EXPIRY_CLOCK_SKEW_GRACE_SECONDS));
+    }
+
+    #[test]
+    fn error_retryable_defaults_to_fatal() {
+        // A frame from an older hub without the field parses as fatal.
+        let json = r#"{"type":"error","payload":{"message":"nope"}}"#;
+        let message: DirectMessage = serde_json::from_str(json).unwrap();
+        let DirectMessage::Error { retryable, .. } = message else {
+            panic!("expected Error");
+        };
+        assert!(!retryable);
     }
 
     #[test]

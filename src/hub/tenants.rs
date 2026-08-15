@@ -2,10 +2,7 @@
 //! pairing tokens.
 
 use super::db::{Db, DbError, unix_now};
-use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use sha2::{Digest, Sha256};
-use uuid::Uuid;
+use rusqlite::OptionalExtension;
 
 /// Pairing tokens expire after an hour; they exist only to move a secret
 /// from the web page into the N.I.N.A. plugin settings.
@@ -46,21 +43,13 @@ pub struct TelescopeUpdate {
 /// Generate a fresh pairing token. Returned once, in plaintext; only its
 /// hash is stored.
 pub fn generate_pairing_token() -> String {
-    format!(
-        "{PAIRING_TOKEN_PREFIX}{}{}",
-        Uuid::new_v4().simple(),
-        Uuid::new_v4().simple()
-    )
+    format!("{PAIRING_TOKEN_PREFIX}{}", super::auth::random_secret())
 }
 
 /// Generate a fresh rig credential. Sent to the rig once at pairing; only
 /// its hash is stored.
 pub fn generate_rig_credential() -> String {
-    format!(
-        "{RIG_CREDENTIAL_PREFIX}{}{}",
-        Uuid::new_v4().simple(),
-        Uuid::new_v4().simple()
-    )
+    format!("{RIG_CREDENTIAL_PREFIX}{}", super::auth::random_secret())
 }
 
 /// A rig credential row as needed by the connection handshake.
@@ -74,7 +63,7 @@ pub struct RigCredentialRow {
 
 /// Hash a token for storage or lookup.
 pub fn hash_token(token: &str) -> String {
-    URL_SAFE_NO_PAD.encode(Sha256::digest(token.as_bytes()))
+    super::auth::sha256_b64url(token)
 }
 
 fn roles_to_json(roles: &[i64]) -> String {
@@ -120,6 +109,23 @@ impl Db {
         })
     }
 
+    /// Which of these guilds are registered tenants, in one query.
+    pub fn registered_guild_ids(
+        &self,
+        ids: &[i64],
+    ) -> Result<std::collections::HashSet<i64>, DbError> {
+        if ids.is_empty() {
+            return Ok(std::collections::HashSet::new());
+        }
+        let placeholders = vec!["?"; ids.len()].join(",");
+        let sql = format!("SELECT guild_id FROM guilds WHERE guild_id IN ({placeholders})");
+        self.with_conn(|conn| {
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(rusqlite::params_from_iter(ids.iter()), |r| r.get(0))?;
+            rows.collect()
+        })
+    }
+
     pub fn get_guild(&self, guild_id: i64) -> Result<Option<GuildRow>, DbError> {
         self.with_conn(|conn| {
             conn.query_row(
@@ -132,11 +138,7 @@ impl Db {
                     })
                 },
             )
-            .map(Some)
-            .or_else(|e| match e {
-                rusqlite::Error::QueryReturnedNoRows => Ok(None),
-                other => Err(other),
-            })
+            .optional()
         })
     }
 
@@ -166,11 +168,42 @@ impl Db {
                 rusqlite::params![id],
                 telescope_from_row,
             )
-            .map(Some)
-            .or_else(|e| match e {
-                rusqlite::Error::QueryReturnedNoRows => Ok(None),
-                other => Err(other),
-            })
+            .optional()
+        })
+    }
+
+    /// Telescope routed to a Discord channel, if any. Channel IDs are
+    /// globally unique on Discord, so no guild scope is needed.
+    pub fn telescope_by_channel(&self, channel_id: i64) -> Result<Option<TelescopeRow>, DbError> {
+        self.with_conn(|conn| {
+            conn.query_row(
+                &format!(
+                    "SELECT {TELESCOPE_COLUMNS} FROM telescopes
+                     WHERE discord_channel_id = ?1"
+                ),
+                rusqlite::params![channel_id],
+                telescope_from_row,
+            )
+            .optional()
+        })
+    }
+
+    /// Telescope by name within one guild. Names are only unique per guild.
+    pub fn telescope_by_guild_and_name(
+        &self,
+        guild_id: i64,
+        name: &str,
+    ) -> Result<Option<TelescopeRow>, DbError> {
+        self.with_conn(|conn| {
+            conn.query_row(
+                &format!(
+                    "SELECT {TELESCOPE_COLUMNS} FROM telescopes
+                     WHERE guild_id = ?1 AND name = ?2"
+                ),
+                rusqlite::params![guild_id, name],
+                telescope_from_row,
+            )
+            .optional()
         })
     }
 
@@ -265,11 +298,7 @@ impl Db {
                     rusqlite::params![hash],
                     |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
                 )
-                .map(Some)
-                .or_else(|e| match e {
-                    rusqlite::Error::QueryReturnedNoRows => Ok(None),
-                    other => Err(other),
-                })?;
+                .optional()?;
             let Some((telescope_id, expires_at, consumed_at)) = row else {
                 return Ok(None);
             };
@@ -348,11 +377,7 @@ impl Db {
                         })
                     },
                 )
-                .map(Some)
-                .or_else(|e| match e {
-                    rusqlite::Error::QueryReturnedNoRows => Ok(None),
-                    other => Err(other),
-                })?;
+                .optional()?;
             if let Some(found) = &row {
                 conn.execute(
                     "UPDATE rig_credentials SET last_seen_at = ?1 WHERE id = ?2",
@@ -372,6 +397,30 @@ impl Db {
                  WHERE telescope_id = ?2 AND revoked_at IS NULL",
                 rusqlite::params![unix_now(), telescope_id],
             )
+        })
+    }
+
+    /// Delete a credential by plaintext. Used to roll back a pairing whose
+    /// reply never reached the client.
+    pub fn delete_rig_credential(&self, credential: &str) -> Result<(), DbError> {
+        self.with_conn(|conn| {
+            conn.execute(
+                "DELETE FROM rig_credentials WHERE credential_hash = ?1",
+                rusqlite::params![hash_token(credential)],
+            )
+            .map(|_| ())
+        })
+    }
+
+    /// Un-consume a pairing token so the client's retry with the same token
+    /// works. Only meaningful right after a failed pairing-reply delivery.
+    pub fn restore_pairing_token(&self, token: &str) -> Result<(), DbError> {
+        self.with_conn(|conn| {
+            conn.execute(
+                "UPDATE pairing_tokens SET consumed_at = NULL WHERE token_hash = ?1",
+                rusqlite::params![hash_token(token)],
+            )
+            .map(|_| ())
         })
     }
 }

@@ -140,6 +140,7 @@ pub async fn run_relay(telescope: &TelescopeConfig) -> Result<(), RelayError> {
     let max = Duration::from_secs(telescope.reconnect.max_seconds);
     let mut backoff = initial;
     loop {
+        let attempt_started = std::time::Instant::now();
         match run_connection(relay, telescope, &api, &mut state, &state_path).await {
             Err(RelayError::Rejected(message)) => {
                 return Err(RelayError::Rejected(message));
@@ -150,6 +151,11 @@ pub async fn run_relay(telescope: &TelescopeConfig) -> Result<(), RelayError> {
             Ok(()) => {
                 eprintln!("Relay connection closed; reconnecting in {backoff:?}");
             }
+        }
+        // A connection that stayed up counts as healthy: start the backoff
+        // schedule over instead of ratcheting toward max forever.
+        if attempt_started.elapsed() > Duration::from_secs(60) {
+            backoff = initial;
         }
         tokio::time::sleep(backoff).await;
         backoff = (backoff * 2).min(max);
@@ -205,7 +211,16 @@ pub async fn run_connection(
             println!("Paired with hub; credential saved to {state_path}");
         }
         DirectMessage::AgentHello(_) => {}
-        DirectMessage::Error { message } => return Err(RelayError::Rejected(message)),
+        DirectMessage::Error { message, retryable } => {
+            // Transient rejections (rate limit, replaced session) retry with
+            // backoff; only genuinely fatal ones stop the relay.
+            return Err(if retryable {
+                eprintln!("Hub asked us to retry later: {message}");
+                RelayError::Disconnected
+            } else {
+                RelayError::Rejected(message)
+            });
+        }
         _ => {
             return Err(RelayError::Rejected(
                 "unexpected handshake reply".to_string(),
@@ -240,6 +255,17 @@ pub async fn run_connection(
                     Message::Text(text) => {
                         match serde_json::from_str::<DirectMessage>(&text) {
                             Ok(DirectMessage::Query(query)) => {
+                                if query.expired_at(crate::direct::protocol::unix_now()) {
+                                    // Never run stale work — especially
+                                    // commands — after a hang or reconnect.
+                                    let _ = out_tx.send(DirectMessage::QueryResult(QueryResult {
+                                        id: query.id,
+                                        ok: false,
+                                        payload: serde_json::Value::Null,
+                                        error: Some("query expired before execution".to_string()),
+                                    }));
+                                    continue;
+                                }
                                 let api = api.clone();
                                 let out = out_tx.clone();
                                 tokio::spawn(async move {
@@ -248,8 +274,13 @@ pub async fn run_connection(
                                 });
                             }
                             Ok(DirectMessage::HeartbeatAck { .. }) => {}
-                            Ok(DirectMessage::Error { message }) => {
-                                return Err(RelayError::Rejected(message));
+                            Ok(DirectMessage::Error { message, retryable }) => {
+                                return Err(if retryable {
+                                    eprintln!("Hub closed the connection: {message}");
+                                    RelayError::Disconnected
+                                } else {
+                                    RelayError::Rejected(message)
+                                });
                             }
                             Ok(_) | Err(_) => {}
                         }

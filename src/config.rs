@@ -267,20 +267,27 @@ impl<'de> Deserialize<'de> for Config {
     }
 }
 
+/// Load any JSON-decodable configuration file, with a distinct error for a
+/// missing file. Shared by the rig `Config` and the hub's `HubConfig`.
+pub fn load_json_file<T, P>(path: P) -> Result<T, ConfigError>
+where
+    T: serde::de::DeserializeOwned,
+    P: AsRef<Path>,
+{
+    let path_ref = path.as_ref();
+    if !path_ref.exists() {
+        return Err(ConfigError::FileNotFound(
+            path_ref.to_string_lossy().to_string(),
+        ));
+    }
+    let content = fs::read_to_string(path_ref)?;
+    Ok(serde_json::from_str(&content)?)
+}
+
 impl Config {
     /// Load configuration from a JSON file
     pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self, ConfigError> {
-        let path_ref = path.as_ref();
-
-        if !path_ref.exists() {
-            return Err(ConfigError::FileNotFound(
-                path_ref.to_string_lossy().to_string(),
-            ));
-        }
-
-        let content = fs::read_to_string(path_ref)?;
-        let config: Config = serde_json::from_str(&content)?;
-        Ok(config)
+        load_json_file(path)
     }
 
     /// Load configuration from specified file with fallback to default

@@ -82,7 +82,14 @@ impl DirectPipeRigSource {
         kind: QueryKind,
     ) -> RigSourceResult<T> {
         let id = Uuid::new_v4();
-        let request = DirectMessage::Query(QueryRequest { id, kind });
+        // The local current-user pipe is synchronous and cannot queue work
+        // across reconnects, so it does not need the remote hub's expiry
+        // deadline. Remote Direct queries set this field at the hub boundary.
+        let request = DirectMessage::Query(QueryRequest {
+            id,
+            expires_at: None,
+            kind,
+        });
         let mut frame = serde_json::to_vec(&request)
             .map_err(|error| Self::unavailable(format!("could not encode query: {error}")))?;
         frame.push(b'\n');
