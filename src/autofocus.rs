@@ -1,4 +1,4 @@
-use crate::serde_helpers::de_f64_tolerant;
+use crate::serde_helpers::{de_f64_tolerant, de_i32_tolerant};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -38,6 +38,7 @@ pub struct AutofocusData {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "PascalCase")]
 pub struct FocusPoint {
+    #[serde(deserialize_with = "de_i32_tolerant")]
     pub position: i32,
     #[serde(deserialize_with = "de_f64_tolerant")]
     pub value: f64,
@@ -309,5 +310,20 @@ mod tests {
         let position_change =
             af_data.calculated_focus_point.position - af_data.initial_focus_point.position;
         assert_eq!(position_change, 110);
+    }
+
+    #[test]
+    fn native_nina_decimal_focus_positions_are_accepted() {
+        let json_content = std::fs::read_to_string("example_last_af.json").unwrap();
+        let mut value: serde_json::Value = serde_json::from_str(&json_content).unwrap();
+        value["Response"]["InitialFocusPoint"]["Position"] = serde_json::json!(4092.0);
+        value["Response"]["CalculatedFocusPoint"]["Position"] = serde_json::json!(4068.0);
+        value["Response"]["PreviousFocusPoint"]["Position"] = serde_json::json!(4068.0);
+        value["Response"]["MeasurePoints"][0]["Position"] = serde_json::json!(3992.0);
+
+        let response: AutofocusResponse = serde_json::from_value(value).unwrap();
+        assert_eq!(response.response.initial_focus_point.position, 4092);
+        assert_eq!(response.response.calculated_focus_point.position, 4068);
+        assert_eq!(response.response.measure_points[0].position, 3992);
     }
 }

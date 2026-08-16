@@ -19,6 +19,31 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use std::sync::Arc;
 
+fn discord_bot_install_permissions() -> poise::serenity_prelude::Permissions {
+    use poise::serenity_prelude::Permissions;
+    Permissions::VIEW_CHANNEL
+        | Permissions::SEND_MESSAGES
+        | Permissions::EMBED_LINKS
+        | Permissions::ATTACH_FILES
+}
+
+fn discord_bot_install_url(base_url: &str, client_id: &str, guild_id: i64) -> Option<String> {
+    let mut url = url::Url::parse(&format!(
+        "{}/oauth2/authorize",
+        base_url.trim_end_matches('/')
+    ))
+    .ok()?;
+    url.query_pairs_mut()
+        .append_pair("client_id", client_id)
+        .append_pair("scope", "bot applications.commands")
+        .append_pair("guild_id", &snowflake_string(guild_id))
+        .append_pair(
+            "permissions",
+            &discord_bot_install_permissions().bits().to_string(),
+        );
+    Some(url.into())
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum HubError {
     #[error("hub database error: {0}")]
@@ -544,16 +569,15 @@ async fn api_list_guilds(State(state): State<HubState>, headers: HeaderMap) -> R
     for (g, bot_installed) in manageable.iter().zip(installed) {
         // The Discord app-install link for this guild. The client ID is
         // public, so exposing it here is fine.
-        let install_url = if state.config.discord.client_id.is_empty() {
-            serde_json::Value::Null
-        } else {
-            serde_json::Value::from(format!(
-                "{}/oauth2/authorize?client_id={}&scope=bot+applications.commands&guild_id={}",
-                state.config.discord.base_url.trim_end_matches('/'),
-                state.config.discord.client_id,
-                snowflake_string(g.guild_id),
-            ))
-        };
+        let install_url = (!state.config.discord.client_id.is_empty())
+            .then(|| {
+                discord_bot_install_url(
+                    &state.config.discord.base_url,
+                    &state.config.discord.client_id,
+                    g.guild_id,
+                )
+            })
+            .flatten();
         out.push(serde_json::json!({
             "id": snowflake_string(g.guild_id),
             "name": g.guild_name,
@@ -1634,6 +1658,26 @@ mod tests {
         assert!(body["schema_version"].as_u64().unwrap() >= 2);
         assert_eq!(body["oauth_configured"], false);
         assert_eq!(body["bot_configured"], false);
+    }
+
+    #[test]
+    fn bot_install_url_requests_attachment_permissions() {
+        let url = discord_bot_install_url("https://discord.com", "123", 456).unwrap();
+        let url = url::Url::parse(&url).unwrap();
+        let query: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
+
+        assert_eq!(query.get("client_id").map(String::as_str), Some("123"));
+        assert_eq!(query.get("guild_id").map(String::as_str), Some("456"));
+        assert_eq!(
+            query.get("scope").map(String::as_str),
+            Some("bot applications.commands")
+        );
+        let permissions = query["permissions"].parse::<u64>().unwrap();
+        assert_eq!(permissions, 52_224);
+        assert!(
+            poise::serenity_prelude::Permissions::from_bits_truncate(permissions)
+                .contains(poise::serenity_prelude::Permissions::ATTACH_FILES)
+        );
     }
 
     #[tokio::test]
