@@ -48,6 +48,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Print the machine-readable runtime and protocol compatibility contract
+    #[command(name = "artifact-contract", hide = true)]
+    ArtifactContract,
     /// Get current sequence information from API
     Sequence,
     /// Get event history from API
@@ -187,6 +190,17 @@ enum WindowsServiceAction {
 async fn main() {
     let cli = Cli::parse();
 
+    if matches!(&cli.command, Commands::ArtifactContract) {
+        match chatstronomy::artifact_contract::json() {
+            Ok(json) => println!("{json}"),
+            Err(error) => {
+                eprintln!("Could not serialize artifact contract: {error}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
     #[cfg(windows)]
     if let Commands::PluginRuntime {
         bootstrap_pipe,
@@ -212,6 +226,7 @@ async fn main() {
     let telescope = cli.telescope.as_deref();
 
     match cli.command {
+        Commands::ArtifactContract => unreachable!("artifact contract handled before CLI banner"),
         Commands::Sequence => {
             if let Err(e) = cmd_sequence(config_path, telescope).await {
                 eprintln!("Sequence command failed: {e}");

@@ -1,0 +1,366 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chatstronomy.com/contracts/direct/v1/schema.json",
+  "title": "Chatstronomy Direct protocol v1",
+  "oneOf": [
+    { "$ref": "#/$defs/client_hello_message" },
+    { "$ref": "#/$defs/agent_hello_message" },
+    { "$ref": "#/$defs/pair_message" },
+    { "$ref": "#/$defs/pair_result_message" },
+    { "$ref": "#/$defs/auth_message" },
+    { "$ref": "#/$defs/query_message" },
+    { "$ref": "#/$defs/query_result_message" },
+    { "$ref": "#/$defs/heartbeat_message" },
+    { "$ref": "#/$defs/heartbeat_ack_message" },
+    { "$ref": "#/$defs/error_message" }
+  ],
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_history",
+        "image_history",
+        "thumbnails",
+        "sequence",
+        "equipment_snapshots",
+        "autofocus_details",
+        "guider_graph",
+        "commands"
+      ],
+      "properties": {
+        "event_history": { "type": "boolean" },
+        "image_history": { "type": "boolean" },
+        "thumbnails": { "type": "boolean" },
+        "sequence": { "type": "boolean" },
+        "equipment_snapshots": { "type": "boolean" },
+        "autofocus_details": { "type": "boolean" },
+        "guider_graph": { "type": "boolean" },
+        "commands": { "type": "boolean" }
+      }
+    },
+    "client_hello": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol_version",
+        "node_id",
+        "session_id",
+        "process_id",
+        "profile_id",
+        "profile_name",
+        "plugin_version",
+        "nina_version",
+        "capabilities"
+      ],
+      "properties": {
+        "protocol_version": { "const": 1 },
+        "node_id": { "$ref": "#/$defs/uuid" },
+        "session_id": { "$ref": "#/$defs/uuid" },
+        "process_id": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "profile_id": { "$ref": "#/$defs/uuid" },
+        "profile_name": { "type": "string" },
+        "plugin_version": { "type": "string" },
+        "nina_version": { "type": "string" },
+        "capabilities": { "$ref": "#/$defs/capabilities" }
+      }
+    },
+    "rig_id": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["node_id", "profile_id"],
+      "properties": {
+        "node_id": { "$ref": "#/$defs/uuid" },
+        "profile_id": { "$ref": "#/$defs/uuid" }
+      }
+    },
+    "agent_hello": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol_version", "connection_id", "rig_id"],
+      "properties": {
+        "protocol_version": { "const": 1 },
+        "connection_id": { "$ref": "#/$defs/uuid" },
+        "rig_id": { "$ref": "#/$defs/rig_id" }
+      }
+    },
+    "client_hello_message": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "payload"],
+      "properties": {
+        "type": { "const": "client_hello" },
+        "payload": { "$ref": "#/$defs/client_hello" }
+      }
+    },
+    "agent_hello_message": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "payload"],
+      "properties": {
+        "type": { "const": "agent_hello" },
+        "payload": { "$ref": "#/$defs/agent_hello" }
+      }
+    },
+    "pair_message": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "payload"],
+      "properties": {
+        "type": { "const": "pair" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["pairing_token", "hello"],
+          "properties": {
+            "pairing_token": { "type": "string", "minLength": 1 },
+            "hello": { "$ref": "#/$defs/client_hello" }
+          }
+        }
+      }
+    },
+    "pair_result_message": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "payload"],
+      "properties": {
+        "type": { "const": "pair_result" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["credential", "agent_hello"],
+          "properties": {
+            "credential": { "type": "string", "minLength": 1 },
+            "agent_hello": { "$ref": "#/$defs/agent_hello" }
+          }
+        }
+      }
+    },
+    "auth_message": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "payload"],
+      "properties": {
+        "type": { "const": "auth" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["credential", "hello"],
+          "properties": {
+            "credential": { "type": "string", "minLength": 1 },
+            "hello": { "$ref": "#/$defs/client_hello" }
+          }
+        }
+      }
+    },
+    "query_common": {
+      "type": "object",
+      "required": ["id", "kind"],
+      "properties": {
+        "id": { "$ref": "#/$defs/uuid" },
+        "expires_at": { "type": "integer" }
+      }
+    },
+    "simple_query": {
+      "allOf": [
+        { "$ref": "#/$defs/query_common" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": { "$ref": "#/$defs/uuid" },
+            "expires_at": { "type": "integer" },
+            "kind": {
+              "enum": [
+                "event_history",
+                "image_history",
+                "sequence",
+                "last_autofocus",
+                "mount_info",
+                "filterwheel_info",
+                "guider_info",
+                "guider_graph",
+                "rotator_info",
+                "focuser_info"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "thumbnail_query": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "index"],
+      "properties": {
+        "id": { "$ref": "#/$defs/uuid" },
+        "expires_at": { "type": "integer" },
+        "kind": { "const": "thumbnail" },
+        "index": { "type": "integer", "minimum": 0, "maximum": 4294967295 }
+      }
+    },
+    "command": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {
+            "kind": {
+              "enum": [
+                "unpark_mount",
+                "home_mount",
+                "stop_guiding",
+                "start_autofocus",
+                "cancel_autofocus",
+                "park_mount",
+                "abort_exposure",
+                "stop_sequence"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "filter_id"],
+          "properties": {
+            "kind": { "const": "change_filter" },
+            "filter_id": { "type": "integer", "minimum": -2147483648, "maximum": 2147483647 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "calibrate"],
+          "properties": {
+            "kind": { "const": "start_guiding" },
+            "calibrate": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "temperature", "minutes"],
+          "properties": {
+            "kind": { "const": "cool_camera" },
+            "temperature": { "type": "number" },
+            "minutes": { "type": "number" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "minutes"],
+          "properties": {
+            "kind": { "const": "warm_camera" },
+            "minutes": { "type": "number" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "skip_validation"],
+          "properties": {
+            "kind": { "const": "start_sequence" },
+            "skip_validation": { "type": "boolean" }
+          }
+        }
+      ]
+    },
+    "command_query": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "command"],
+      "properties": {
+        "id": { "$ref": "#/$defs/uuid" },
+        "expires_at": { "type": "integer" },
+        "kind": { "const": "command" },
+        "command": { "$ref": "#/$defs/command" }
+      }
+    },
+    "query_message": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "payload"],
+      "properties": {
+        "type": { "const": "query" },
+        "payload": {
+          "oneOf": [
+            { "$ref": "#/$defs/simple_query" },
+            { "$ref": "#/$defs/thumbnail_query" },
+            { "$ref": "#/$defs/command_query" }
+          ]
+        }
+      }
+    },
+    "query_result_message": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "payload"],
+      "properties": {
+        "type": { "const": "query_result" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "ok"],
+          "properties": {
+            "id": { "$ref": "#/$defs/uuid" },
+            "ok": { "type": "boolean" },
+            "payload": true,
+            "error": { "type": ["string", "null"] }
+          }
+        }
+      }
+    },
+    "heartbeat_message": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "payload"],
+      "properties": {
+        "type": { "const": "heartbeat" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["seq"],
+          "properties": { "seq": { "type": "integer", "minimum": 0 } }
+        }
+      }
+    },
+    "heartbeat_ack_message": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "payload"],
+      "properties": {
+        "type": { "const": "heartbeat_ack" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["seq"],
+          "properties": { "seq": { "type": "integer", "minimum": 0 } }
+        }
+      }
+    },
+    "error_message": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "payload"],
+      "properties": {
+        "type": { "const": "error" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["message"],
+          "properties": {
+            "message": { "type": "string" },
+            "retryable": { "type": "boolean", "default": false }
+          }
+        }
+      }
+    }
+  }
+}

@@ -120,9 +120,26 @@ jobs:
       - name: Build hosted probe and bundled plugin runtimes
         shell: pwsh
         run: |
-          cargo build --release
+          cargo build --release --locked
           Copy-Item target/release/chatstronomy.exe target/release/chatstronomy-hub-probe.exe
-          cargo build --release --no-default-features
+          cargo build --release --locked --no-default-features
+
+      - name: Validate published runtime contract inputs
+        shell: pwsh
+        run: |
+          $contractsArchive = Join-Path $env:RUNNER_TEMP 'chatstronomy-plugin-contracts-v1.zip'
+          $manifestPath = Join-Path $env:RUNNER_TEMP 'chatstronomy-runtime-manifest.json'
+          Compress-Archive -Path contracts -DestinationPath $contractsArchive
+          $metadata = cargo metadata --format-version 1 --no-deps | ConvertFrom-Json
+          $version = $metadata.packages[0].version
+          ./tools/New-ChatstronomyRuntimeManifest.ps1 `
+            -PluginRuntimePath target/release/chatstronomy.exe `
+            -FullRuntimePath target/release/chatstronomy-hub-probe.exe `
+            -PluginContractsPath $contractsArchive `
+            -Tag "v$version" `
+            -Commit '${{ github.sha }}' `
+            -OutputPath $manifestPath
+          Get-Content -LiteralPath $manifestPath
 
       - name: Test plugin configuration
         shell: pwsh

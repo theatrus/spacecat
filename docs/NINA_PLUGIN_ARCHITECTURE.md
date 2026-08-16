@@ -4,6 +4,24 @@ Chatstronomy treats **how observatory data is collected** and **where chat servi
 run** as independent choices. Direct mode is an additional integration, not a
 replacement for Advanced API mode.
 
+## Repository and release boundary
+
+The Rust backend is the source of truth for the hub, bots, renderers, local
+runtime, Direct protocol, schemas, and golden fixtures. Each backend release
+publishes two Windows executables:
+
+- `chatstronomy-windows-x64.exe`, the full hub-capable runtime used by
+  compatibility probes and normal Windows installations;
+- `chatstronomy-plugin-runtime-windows-x64.exe`, the lean
+  `--no-default-features` runtime bundled by the N.I.N.A. plugin.
+
+It also publishes `chatstronomy-runtime-manifest.json`, whose protocol versions,
+asset names, sizes, and SHA-256 hashes are derived from those exact binaries.
+The separately released N.I.N.A. plugin pins one backend release and manifest
+checksum in `runtime.lock.json`. Plugin builds never use a backend branch,
+resolve `latest`, or invoke Cargo as a fallback. This lets the C# plugin and Rust
+service version independently without weakening reproducibility.
+
 Functionally, Direct is a native in-process replacement for every Advanced API
 hook Chatstronomy consumes. It preserves the same source capabilities and
 normalized response shapes so the Rust updater, renderers, and chat commands do

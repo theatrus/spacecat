@@ -14,7 +14,14 @@ Each release includes:
 
 - **chatstronomy-linux-x86_64**: Linux binary for x86_64 systems
 - **chatstronomy-linux-aarch64**: Linux binary for ARM64 systems (Raspberry Pi 4, etc.)
-- **chatstronomy-windows-x64.exe**: Windows binary for 64-bit systems
+- **chatstronomy-windows-x64.exe**: Full Windows binary for 64-bit systems
+- **chatstronomy-plugin-runtime-windows-x64.exe**: Lean Windows runtime bundled by the N.I.N.A. plugin
+- **chatstronomy-plugin-contracts-v1.zip**: Versioned Direct protocol schema and fixtures
+- **chatstronomy-runtime-manifest.json**: Release identity, protocol versions, asset names, sizes, and SHA-256 hashes
+
+The N.I.N.A. plugin repository pins an exact Chatstronomy release and manifest
+checksum. It never downloads `latest` or builds the Rust runtime from a backend
+branch.
 
 ## Installation
 

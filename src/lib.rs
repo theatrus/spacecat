@@ -1,6 +1,7 @@
 #![recursion_limit = "256"]
 
 pub mod api;
+pub mod artifact_contract;
 pub mod autofocus;
 pub mod charts;
 pub mod chat;

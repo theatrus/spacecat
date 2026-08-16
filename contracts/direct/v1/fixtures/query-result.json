@@ -1,0 +1,18 @@
+{
+  "type": "query_result",
+  "payload": {
+    "id": "7afcde18-b5a8-46fd-ad1f-ed54cf3bbc4e",
+    "ok": true,
+    "payload": {
+      "Response": {
+        "Connected": true,
+        "Name": "PHD2"
+      },
+      "Error": "",
+      "StatusCode": 200,
+      "Success": true,
+      "Type": "API"
+    },
+    "error": null
+  }
+}

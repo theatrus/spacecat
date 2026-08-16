@@ -353,4 +353,26 @@ mod tests {
             "chatstronomy-agent-v1-363db0289d794fdc89401b1ff52b9e8d"
         );
     }
+
+    #[test]
+    fn published_v1_fixtures_are_accepted_by_the_normative_implementation() {
+        let fixtures = [
+            include_str!("../../contracts/direct/v1/fixtures/client-hello.json"),
+            include_str!("../../contracts/direct/v1/fixtures/pair.json"),
+            include_str!("../../contracts/direct/v1/fixtures/query-guider-graph.json"),
+            include_str!("../../contracts/direct/v1/fixtures/query-command.json"),
+            include_str!("../../contracts/direct/v1/fixtures/query-result.json"),
+            include_str!("../../contracts/direct/v1/fixtures/heartbeat.json"),
+            include_str!("../../contracts/direct/v1/fixtures/error.json"),
+        ];
+
+        for fixture in fixtures {
+            let message: DirectMessage = serde_json::from_str(fixture).unwrap();
+            serde_json::to_string(&message).unwrap();
+        }
+
+        let schema: serde_json::Value =
+            serde_json::from_str(include_str!("../../contracts/direct/v1/schema.json")).unwrap();
+        assert_eq!(schema["title"], "Chatstronomy Direct protocol v1");
+    }
 }
