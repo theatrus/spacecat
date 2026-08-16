@@ -9,11 +9,11 @@
 use super::db::Db;
 use super::direct_server::RigConnections;
 use super::direct_source::DirectRigSource;
-use crate::chat::{ChatServiceManager, ChatTarget};
+use crate::chat::{ChatMessage, ChatServiceManager, ChatTarget};
 use crate::chat_updater::ChatUpdater;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 /// How often the reconcile loop runs.
@@ -21,6 +21,28 @@ const RECONCILE_INTERVAL: Duration = Duration::from_secs(10);
 
 /// Poll interval handed to each ChatUpdater.
 const UPDATER_POLL_INTERVAL: Duration = Duration::from_secs(5);
+
+/// How long a scope must stay disconnected before chat hears about it.
+/// Absorbs hub deploys, rig reconnects, and plugin flapping.
+const PRESENCE_OFFLINE_GRACE: Duration = Duration::from_secs(90);
+
+/// What chat currently believes about one scope, and what we observe.
+struct Presence {
+    /// The state chat was last told (None until adopted or announced).
+    announced: Option<bool>,
+    /// The state we currently observe.
+    current: bool,
+    /// When `current` last changed (or was first observed).
+    since: Instant,
+}
+
+/// A presence transition worth telling chat about.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PresenceEvent {
+    pub telescope_id: i64,
+    pub telescope_name: String,
+    pub online: bool,
+}
 
 struct RunningUpdater {
     session_id: Uuid,
@@ -37,6 +59,8 @@ pub struct UpdaterManager {
     connections: Arc<RigConnections>,
     chat_manager: Arc<ChatServiceManager>,
     running: Mutex<HashMap<i64, RunningUpdater>>,
+    presence: Mutex<HashMap<i64, Presence>>,
+    offline_grace: Duration,
 }
 
 impl UpdaterManager {
@@ -50,6 +74,122 @@ impl UpdaterManager {
             connections,
             chat_manager,
             running: Mutex::new(HashMap::new()),
+            presence: Mutex::new(HashMap::new()),
+            offline_grace: PRESENCE_OFFLINE_GRACE,
+        }
+    }
+
+    /// Shrink the offline grace for tests.
+    #[cfg(test)]
+    fn with_offline_grace(mut self, grace: Duration) -> Self {
+        self.offline_grace = grace;
+        self
+    }
+
+    /// Compare observed connection state against what chat believes, and
+    /// return the transitions worth announcing.
+    ///
+    /// The first observation of a scope is adopted silently — after a hub
+    /// restart every scope is "first observed", so deploys never generate
+    /// chat traffic. A disconnect is announced only after the grace period,
+    /// which also absorbs reconnect flapping; a reconnect is announced
+    /// immediately once the scope was believed (or adopted as) offline.
+    pub fn presence_events(&self) -> Vec<PresenceEvent> {
+        let mut events = Vec::new();
+        let Ok(mut presence) = self.presence.lock() else {
+            return events;
+        };
+        let connected: std::collections::HashSet<i64> = self
+            .connections
+            .connected_telescopes()
+            .into_iter()
+            .collect();
+        // Every telescope with destinations participates; others have no
+        // audience to tell.
+        let mut ids: std::collections::HashSet<i64> = connected.clone();
+        ids.extend(presence.keys().copied());
+        for id in ids {
+            let observed = connected.contains(&id);
+            let entry = presence.entry(id).or_insert(Presence {
+                announced: None,
+                current: observed,
+                since: Instant::now(),
+            });
+            if entry.current != observed {
+                entry.current = observed;
+                entry.since = Instant::now();
+            }
+            match (entry.announced, entry.current) {
+                // Silent adoption: what chat first learns is the baseline.
+                (None, true) => entry.announced = Some(true),
+                (None, false) => {
+                    if entry.since.elapsed() >= self.offline_grace {
+                        entry.announced = Some(false);
+                    }
+                }
+                (Some(true), false) => {
+                    if entry.since.elapsed() >= self.offline_grace {
+                        entry.announced = Some(false);
+                        if let Some(name) = self.telescope_name(id) {
+                            events.push(PresenceEvent {
+                                telescope_id: id,
+                                telescope_name: name,
+                                online: false,
+                            });
+                        }
+                    }
+                }
+                (Some(false), true) => {
+                    entry.announced = Some(true);
+                    if let Some(name) = self.telescope_name(id) {
+                        events.push(PresenceEvent {
+                            telescope_id: id,
+                            telescope_name: name,
+                            online: true,
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+        events
+    }
+
+    fn telescope_name(&self, telescope_id: i64) -> Option<String> {
+        self.db
+            .get_telescope(telescope_id)
+            .ok()
+            .flatten()
+            .map(|t| t.name)
+    }
+
+    /// Post presence transitions to the telescope's destination channels.
+    pub async fn announce(&self, events: Vec<PresenceEvent>) {
+        for event in events {
+            let channels = self.route_channels(event.telescope_id);
+            if channels.is_empty() {
+                continue;
+            }
+            let target = ChatTarget {
+                discord_webhook_url: None,
+                matrix_room_id: None,
+                discord_channel_id: None,
+                discord_channel_ids: channels.iter().map(|c| *c as u64).collect(),
+            };
+            let message = if event.online {
+                ChatMessage::new(&format!(
+                    "🔭 [{}] Telescope connected",
+                    event.telescope_name
+                ))
+                .color(0x3fb950)
+            } else {
+                ChatMessage::new(&format!(
+                    "🔌 [{}] Telescope disconnected",
+                    event.telescope_name
+                ))
+                .color(0xd29922)
+            };
+            self.chat_manager.send_message(&message, &target).await;
         }
     }
 
@@ -124,7 +264,10 @@ impl UpdaterManager {
                 target,
                 self.chat_manager.clone(),
             )
-            .with_image_cooldown(telescope.image_cooldown_seconds.max(0) as u64);
+            .with_image_cooldown(telescope.image_cooldown_seconds.max(0) as u64)
+            // Hub updaters restart on every deploy, reconnect, and config
+            // change; presence is announced from connection state instead.
+            .with_lifecycle_announcements(false);
             let handle = tokio::spawn(async move {
                 updater.start_polling(UPDATER_POLL_INTERVAL).await;
             });
@@ -150,10 +293,12 @@ impl UpdaterManager {
         self.running.lock().map(|r| r.len()).unwrap_or(0)
     }
 
-    /// Reconcile forever.
+    /// Reconcile forever, announcing real presence transitions.
     pub async fn run(self: Arc<Self>) {
         loop {
             self.reconcile_once();
+            let events = self.presence_events();
+            self.announce(events).await;
             tokio::time::sleep(RECONCILE_INTERVAL).await;
         }
     }
@@ -240,6 +385,76 @@ mod tests {
         db.delete_route(first.id).unwrap();
         assert_eq!(manager.reconcile_once(), (0, 1));
         assert_eq!(manager.running_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn presence_first_observation_is_silent_then_transitions_announce() {
+        let (db, connections, manager, id) = setup();
+        let manager = manager.with_offline_grace(Duration::ZERO);
+        db.add_channel_route(id, 100, 42, "obs", "g", 1).unwrap();
+
+        // First observation (e.g. right after a hub deploy): silent adoption.
+        connect(&connections, id);
+        assert!(manager.presence_events().is_empty());
+        assert!(manager.presence_events().is_empty());
+
+        // A real disconnect (grace elapsed) announces once.
+        let session = connections.get(id).unwrap().session_id;
+        connections.remove_if_current(id, session);
+        let events = manager.presence_events();
+        assert_eq!(events.len(), 1);
+        assert!(!events[0].online);
+        assert_eq!(events[0].telescope_name, "c925");
+        assert!(manager.presence_events().is_empty());
+
+        // Reconnect announces once.
+        connect(&connections, id);
+        let events = manager.presence_events();
+        assert_eq!(events.len(), 1);
+        assert!(events[0].online);
+        assert!(manager.presence_events().is_empty());
+    }
+
+    #[tokio::test]
+    async fn presence_flap_within_grace_is_silent() {
+        let (db, connections, manager, id) = setup();
+        // Default 90s grace: a quick drop and reconnect never reaches chat.
+        db.add_channel_route(id, 100, 42, "obs", "g", 1).unwrap();
+        connect(&connections, id);
+        assert!(manager.presence_events().is_empty());
+        let session = connections.get(id).unwrap().session_id;
+        connections.remove_if_current(id, session);
+        assert!(manager.presence_events().is_empty());
+        connect(&connections, id);
+        assert!(manager.presence_events().is_empty());
+    }
+
+    #[tokio::test]
+    async fn presence_scope_offline_at_startup_announces_when_it_connects() {
+        let (db, connections, manager, id) = setup();
+        let manager = manager.with_offline_grace(Duration::ZERO);
+        db.add_channel_route(id, 100, 42, "obs", "g", 1).unwrap();
+
+        // Seed presence with a disconnected observation (scope was down
+        // when the hub started): silent adoption as offline...
+        {
+            let mut presence = manager.presence.lock().unwrap();
+            presence.insert(
+                id,
+                Presence {
+                    announced: None,
+                    current: false,
+                    since: Instant::now(),
+                },
+            );
+        }
+        assert!(manager.presence_events().is_empty());
+
+        // ...so its eventual arrival is news.
+        connect(&connections, id);
+        let events = manager.presence_events();
+        assert_eq!(events.len(), 1);
+        assert!(events[0].online);
     }
 
     #[tokio::test]

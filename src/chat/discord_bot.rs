@@ -189,7 +189,7 @@ impl ChatService for DiscordBotService {
     }
 
     fn can_route(&self, target: &ChatTarget) -> bool {
-        target.discord_channel_id.is_some() || self.default_channel_id.is_some()
+        !target.all_discord_channels().is_empty() || self.default_channel_id.is_some()
     }
 
     fn supports_status_upsert(&self) -> bool {

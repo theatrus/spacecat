@@ -82,6 +82,29 @@ pub struct ChatTarget {
     pub discord_channel_ids: Vec<u64>,
 }
 
+#[cfg(test)]
+mod chat_target_tests {
+    use super::*;
+
+    #[test]
+    fn all_discord_channels_dedupes_and_merges() {
+        let target = ChatTarget {
+            discord_webhook_url: None,
+            matrix_room_id: None,
+            discord_channel_id: Some(1),
+            discord_channel_ids: vec![2, 1, 3],
+        };
+        assert_eq!(target.all_discord_channels(), vec![1, 2, 3]);
+        // The hub's targets carry only the list; it must still count as a
+        // routable Discord destination everywhere can_route is consulted.
+        let list_only = ChatTarget {
+            discord_channel_ids: vec![7],
+            ..ChatTarget::default()
+        };
+        assert_eq!(list_only.all_discord_channels(), vec![7]);
+    }
+}
+
 impl ChatTarget {
     /// Every Discord channel this target posts to, deduplicated, in order.
     pub fn all_discord_channels(&self) -> Vec<u64> {
