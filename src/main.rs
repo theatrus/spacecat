@@ -113,7 +113,7 @@ enum Commands {
     },
     /// Get mount information from API
     MountInfo,
-    /// Relay this telescope's Advanced API to a central Chatstronomy hub
+    /// Deprecated compatibility: relay this telescope's Advanced API to a hub
     Relay,
     /// Run the centralized hub service (web app + Discord app + SQLite)
     #[cfg(feature = "hub")]

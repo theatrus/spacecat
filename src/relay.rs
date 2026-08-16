@@ -12,7 +12,7 @@ use crate::direct::protocol::{
     AuthRequest, ClientHello, DIRECT_WEBSOCKET_PATH, DirectMessage, PROTOCOL_VERSION, PairRequest,
     QueryKind, QueryRequest, QueryResult,
 };
-use crate::source::RigCapabilities;
+use crate::source::{ADVANCED_API_DEPRECATION_NOTICE, RigCapabilities};
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -131,6 +131,7 @@ pub async fn run_relay(telescope: &TelescopeConfig) -> Result<(), RelayError> {
         .as_ref()
         .ok_or_else(|| RelayError::Config("telescope has no relay configuration".to_string()))?;
     relay.validate().map_err(RelayError::Config)?;
+    eprintln!("Warning: {ADVANCED_API_DEPRECATION_NOTICE}");
     let api = ChatstronomyApiClient::new(telescope.api.clone())
         .map_err(|e| RelayError::Config(e.to_string()))?;
     let state_path = relay.state_file_for(&telescope.name);

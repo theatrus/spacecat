@@ -4,8 +4,15 @@
 [![Rust](https://img.shields.io/badge/rust-1.93+-orange.svg)](https://www.rust-lang.org)
 [![Build Status](https://github.com/theatrus/chatstronomy/workflows/CI/badge.svg)](https://github.com/theatrus/chatstronomy/actions)
 
-**Chatstronomy** is a Rust-based tool for posting to Discord events from a [NINA](https://nighttime-imaging.eu)
-installation, specifically using the [Advanced API](https://github.com/christian-photo/ninaAPI) extension.
+**Chatstronomy** is a Rust-based tool for posting N.I.N.A. events to Discord.
+
+> [!WARNING]
+> This standalone Advanced API installation path is deprecated and retained for
+> existing Windows service and Linux/systemd deployments during migration. New
+> Windows installations should use the
+> [Chatstronomy N.I.N.A. plugin](https://github.com/theatrus/chatstronomy-nina-plugin)
+> with native Direct mode, locally or through
+> [Chatstronomy Hub](https://hub.chatstronomy.com/).
 
 ## On Vibe Coding
 
@@ -17,7 +24,7 @@ really.
 
 ### Installation
 
-#### Option 1: RPM Package (Recommended for Fedora/RHEL/CentOS)
+#### Legacy option 1: RPM package for Fedora/RHEL/CentOS
 
 ```bash
 # Download the latest release
@@ -36,7 +43,7 @@ sudo systemctl enable --now chatstronomy.service
 sudo systemctl status chatstronomy.service
 ```
 
-#### Option 2: Build from Source
+#### Legacy option 2: Build from source
 
 ```bash
 # Clone the repository

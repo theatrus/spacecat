@@ -1,7 +1,8 @@
 # Hosted Chatstronomy service (hub)
 
-The hub is the third run mode, next to Advanced API polling and N.I.N.A.
-Direct. One hosted process serves a web app, runs the central Discord
+The hub complements the supported N.I.N.A. Direct modes. Deprecated Advanced
+API polling remains available only to migrate existing installations. One
+hosted process serves a web app, runs the central Discord
 application, and accepts rig connections. Users install the Chatstronomy
 Discord app into their own server, pair their telescopes through the web app,
 and get chat notifications and slash commands without running their own bot.
@@ -12,11 +13,12 @@ protocol, rig identity, and pairing rules the hub relies on.
 ## Scope decisions
 
 - **Discord only at first.** Matrix support in the hosted service is deferred.
-  Self-hosted Advanced API mode keeps Matrix.
-- **Relay connections are accepted.** A rig can reach the hub two ways: the
-  N.I.N.A. plugin's Direct WebSocket, or an existing Chatstronomy agent that
-  polls the Advanced API locally and relays outbound. Both use the same
-  authenticated channel and message envelopes.
+  Self-hosted Direct mode supports Matrix; deprecated Advanced API deployments
+  keep their existing Matrix path during migration.
+- **Legacy relay connections are accepted.** A rig should reach the hub through
+  the N.I.N.A. plugin's Direct WebSocket. Existing Chatstronomy agents may keep
+  polling Advanced API locally and relaying outbound during migration. Both use
+  the same authenticated channel and message envelopes.
 - **One SQLite database.** All durable hub state — users, sessions, guilds,
   telescopes, credentials, updater state — lives in one SQLite file accessed
   through `rusqlite`. No second database system.
