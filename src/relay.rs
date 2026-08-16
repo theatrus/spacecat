@@ -359,6 +359,7 @@ pub async fn answer_query(api: &ChatstronomyApiClient, query: QueryRequest) -> Q
         QueryKind::Thumbnail { index } => to_result(id, api.get_thumbnail(index).await),
         QueryKind::LastAutofocus => to_result(id, api.get_last_autofocus().await),
         QueryKind::MountInfo => to_result(id, api.get_mount_info().await),
+        QueryKind::CameraInfo => to_result(id, api.get_camera_info().await),
         QueryKind::FilterwheelInfo => to_result(id, api.get_filterwheel_info().await),
         QueryKind::GuiderInfo => to_result(id, api.get_guider_info().await),
         QueryKind::GuiderGraph => to_result(id, api.get_guider_graph().await),

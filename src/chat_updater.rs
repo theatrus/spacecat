@@ -1,15 +1,17 @@
 use crate::autofocus::AutofocusResponse;
+use crate::camera::CameraInfo;
 use crate::chat::{ChatAttachment, ChatField, ChatMessage, ChatServiceManager, ChatTarget};
 use crate::discord::colors;
 use crate::events::{Event, EventDetails, FilterInfo, TargetCoordinates, event_types};
 use crate::images::ImageMetadata;
 use crate::sequence::{
-    SequenceResponse, extract_current_target, extract_meridian_flip_time,
+    SequenceOperation, SequenceOperationKind, SequenceResponse, extract_current_target,
+    extract_meridian_flip_time, extract_sequence_operations,
     meridian_flip_time_formatted_with_clock,
 };
 use crate::source::SharedRigSource;
 use chrono::{DateTime, FixedOffset, Utc};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
@@ -35,6 +37,27 @@ fn backoff_delay(current: Duration, initial: Duration, max: Duration) -> Duratio
     (current * 2).min(max.max(initial))
 }
 
+fn completed_milestone(progress: u8) -> u8 {
+    [75, 50, 25]
+        .into_iter()
+        .find(|milestone| progress >= *milestone)
+        .unwrap_or(0)
+}
+
+fn format_duration(duration: chrono::Duration) -> String {
+    let seconds = duration.num_seconds().max(0);
+    let hours = seconds / 3600;
+    let minutes = (seconds % 3600) / 60;
+    let seconds = seconds % 60;
+    if hours > 0 {
+        format!("{hours}h {minutes}m {seconds}s")
+    } else if minutes > 0 {
+        format!("{minutes}m {seconds}s")
+    } else {
+        format!("{seconds}s")
+    }
+}
+
 /// Information about the current observation target
 #[derive(Debug, Clone)]
 struct TargetInfo {
@@ -49,6 +72,93 @@ struct TargetInfo {
 enum TargetSource {
     Sequence,
     TsTargetStart,
+}
+
+#[derive(Debug, Clone)]
+struct TrackedSequenceOperation {
+    operation: SequenceOperation,
+    started_at: DateTime<Utc>,
+    estimated_end: Option<DateTime<Utc>>,
+    initial_temperature: Option<f64>,
+    camera: Option<CameraInfo>,
+    last_milestone: u8,
+}
+
+impl TrackedSequenceOperation {
+    fn new(operation: SequenceOperation, now: DateTime<Utc>, camera: Option<CameraInfo>) -> Self {
+        let estimated_end = match &operation.kind {
+            SequenceOperationKind::TimeWait {
+                target_time: Some(target),
+                ..
+            } => Some(target.with_timezone(&Utc)),
+            SequenceOperationKind::TimeWait {
+                configured_duration: Some(duration),
+                ..
+            } => Some(now + *duration),
+            _ => None,
+        };
+        let initial_temperature = camera
+            .as_ref()
+            .map(|info| info.temperature)
+            .filter(|value| value.is_finite());
+        Self {
+            operation,
+            started_at: now,
+            estimated_end,
+            initial_temperature,
+            camera,
+            last_milestone: 0,
+        }
+    }
+
+    fn progress_percent(&self, now: DateTime<Utc>) -> Option<u8> {
+        match &self.operation.kind {
+            SequenceOperationKind::TimeWait { .. } => {
+                let end = self.estimated_end?;
+                let total = end
+                    .signed_duration_since(self.started_at)
+                    .num_milliseconds();
+                if total <= 0 {
+                    return Some(100);
+                }
+                let elapsed = now
+                    .signed_duration_since(self.started_at)
+                    .num_milliseconds()
+                    .clamp(0, total);
+                Some(((elapsed as f64 / total as f64) * 100.0).round() as u8)
+            }
+            SequenceOperationKind::CameraCooling {
+                target_temperature, ..
+            } => {
+                let initial = self.initial_temperature?;
+                let camera = self.camera.as_ref()?;
+                if camera.at_target_temp {
+                    return Some(100);
+                }
+                let total = (initial - target_temperature).abs();
+                if total < 0.1 || !camera.temperature.is_finite() {
+                    return None;
+                }
+                let remaining = (camera.temperature - target_temperature).abs();
+                Some(((1.0 - remaining / total).clamp(0.0, 1.0) * 100.0).round() as u8)
+            }
+        }
+    }
+
+    fn next_milestone(&self, now: DateTime<Utc>) -> Option<u8> {
+        let progress = self.progress_percent(now)?;
+        [75, 50, 25]
+            .into_iter()
+            .find(|milestone| progress >= *milestone && self.last_milestone < *milestone)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum OperationUpdate {
+    Started,
+    Progress(u8),
+    Finished,
+    Failed,
 }
 
 /// State management for the chat updater
@@ -69,6 +179,8 @@ struct UpdaterState {
     sequence_running: bool,
     /// Active TS-WAITSTART wait-end time, if NINA is currently waiting.
     wait_until: Option<DateTime<FixedOffset>>,
+    /// Long-running operations reconstructed from the live sequence tree.
+    sequence_operations: HashMap<String, TrackedSequenceOperation>,
     /// Fingerprint of the last live-status embed posted. Lets us skip the
     /// `upsert_status` call when nothing meaningful has changed since the
     /// previous poll cycle.
@@ -97,6 +209,7 @@ impl UpdaterState {
             last_guider_event: None,
             sequence_running: false,
             wait_until: None,
+            sequence_operations: HashMap::new(),
             last_status_fingerprint: None,
             connected: false,
             consecutive_failures: 0,
@@ -121,7 +234,33 @@ impl UpdaterState {
             .unwrap_or("");
         let mount = self.last_mount_event.as_deref().unwrap_or("");
         let guider = self.last_guider_event.as_deref().unwrap_or("");
-        let waiting = self.wait_until.is_some();
+        let wait_minutes = self
+            .wait_until
+            .map(|end| {
+                end.with_timezone(&Utc)
+                    .signed_duration_since(Utc::now())
+                    .num_minutes()
+            })
+            .unwrap_or(-1);
+        let mut operations = self
+            .sequence_operations
+            .iter()
+            .map(|(key, operation)| {
+                let bucket = match &operation.operation.kind {
+                    SequenceOperationKind::TimeWait { .. } => operation
+                        .estimated_end
+                        .map(|end| end.signed_duration_since(Utc::now()).num_minutes())
+                        .unwrap_or(-1),
+                    SequenceOperationKind::CameraCooling { .. } => operation
+                        .camera
+                        .as_ref()
+                        .map(|camera| (camera.temperature * 2.0).round() as i64)
+                        .unwrap_or(i64::MIN),
+                };
+                format!("{key}:{bucket}")
+            })
+            .collect::<Vec<_>>();
+        operations.sort();
         // Round the meridian-flip ETA to whole minutes; second-by-second
         // drift shouldn't trigger an edit.
         let flip_minutes = self
@@ -129,8 +268,9 @@ impl UpdaterState {
             .map(|h| (h * 60.0).round() as i64)
             .unwrap_or(-1);
         format!(
-            "t={target}|f={filter}|m={mount}|g={guider}|w={waiting}|sr={}|flip={flip_minutes}",
-            self.sequence_running
+            "t={target}|f={filter}|m={mount}|g={guider}|w={wait_minutes}|sr={}|flip={flip_minutes}|ops={}",
+            self.sequence_running,
+            operations.join(",")
         )
     }
 
@@ -275,8 +415,8 @@ impl ChatUpdater {
         loop {
             // Run every poller so live state stays current; the cycle counts as
             // "reachable" if any endpoint answered.
-            let seq_ok = self.poll_sequence().await;
             let events_ok = self.poll_events().await;
+            let seq_ok = self.poll_sequence().await;
             let images_ok = self.poll_images().await;
             let reachable = seq_ok || events_ok || images_ok;
 
@@ -361,7 +501,7 @@ impl ChatUpdater {
     /// service that supports editing in place (currently only the Discord
     /// bot). No-op for telescopes routed only through webhooks/Matrix, or
     /// when the state fingerprint hasn't changed since the last cycle.
-    async fn refresh_status_message(&mut self) {
+    pub async fn refresh_status_message(&mut self) {
         if !self.chat_manager.has_status_upsert(&self.chat_target) {
             return;
         }
@@ -427,6 +567,296 @@ impl ChatUpdater {
         ))
     }
 
+    async fn camera_snapshot_for(&self, operations: &[SequenceOperation]) -> Option<CameraInfo> {
+        let cooling = operations.iter().any(|operation| {
+            operation.is_active()
+                && matches!(operation.kind, SequenceOperationKind::CameraCooling { .. })
+        }) || self.state.sequence_operations.values().any(|tracked| {
+            matches!(
+                tracked.operation.kind,
+                SequenceOperationKind::CameraCooling { .. }
+            )
+        });
+        if !cooling || !self.source.capabilities().equipment_snapshots {
+            return None;
+        }
+        self.source
+            .get_camera_info()
+            .await
+            .ok()
+            .filter(|response| response.success && response.response.connected)
+            .map(|response| response.response)
+    }
+
+    async fn reconcile_sequence_operations(
+        &mut self,
+        operations: Vec<SequenceOperation>,
+        camera: Option<CameraInfo>,
+        announce: bool,
+    ) {
+        let now = Utc::now();
+        let incoming = operations
+            .into_iter()
+            .map(|operation| (operation.key.clone(), operation))
+            .collect::<HashMap<_, _>>();
+        let event_wait_end = self.state.wait_until.map(|end| end.with_timezone(&Utc));
+        let mut notifications = Vec::new();
+        let mut sequence_wait_ended = false;
+
+        let existing_keys = self
+            .state
+            .sequence_operations
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        for key in existing_keys {
+            let Some(next) = incoming.get(&key) else {
+                if let Some(mut previous) = self.state.sequence_operations.remove(&key) {
+                    if matches!(
+                        previous.operation.kind,
+                        SequenceOperationKind::CameraCooling { .. }
+                    ) {
+                        previous.camera = camera.clone();
+                    }
+                    sequence_wait_ended |= matches!(
+                        previous.operation.kind,
+                        SequenceOperationKind::TimeWait { .. }
+                    );
+                    notifications.push((previous, OperationUpdate::Finished));
+                }
+                continue;
+            };
+            let identity_changed =
+                self.state
+                    .sequence_operations
+                    .get(&key)
+                    .is_some_and(|previous| {
+                        previous.operation.name != next.name
+                            || std::mem::discriminant(&previous.operation.kind)
+                                != std::mem::discriminant(&next.kind)
+                    });
+            if identity_changed {
+                if let Some(mut previous) = self.state.sequence_operations.remove(&key) {
+                    if matches!(
+                        previous.operation.kind,
+                        SequenceOperationKind::CameraCooling { .. }
+                    ) {
+                        previous.camera = camera.clone();
+                    }
+                    sequence_wait_ended |= matches!(
+                        previous.operation.kind,
+                        SequenceOperationKind::TimeWait { .. }
+                    );
+                    notifications.push((previous, OperationUpdate::Finished));
+                }
+                // The second pass treats the replacement at this path as a
+                // newly started operation instead of retaining stale timing
+                // or camera progress from the old sequence item.
+                continue;
+            }
+            if !next.is_active() {
+                if let Some(mut previous) = self.state.sequence_operations.remove(&key) {
+                    if matches!(
+                        previous.operation.kind,
+                        SequenceOperationKind::CameraCooling { .. }
+                    ) {
+                        previous.camera = camera.clone();
+                    }
+                    sequence_wait_ended |= matches!(
+                        previous.operation.kind,
+                        SequenceOperationKind::TimeWait { .. }
+                    );
+                    notifications.push((
+                        previous,
+                        if next.is_failed() {
+                            OperationUpdate::Failed
+                        } else {
+                            OperationUpdate::Finished
+                        },
+                    ));
+                }
+                continue;
+            }
+
+            if let Some(tracked) = self.state.sequence_operations.get_mut(&key) {
+                tracked.operation = next.clone();
+                if matches!(
+                    tracked.operation.kind,
+                    SequenceOperationKind::CameraCooling { .. }
+                ) {
+                    if tracked.initial_temperature.is_none() {
+                        tracked.initial_temperature = camera
+                            .as_ref()
+                            .map(|info| info.temperature)
+                            .filter(|value| value.is_finite());
+                    }
+                    tracked.camera = camera.clone();
+                } else if let SequenceOperationKind::TimeWait {
+                    target_time: Some(target),
+                    ..
+                } = &tracked.operation.kind
+                {
+                    tracked.estimated_end = Some(target.with_timezone(&Utc));
+                } else if matches!(
+                    tracked.operation.kind,
+                    SequenceOperationKind::TimeWait { .. }
+                ) && event_wait_end.is_some()
+                {
+                    tracked.estimated_end = event_wait_end;
+                }
+
+                if let Some(milestone) = tracked.next_milestone(now) {
+                    tracked.last_milestone = milestone;
+                    notifications.push((tracked.clone(), OperationUpdate::Progress(milestone)));
+                }
+            }
+        }
+
+        for (key, operation) in incoming {
+            if !operation.is_active() || self.state.sequence_operations.contains_key(&key) {
+                continue;
+            }
+            let operation_camera =
+                matches!(operation.kind, SequenceOperationKind::CameraCooling { .. })
+                    .then(|| camera.clone())
+                    .flatten();
+            let mut tracked = TrackedSequenceOperation::new(operation, now, operation_camera);
+            if matches!(
+                tracked.operation.kind,
+                SequenceOperationKind::TimeWait { .. }
+            ) && event_wait_end.is_some()
+            {
+                tracked.estimated_end = event_wait_end;
+            }
+            if !announce {
+                tracked.last_milestone = tracked
+                    .progress_percent(now)
+                    .map(completed_milestone)
+                    .unwrap_or(0);
+            }
+            let suppress_duplicate_wait = matches!(
+                tracked.operation.kind,
+                SequenceOperationKind::TimeWait { .. }
+            ) && self.state.wait_until.is_some();
+            if announce && !suppress_duplicate_wait {
+                notifications.push((tracked.clone(), OperationUpdate::Started));
+            }
+            self.state.sequence_operations.insert(key, tracked);
+        }
+
+        if sequence_wait_ended
+            && !self.state.sequence_operations.values().any(|tracked| {
+                matches!(
+                    tracked.operation.kind,
+                    SequenceOperationKind::TimeWait { .. }
+                )
+            })
+        {
+            self.state.wait_until = None;
+        }
+
+        if announce && self.chat_manager.service_count() > 0 {
+            for (operation, update) in notifications {
+                self.send_sequence_operation_update(&operation, update)
+                    .await;
+            }
+        }
+    }
+
+    async fn send_sequence_operation_update(
+        &self,
+        tracked: &TrackedSequenceOperation,
+        update: OperationUpdate,
+    ) {
+        let (operation_name, title) = match (&tracked.operation.kind, update) {
+            (SequenceOperationKind::CameraCooling { .. }, OperationUpdate::Started) => {
+                ("Camera cooling", "❄️ Camera cooling started")
+            }
+            (SequenceOperationKind::CameraCooling { .. }, OperationUpdate::Progress(_)) => {
+                ("Camera cooling", "❄️ Camera cooling update")
+            }
+            (SequenceOperationKind::CameraCooling { .. }, OperationUpdate::Finished) => {
+                ("Camera cooling", "✅ Camera cooling finished")
+            }
+            (SequenceOperationKind::CameraCooling { .. }, OperationUpdate::Failed) => {
+                ("Camera cooling", "❌ Camera cooling failed")
+            }
+            (SequenceOperationKind::TimeWait { .. }, OperationUpdate::Started) => {
+                ("Timed wait", "⏳ Timed wait started")
+            }
+            (SequenceOperationKind::TimeWait { .. }, OperationUpdate::Progress(_)) => {
+                ("Timed wait", "⏳ Timed wait update")
+            }
+            (SequenceOperationKind::TimeWait { .. }, OperationUpdate::Finished) => {
+                ("Timed wait", "✅ Timed wait finished")
+            }
+            (SequenceOperationKind::TimeWait { .. }, OperationUpdate::Failed) => {
+                ("Timed wait", "❌ Timed wait failed")
+            }
+        };
+        let color = match update {
+            OperationUpdate::Finished => colors::GREEN,
+            OperationUpdate::Failed => colors::RED,
+            OperationUpdate::Started | OperationUpdate::Progress(_) => colors::YELLOW,
+        };
+        let mut message = ChatMessage::new(&self.titled(title))
+            .color(color)
+            .field("Operation", operation_name, true)
+            .field("Sequence item", &tracked.operation.name, true);
+
+        if let OperationUpdate::Progress(percent) = update {
+            message = message.field("Progress", &format!("{percent}%"), true);
+        }
+        match &tracked.operation.kind {
+            SequenceOperationKind::CameraCooling {
+                target_temperature,
+                minimum_duration,
+            } => {
+                message = message.field(
+                    "Target temperature",
+                    &format!("{target_temperature:.1} °C"),
+                    true,
+                );
+                if let Some(duration) = minimum_duration {
+                    message = message.field("Minimum time", &format_duration(*duration), true);
+                }
+                if let Some(camera) = &tracked.camera {
+                    if camera.temperature.is_finite() {
+                        message = message.field(
+                            "Current temperature",
+                            &format!("{:.1} °C", camera.temperature),
+                            true,
+                        );
+                    }
+                    if camera.cooler_power.is_finite() {
+                        message = message.field(
+                            "Cooler power",
+                            &format!("{:.0}%", camera.cooler_power),
+                            true,
+                        );
+                    }
+                }
+            }
+            SequenceOperationKind::TimeWait { .. } => {
+                if let Some(end) = tracked.estimated_end {
+                    let remaining = end
+                        .signed_duration_since(Utc::now())
+                        .max(chrono::Duration::zero());
+                    message = message
+                        .field(
+                            "Until",
+                            &end.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+                            false,
+                        )
+                        .field("Remaining", &format_duration(remaining), true);
+                }
+            }
+        }
+        self.chat_manager
+            .send_message(&message, &self.chat_target)
+            .await;
+    }
+
     pub async fn initialize_baseline(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let n = self.telescope_name.clone();
         let capabilities = self.source.capabilities();
@@ -443,6 +873,10 @@ impl ChatUpdater {
             match self.source.get_sequence().await {
                 Ok(sequence) => {
                     self.state.meridian_flip_time = extract_meridian_flip_time(&sequence);
+                    let operations = extract_sequence_operations(&sequence);
+                    let camera = self.camera_snapshot_for(&operations).await;
+                    self.reconcile_sequence_operations(operations, camera, false)
+                        .await;
 
                     // Only use sequence target if no TS-TARGETSTART target was found
                     if self.state.current_target.is_none()
@@ -619,6 +1053,9 @@ impl ChatUpdater {
                         self.handle_event(&event).await;
                     }
                 }
+                if self.state.wait_until.is_some_and(|end| Utc::now() >= end) {
+                    self.state.wait_until = None;
+                }
                 true
             }
             Err(e) => {
@@ -642,6 +1079,30 @@ impl ChatUpdater {
     }
 
     async fn handle_event(&mut self, event: &Event) {
+        match event.event.as_str() {
+            event_types::MOUNT_PARKED
+            | event_types::MOUNT_UNPARKED
+            | event_types::MOUNT_HOMED
+            | event_types::MOUNT_BEFORE_FLIP
+            | event_types::MOUNT_AFTER_FLIP
+            | event_types::MOUNT_CENTER => {
+                self.state.last_mount_event = Some(event.event.clone());
+            }
+            event_types::GUIDER_START | event_types::GUIDER_STOP | event_types::GUIDER_DITHER => {
+                self.state.last_guider_event = Some(event.event.clone());
+            }
+            event_types::SEQUENCE_STARTING => self.state.sequence_running = true,
+            event_types::SEQUENCE_FINISHED => self.state.sequence_running = false,
+            event_types::TS_WAITSTART => {
+                if let Some(EventDetails::WaitStart { wait_end_time }) = &event.details
+                    && let Ok(parsed) = DateTime::parse_from_rfc3339(wait_end_time)
+                {
+                    self.state.wait_until = Some(parsed);
+                }
+            }
+            _ => {}
+        }
+
         match event.event.as_str() {
             event_types::TS_TARGETSTART | event_types::TS_NEWTARGETSTART => {
                 self.handle_ts_targetstart(event).await
@@ -872,6 +1333,10 @@ impl ChatUpdater {
             Ok(sequence) => {
                 let new_sequence_target = extract_current_target(&sequence);
                 let new_meridian_flip_time = extract_meridian_flip_time(&sequence);
+                let operations = extract_sequence_operations(&sequence);
+                let camera = self.camera_snapshot_for(&operations).await;
+                self.reconcile_sequence_operations(operations, camera, true)
+                    .await;
 
                 self.state.meridian_flip_time = new_meridian_flip_time;
                 self.state.sequence = Some(sequence);
@@ -1110,7 +1575,57 @@ impl ChatUpdater {
     fn format_startup_status(&self) -> String {
         let mut parts: Vec<String> = Vec::new();
 
-        if let Some(end) = self.state.wait_until {
+        let mut operations = self.state.sequence_operations.values().collect::<Vec<_>>();
+        operations.sort_by(|left, right| left.operation.key.cmp(&right.operation.key));
+        let has_sequence_wait = operations.iter().any(|tracked| {
+            matches!(
+                tracked.operation.kind,
+                SequenceOperationKind::TimeWait { .. }
+            )
+        });
+        for tracked in operations {
+            match &tracked.operation.kind {
+                SequenceOperationKind::CameraCooling {
+                    target_temperature, ..
+                } => {
+                    let detail = tracked
+                        .camera
+                        .as_ref()
+                        .filter(|camera| camera.temperature.is_finite())
+                        .map_or_else(
+                            || format!("target {target_temperature:.1} °C"),
+                            |camera| {
+                                let power = if camera.cooler_power.is_finite() {
+                                    format!(", cooler {:.0}%", camera.cooler_power)
+                                } else {
+                                    String::new()
+                                };
+                                format!(
+                                    "{:.1} → {target_temperature:.1} °C{power}",
+                                    camera.temperature
+                                )
+                            },
+                        );
+                    parts.push(format!("❄️ Camera cooling ({detail})"));
+                }
+                SequenceOperationKind::TimeWait { .. } => {
+                    if let Some(end) = tracked.estimated_end {
+                        let remaining = end
+                            .signed_duration_since(Utc::now())
+                            .max(chrono::Duration::zero());
+                        parts.push(format!(
+                            "⏳ Waiting until {} ({} remaining)",
+                            end.format("%H:%M UTC"),
+                            format_duration(remaining)
+                        ));
+                    } else {
+                        parts.push("⏳ Timed wait in progress".to_string());
+                    }
+                }
+            }
+        }
+
+        if !has_sequence_wait && let Some(end) = self.state.wait_until {
             let now = Utc::now();
             let minutes = end
                 .with_timezone(&Utc)
@@ -1770,6 +2285,69 @@ fn get_event_title(event: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn operation(kind: SequenceOperationKind) -> SequenceOperation {
+        SequenceOperation {
+            key: "1/0".to_string(),
+            name: "Test operation".to_string(),
+            status: "RUNNING".to_string(),
+            kind,
+        }
+    }
+
+    #[test]
+    fn timed_wait_progress_reaches_notification_milestones() {
+        let now = Utc::now();
+        let tracked = TrackedSequenceOperation::new(
+            operation(SequenceOperationKind::TimeWait {
+                target_time: None,
+                configured_duration: Some(chrono::Duration::seconds(100)),
+            }),
+            now,
+            None,
+        );
+
+        assert_eq!(tracked.progress_percent(now), Some(0));
+        assert_eq!(
+            tracked.progress_percent(now + chrono::Duration::seconds(51)),
+            Some(51)
+        );
+        assert_eq!(
+            tracked.next_milestone(now + chrono::Duration::seconds(51)),
+            Some(50)
+        );
+    }
+
+    #[test]
+    fn cooling_progress_uses_live_camera_temperature() {
+        let now = Utc::now();
+        let initial = CameraInfo {
+            connected: true,
+            can_set_temperature: true,
+            cooler_on: true,
+            cooler_power: 80.0,
+            temperature: 10.0,
+            temperature_set_point: -10.0,
+            at_target_temp: false,
+            name: "Camera".to_string(),
+            display_name: "Camera".to_string(),
+        };
+        let mut tracked = TrackedSequenceOperation::new(
+            operation(SequenceOperationKind::CameraCooling {
+                target_temperature: -10.0,
+                minimum_duration: Some(chrono::Duration::minutes(10)),
+            }),
+            now,
+            Some(initial.clone()),
+        );
+        tracked.camera = Some(CameraInfo {
+            temperature: 0.0,
+            ..initial
+        });
+
+        assert_eq!(tracked.progress_percent(now), Some(50));
+        assert_eq!(tracked.next_milestone(now), Some(50));
+    }
 
     #[test]
     fn backoff_doubles_up_to_max() {

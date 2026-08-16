@@ -1,3 +1,4 @@
+use chrono::{DateTime as ChronoDateTime, FixedOffset};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -166,6 +167,186 @@ pub struct AltitudeCondition {
     pub altitude: f64,
     pub expected_time: String,
     pub name: String,
+}
+
+/// A long-running sequence operation that benefits from chat progress updates.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SequenceOperation {
+    /// Stable position within the sequence tree for correlating adjacent polls.
+    pub key: String,
+    pub name: String,
+    pub status: String,
+    pub kind: SequenceOperationKind,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum SequenceOperationKind {
+    CameraCooling {
+        target_temperature: f64,
+        minimum_duration: Option<chrono::Duration>,
+    },
+    TimeWait {
+        target_time: Option<ChronoDateTime<FixedOffset>>,
+        configured_duration: Option<chrono::Duration>,
+    },
+}
+
+impl SequenceOperation {
+    pub fn is_active(&self) -> bool {
+        matches!(
+            self.status.to_ascii_uppercase().as_str(),
+            "RUNNING" | "ACTIVE"
+        )
+    }
+
+    pub fn is_failed(&self) -> bool {
+        matches!(
+            self.status.to_ascii_uppercase().as_str(),
+            "FAILED" | "ABORTED" | "CANCELLED" | "CANCELED"
+        )
+    }
+}
+
+/// Find camera-cooling and timed-wait items without depending on localized
+/// display names. Direct snapshots supply `OperationKind`; older plugin and
+/// Advanced API payloads are recognized from their stable data fields.
+pub fn extract_sequence_operations(sequence: &SequenceResponse) -> Vec<SequenceOperation> {
+    fn visit_items(values: &[Value], parent: &str, output: &mut Vec<SequenceOperation>) {
+        for (index, value) in values.iter().enumerate() {
+            let Some(object) = value.as_object() else {
+                continue;
+            };
+            let key = if parent.is_empty() {
+                index.to_string()
+            } else {
+                format!("{parent}/{index}")
+            };
+            let name = object
+                .get("Name")
+                .and_then(Value::as_str)
+                .unwrap_or("Sequence operation")
+                .to_string();
+            let status = object
+                .get("Status")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let explicit_kind = object.get("OperationKind").and_then(Value::as_str);
+
+            let is_cooling = explicit_kind == Some("camera_cooling")
+                || (object.contains_key("Temperature") && object.contains_key("MinCoolingTime"));
+            let is_wait = explicit_kind == Some("time_wait")
+                || object.contains_key("CalculatedWaitDuration")
+                || object.contains_key("Delay");
+
+            if is_cooling {
+                if let Some(target_temperature) = object.get("Temperature").and_then(value_as_f64) {
+                    output.push(SequenceOperation {
+                        key: key.clone(),
+                        name: name.clone(),
+                        status: status.clone(),
+                        kind: SequenceOperationKind::CameraCooling {
+                            target_temperature,
+                            minimum_duration: object
+                                .get("MinCoolingTime")
+                                .and_then(parse_minutes_or_timespan),
+                        },
+                    });
+                }
+            } else if is_wait {
+                let configured_duration = object
+                    .get("CalculatedWaitDuration")
+                    .and_then(parse_duration_value)
+                    .or_else(|| object.get("Delay").and_then(parse_duration_value));
+                let target_time = object
+                    .get("TargetTime")
+                    .and_then(Value::as_str)
+                    .and_then(parse_target_time);
+                if configured_duration.is_some() || target_time.is_some() {
+                    output.push(SequenceOperation {
+                        key: key.clone(),
+                        name: name.clone(),
+                        status: status.clone(),
+                        kind: SequenceOperationKind::TimeWait {
+                            target_time,
+                            configured_duration,
+                        },
+                    });
+                }
+            }
+
+            if let Some(items) = object.get("Items").and_then(Value::as_array) {
+                visit_items(items, &key, output);
+            }
+        }
+    }
+
+    let mut operations = Vec::new();
+    visit_items(&sequence.response, "", &mut operations);
+    operations
+}
+
+fn value_as_f64(value: &Value) -> Option<f64> {
+    value
+        .as_f64()
+        .or_else(|| value.as_str()?.parse::<f64>().ok())
+        .filter(|value| value.is_finite())
+}
+
+fn parse_target_time(value: &str) -> Option<ChronoDateTime<FixedOffset>> {
+    ChronoDateTime::parse_from_rfc3339(value).ok()
+}
+
+fn parse_duration_value(value: &Value) -> Option<chrono::Duration> {
+    if let Some(seconds) = value_as_f64(value) {
+        return duration_from_seconds(seconds);
+    }
+    parse_timespan(value.as_str()?)
+}
+
+fn parse_minutes_or_timespan(value: &Value) -> Option<chrono::Duration> {
+    if let Some(minutes) = value_as_f64(value) {
+        return duration_from_seconds(minutes * 60.0);
+    }
+    parse_timespan(value.as_str()?)
+}
+
+fn duration_from_seconds(seconds: f64) -> Option<chrono::Duration> {
+    if !seconds.is_finite() || seconds < 0.0 {
+        return None;
+    }
+    let milliseconds = (seconds * 1000.0).round();
+    if milliseconds > i64::MAX as f64 {
+        return None;
+    }
+    chrono::Duration::try_milliseconds(milliseconds as i64)
+}
+
+/// Parse the invariant TimeSpan strings emitted by System.Text.Json and
+/// Newtonsoft.Json: `[d.]hh:mm:ss[.fffffff]`.
+fn parse_timespan(value: &str) -> Option<chrono::Duration> {
+    let (days, clock) = match value.split_once('.') {
+        Some((head, tail)) if !head.contains(':') => (head.parse::<i64>().ok()?, tail),
+        _ => (0, value),
+    };
+    let mut fields = clock.split(':');
+    let hours = fields.next()?.parse::<i64>().ok()?;
+    let minutes = fields.next()?.parse::<i64>().ok()?;
+    let seconds = fields.next()?.parse::<f64>().ok()?;
+    if fields.next().is_some()
+        || hours < 0
+        || !(0..60).contains(&minutes)
+        || !(0.0..60.0).contains(&seconds)
+    {
+        return None;
+    }
+    let whole_seconds = days
+        .checked_mul(24)?
+        .checked_add(hours)?
+        .checked_mul(60)?
+        .checked_add(minutes)?
+        .checked_mul(60)?;
+    duration_from_seconds(whole_seconds as f64 + seconds)
 }
 
 impl SequenceResponse {
@@ -609,6 +790,118 @@ mod tests {
         let flip_time = extract_meridian_flip_time(&sequence);
 
         assert!(flip_time.is_none());
+    }
+
+    #[test]
+    fn extracts_direct_cooling_and_wait_operations_recursively() {
+        let sequence: SequenceResponse = serde_json::from_value(serde_json::json!({
+            "Response": [
+                {"GlobalTriggers": []},
+                {
+                    "Name": "Startup_Container",
+                    "Status": "RUNNING",
+                    "Items": [
+                        {
+                            "Name": "Cool camera",
+                            "Status": "RUNNING",
+                            "OperationKind": "camera_cooling",
+                            "Temperature": -10.0,
+                            "MinCoolingTime": "00:15:00"
+                        },
+                        {
+                            "Name": "Wait for time span",
+                            "Status": "RUNNING",
+                            "OperationKind": "time_wait",
+                            "Delay": 300,
+                            "CalculatedWaitDuration": "00:05:00"
+                        }
+                    ]
+                }
+            ],
+            "Error": "",
+            "StatusCode": 200,
+            "Success": true,
+            "Type": "API"
+        }))
+        .unwrap();
+
+        let operations = extract_sequence_operations(&sequence);
+        assert_eq!(operations.len(), 2);
+        assert!(operations.iter().all(SequenceOperation::is_active));
+        assert!(matches!(
+            operations[0].kind,
+            SequenceOperationKind::CameraCooling {
+                target_temperature: -10.0,
+                minimum_duration: Some(duration)
+            } if duration == chrono::Duration::minutes(15)
+        ));
+        assert!(matches!(
+            operations[1].kind,
+            SequenceOperationKind::TimeWait {
+                target_time: None,
+                configured_duration: Some(duration)
+            } if duration == chrono::Duration::minutes(5)
+        ));
+    }
+
+    #[test]
+    fn recognizes_advanced_api_fields_but_ignores_timed_conditions() {
+        let sequence: SequenceResponse = serde_json::from_value(serde_json::json!({
+            "Response": [{
+                "Name": "Target_Container",
+                "Status": "RUNNING",
+                "Items": [{
+                    "Name": "CoolCamera",
+                    "Status": "RUNNING",
+                    "Temperature": "-15",
+                    "MinCoolingTime": 10
+                }, {
+                    "Name": "WaitForTime",
+                    "Status": "RUNNING",
+                    "CalculatedWaitDuration": "00:01:30.5000000",
+                    "TargetTime": "2026-08-16T01:02:03-07:00"
+                }, {
+                    "Name": "Attendre une durée",
+                    "Status": "RUNNING",
+                    "Delay": 45
+                }],
+                "Conditions": [{
+                    "Name": "Time span condition",
+                    "Status": "RUNNING",
+                    "RemainingTime": "00:30:00",
+                    "TargetTime": "2026-08-16T02:00:00-07:00"
+                }]
+            }],
+            "Error": "",
+            "StatusCode": 200,
+            "Success": true,
+            "Type": "API"
+        }))
+        .unwrap();
+
+        let operations = extract_sequence_operations(&sequence);
+        assert_eq!(operations.len(), 3);
+        assert!(matches!(
+            operations[0].kind,
+            SequenceOperationKind::CameraCooling {
+                minimum_duration: Some(duration),
+                ..
+            } if duration == chrono::Duration::minutes(10)
+        ));
+        assert!(matches!(
+            operations[1].kind,
+            SequenceOperationKind::TimeWait {
+                target_time: Some(_),
+                configured_duration: Some(duration)
+            } if duration == chrono::Duration::milliseconds(90_500)
+        ));
+        assert!(matches!(
+            operations[2].kind,
+            SequenceOperationKind::TimeWait {
+                target_time: None,
+                configured_duration: Some(duration)
+            } if duration == chrono::Duration::seconds(45)
+        ));
     }
 
     #[test]

@@ -15,6 +15,7 @@ use super::rig_resolver::{CommandContext, RigResolver};
 use super::status_state::{StatusMessage, StatusState};
 use super::{ChatAttachment, ChatMessage, ChatService, ChatTarget, DiscordBotConfig};
 use crate::error::ChatError;
+use crate::sequence::{SequenceOperation, SequenceOperationKind};
 use crate::source::{RigCommand, SharedRigSource};
 use async_trait::async_trait;
 use poise::serenity_prelude::{self as serenity, CreateAttachment, CreateMessage};
@@ -555,6 +556,33 @@ async fn status(
             ),
             false,
         );
+        let operations = crate::sequence::extract_sequence_operations(&seq)
+            .into_iter()
+            .filter(SequenceOperation::is_active)
+            .collect::<Vec<_>>();
+        if !operations.is_empty() {
+            let camera = if operations.iter().any(|operation| {
+                matches!(operation.kind, SequenceOperationKind::CameraCooling { .. })
+            }) {
+                client
+                    .get_camera_info()
+                    .await
+                    .ok()
+                    .filter(|response| response.success && response.response.connected)
+                    .map(|response| response.response)
+            } else {
+                None
+            };
+            embed = embed.field(
+                "Active operations",
+                operations
+                    .iter()
+                    .map(|operation| sequence_operation_summary(operation, camera.as_ref()))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                false,
+            );
+        }
     }
 
     if let Ok(fw) = client.get_filterwheel_info().await
@@ -591,14 +619,107 @@ async fn sequence(
     let flip = crate::sequence::extract_meridian_flip_time(&seq)
         .map(crate::sequence::meridian_flip_time_formatted_with_clock)
         .unwrap_or_else(|| "(n/a)".to_string());
+    let operations = crate::sequence::extract_sequence_operations(&seq)
+        .into_iter()
+        .filter(SequenceOperation::is_active)
+        .collect::<Vec<_>>();
+    let camera = if operations
+        .iter()
+        .any(|operation| matches!(operation.kind, SequenceOperationKind::CameraCooling { .. }))
+    {
+        client
+            .get_camera_info()
+            .await
+            .ok()
+            .filter(|response| response.success && response.response.connected)
+            .map(|response| response.response)
+    } else {
+        None
+    };
 
-    let embed = serenity::CreateEmbed::new()
+    let mut embed = serenity::CreateEmbed::new()
         .title(format!("[{name}] Sequence"))
         .field("Active target", active_target, true)
         .field("Meridian flip in", flip, true)
         .field("Containers", lines.join("\n"), false);
+    if !operations.is_empty() {
+        embed = embed.field(
+            "Active operations",
+            operations
+                .iter()
+                .map(|operation| sequence_operation_summary(operation, camera.as_ref()))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            false,
+        );
+    }
     ctx.send(poise::CreateReply::default().embed(embed)).await?;
     Ok(())
+}
+
+fn sequence_operation_summary(
+    operation: &SequenceOperation,
+    camera: Option<&crate::camera::CameraInfo>,
+) -> String {
+    match &operation.kind {
+        SequenceOperationKind::CameraCooling {
+            target_temperature,
+            minimum_duration,
+        } => {
+            let minimum = minimum_duration
+                .map(|duration| format!(", minimum {}", short_duration(duration)))
+                .unwrap_or_default();
+            camera
+                .filter(|camera| camera.temperature.is_finite())
+                .map_or_else(
+                    || format!("❄️ Cooling to {target_temperature:.1} °C{minimum}"),
+                    |camera| {
+                        let power = if camera.cooler_power.is_finite() {
+                            format!(" at {:.0}% power", camera.cooler_power)
+                        } else {
+                            String::new()
+                        };
+                        format!(
+                            "❄️ Cooling {:.1} → {target_temperature:.1} °C{power}{minimum}",
+                            camera.temperature
+                        )
+                    },
+                )
+        }
+        SequenceOperationKind::TimeWait {
+            target_time,
+            configured_duration,
+        } => {
+            if let Some(target) = target_time {
+                let remaining = target
+                    .with_timezone(&chrono::Utc)
+                    .signed_duration_since(chrono::Utc::now())
+                    .max(chrono::Duration::zero());
+                format!(
+                    "⏳ Waiting until {} ({} remaining)",
+                    target.format("%H:%M %Z"),
+                    short_duration(remaining)
+                )
+            } else if let Some(duration) = configured_duration {
+                format!("⏳ Timed wait ({} configured)", short_duration(*duration))
+            } else {
+                "⏳ Timed wait".to_string()
+            }
+        }
+    }
+}
+
+fn short_duration(duration: chrono::Duration) -> String {
+    let seconds = duration.num_seconds().max(0);
+    let hours = seconds / 3600;
+    let minutes = (seconds % 3600) / 60;
+    if hours > 0 {
+        format!("{hours}h {minutes}m")
+    } else if minutes > 0 {
+        format!("{minutes}m")
+    } else {
+        format!("{seconds}s")
+    }
 }
 
 #[poise::command(slash_command)]
