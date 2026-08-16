@@ -122,7 +122,7 @@ install -Dpm0640 packaging/rpm/chatstronomy-default.json \
   configurable per-telescope thresholds and debounced chat alerts on
   offline/reconnect transitions
 
-* Mon Jun 30 2026 Yann Ramin <github@theatr.us> - 0.1.0-1
+* Tue Jun 30 2026 Yann Ramin <github@theatr.us> - 0.1.0-1
 - Rework packaging for offline mock/COPR builds from vendored crates
 - Create the chatstronomy system user via sysusers.d
 - Ship chatstronomy.service (chat-updater mode) with an EnvironmentFile of knobs
