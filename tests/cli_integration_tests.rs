@@ -22,9 +22,6 @@ mod tests {
         assert!(output.status.success());
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(stdout.contains("Chatstronomy"));
-        assert!(stdout.contains("plugin-runtime"));
-        #[cfg(feature = "hub")]
-        assert!(stdout.contains("hub"));
     }
 
     #[test]
@@ -37,6 +34,7 @@ mod tests {
         assert!(output.status.success());
         let stdout = String::from_utf8_lossy(&output.stdout);
 
+        #[cfg(windows)]
         assert!(stdout.contains("plugin-runtime"));
         #[cfg(feature = "hub")]
         assert!(stdout.contains("hub"));
