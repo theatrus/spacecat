@@ -62,7 +62,7 @@
         "payload_version": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 2,
+          "maximum": 3,
           "default": 1,
           "description": "Additive payload contract. Missing means legacy payload version 1."
         },
@@ -94,7 +94,7 @@
         "payload_version": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 2,
+          "maximum": 3,
           "default": 1,
           "description": "Payload contract selected for this connection."
         },

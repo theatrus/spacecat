@@ -791,11 +791,17 @@ async fn target(
 
     let mut embed = serenity::CreateEmbed::new().title(format!("[{name}] Target"));
     if let Some((tname, coords, project, rot)) = ts_target {
-        embed = embed
-            .field("Name", tname, true)
-            .field("Project", project, true)
-            .field("Rotation", format!("{rot}°"), true);
-        if let Some(s) = coords.display() {
+        // Target Scheduler only supplies project, rotation, and coordinates
+        // when the target carries those broker headers; omit the rows rather
+        // than showing empty ones.
+        embed = embed.field("Name", tname, true);
+        if let Some(project) = project {
+            embed = embed.field("Project", project, true);
+        }
+        if let Some(rot) = rot {
+            embed = embed.field("Rotation", format!("{rot}°"), true);
+        }
+        if let Some(s) = coords.as_ref().and_then(|coords| coords.display()) {
             embed = embed.field("Coordinates", s, false);
         }
     } else {

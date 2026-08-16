@@ -11,7 +11,7 @@ use super::server::HubState;
 use crate::direct::protocol::{
     AgentHello, AuthRequest, CURRENT_PAYLOAD_VERSION, ClientHello, DirectMessage,
     LEGACY_PAYLOAD_VERSION, PROTOCOL_VERSION, PairRequest, QueryKind, QueryRequest, QueryResult,
-    RigId,
+    RigId, negotiate_payload_version,
 };
 use crate::source::RigCapabilities;
 use axum::extract::State;
@@ -231,41 +231,87 @@ struct PairRollback {
     credential: String,
 }
 
+/// Why a handshake was refused.
+///
+/// The distinction matters: a client fault is the client's to fix and counts
+/// against the per-IP guessing budget, while a hub fault must not tell a
+/// legitimate rig to stop retrying, and must not spend its budget either.
+enum AuthFailure {
+    Client(String),
+    Internal(String),
+}
+
+impl AuthFailure {
+    fn client(message: impl Into<String>) -> Self {
+        Self::Client(message.into())
+    }
+
+    fn internal(message: impl Into<String>) -> Self {
+        Self::Internal(message.into())
+    }
+}
+
 /// Authenticate the first frame: either a pairing exchange or a credential
 /// presentation. Returns the telescope, the hello, the response to send,
 /// and — for pairing — the rollback data for a failed delivery.
 fn authenticate(
     state: &HubState,
     first: &DirectMessage,
-) -> Result<(i64, ClientHello, DirectMessage, Option<PairRollback>), String> {
+) -> Result<(i64, ClientHello, DirectMessage, Option<PairRollback>), AuthFailure> {
     match first {
         DirectMessage::Pair(PairRequest {
             pairing_token,
             hello,
         }) => {
-            check_hello(hello)?;
+            check_hello(hello).map_err(AuthFailure::Client)?;
             let telescope_id = state
                 .db
                 .consume_pairing_token(pairing_token)
-                .map_err(|e| format!("database error: {e}"))?
-                .ok_or("pairing token is unknown, expired, or already used")?;
-            // Pairing rotates: earlier credentials die so a retired install
-            // can never reconnect and displace the new rig.
-            if let Ok(revoked) = state.db.revoke_rig_credentials(telescope_id)
-                && revoked > 0
-            {
-                println!(
+                .map_err(|e| AuthFailure::internal(format!("database error: {e}")))?
+                .ok_or_else(|| {
+                    AuthFailure::client("pairing token is unknown, expired, or already used")
+                })?;
+
+            // The token is spent now, and it was committed in its own
+            // transaction. Every later failure has to hand it back, or a hub
+            // fault burns the user's one-time code for good.
+            let restore_token = |context: String| {
+                if let Err(error) = state.db.restore_pairing_token(pairing_token) {
+                    eprintln!(
+                        "Could not restore the pairing token for telescope {telescope_id} after {context}: {error}"
+                    );
+                }
+                AuthFailure::internal(context)
+            };
+
+            // Pairing rotates: earlier credentials die so a retired install can
+            // never reconnect and displace the new rig. That is a security
+            // invariant, so a failure here fails the pairing instead of
+            // quietly leaving the old credentials live.
+            match state.db.revoke_rig_credentials(telescope_id) {
+                Ok(revoked) if revoked > 0 => println!(
                     "Pairing for telescope {telescope_id} revoked {revoked} earlier credential(s)"
-                );
+                ),
+                Ok(_) => {}
+                Err(error) => {
+                    return Err(restore_token(format!(
+                        "could not revoke earlier credentials: {error}"
+                    )));
+                }
             }
-            let credential = state
-                .db
-                .create_rig_credential(
-                    telescope_id,
-                    &hello.node_id.to_string(),
-                    &hello.profile_id.to_string(),
-                )
-                .map_err(|e| format!("database error: {e}"))?;
+
+            let credential = match state.db.create_rig_credential(
+                telescope_id,
+                &hello.node_id.to_string(),
+                &hello.profile_id.to_string(),
+            ) {
+                Ok(credential) => credential,
+                Err(error) => {
+                    return Err(restore_token(format!(
+                        "could not create the rig credential: {error}"
+                    )));
+                }
+            };
             let response = DirectMessage::PairResult(crate::direct::protocol::PairResult {
                 credential: credential.clone(),
                 agent_hello: agent_hello(hello),
@@ -281,23 +327,27 @@ fn authenticate(
             ))
         }
         DirectMessage::Auth(AuthRequest { credential, hello }) => {
-            check_hello(hello)?;
+            check_hello(hello).map_err(AuthFailure::Client)?;
             let row = state
                 .db
                 .lookup_rig_credential(credential)
-                .map_err(|e| format!("database error: {e}"))?
-                .ok_or("credential is unknown or revoked")?;
+                .map_err(|e| AuthFailure::internal(format!("database error: {e}")))?
+                .ok_or_else(|| AuthFailure::client("credential is unknown or revoked"))?;
             // The credential is bound to the installation that paired it.
             if row.node_id != hello.node_id.to_string() {
-                return Err("credential is bound to a different node".to_string());
+                return Err(AuthFailure::client(
+                    "credential is bound to a different node",
+                ));
             }
             if row.profile_id != hello.profile_id.to_string() {
-                return Err("credential is bound to a different N.I.N.A. profile".to_string());
+                return Err(AuthFailure::client(
+                    "credential is bound to a different N.I.N.A. profile",
+                ));
             }
             let response = DirectMessage::AgentHello(agent_hello(hello));
             Ok((row.telescope_id, hello.clone(), response, None))
         }
-        _ => Err("first frame must be pair or auth".to_string()),
+        _ => Err(AuthFailure::client("first frame must be pair or auth")),
     }
 }
 
@@ -308,9 +358,12 @@ fn check_hello(hello: &ClientHello) -> Result<(), String> {
             hello.protocol_version
         ));
     }
-    if !(LEGACY_PAYLOAD_VERSION..=CURRENT_PAYLOAD_VERSION).contains(&hello.payload_version) {
+    // A client newer than this hub is clamped in `agent_hello` rather than
+    // refused. Its additive fields are ignored by the permissive serde
+    // defaults, so refusing would break a rig that would otherwise work.
+    if hello.payload_version < LEGACY_PAYLOAD_VERSION {
         return Err(format!(
-            "unsupported payload version {} (hub supports {LEGACY_PAYLOAD_VERSION} through {CURRENT_PAYLOAD_VERSION})",
+            "unsupported payload version {} (hub supports {LEGACY_PAYLOAD_VERSION} and newer)",
             hello.payload_version
         ));
     }
@@ -320,7 +373,7 @@ fn check_hello(hello: &ClientHello) -> Result<(), String> {
 fn agent_hello(hello: &ClientHello) -> AgentHello {
     AgentHello {
         protocol_version: PROTOCOL_VERSION,
-        payload_version: hello.payload_version,
+        payload_version: negotiate_payload_version(hello.payload_version),
         connection_id: Uuid::new_v4(),
         rig_id: RigId {
             node_id: hello.node_id,
@@ -352,9 +405,21 @@ async fn handle_socket(state: HubState, mut socket: WebSocket, client_ip: String
 
     let (telescope_id, hello, response, pair_rollback) = match authenticate(&state, &first) {
         Ok(ok) => ok,
-        Err(message) => {
+        Err(AuthFailure::Client(message)) => {
             state.limits.direct_auth.check(&client_ip);
             reject(socket, &message, false).await;
+            return;
+        }
+        Err(AuthFailure::Internal(message)) => {
+            // A hub-side fault is not the rig's doing: tell it to come back,
+            // and do not spend its per-IP budget on our outage.
+            eprintln!("Direct handshake failed for {client_ip}: {message}");
+            reject(
+                socket,
+                "the hub is temporarily unavailable; retry shortly",
+                true,
+            )
+            .await;
             return;
         }
     };
@@ -363,18 +428,37 @@ async fn handle_socket(state: HubState, mut socket: WebSocket, client_ip: String
         // credential: give the token back and drop the orphan credential so
         // the client's retry with the same token works.
         if let Some(rollback) = pair_rollback {
-            let _ = state.db.delete_rig_credential(&rollback.credential);
-            let _ = state.db.restore_pairing_token(&rollback.token);
-            println!("Pairing reply for telescope {telescope_id} was not delivered; rolled back");
+            let mut failures = Vec::new();
+            if let Err(error) = state.db.delete_rig_credential(&rollback.credential) {
+                failures.push(format!("credential not deleted: {error}"));
+            }
+            if let Err(error) = state.db.restore_pairing_token(&rollback.token) {
+                failures.push(format!("pairing token not restored: {error}"));
+            }
+            if failures.is_empty() {
+                println!(
+                    "Pairing reply for telescope {telescope_id} was not delivered; rolled back"
+                );
+            } else {
+                // Claiming a clean rollback when it failed sends whoever is
+                // debugging a stuck pairing in exactly the wrong direction.
+                eprintln!(
+                    "Pairing reply for telescope {telescope_id} was not delivered and the rollback did not complete ({})",
+                    failures.join("; ")
+                );
+            }
         }
         return;
     }
 
+    // Everything downstream must reason about what both peers agreed to, not
+    // what the client asked for.
+    let payload_version = negotiate_payload_version(hello.payload_version);
     let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel();
     let connection = Arc::new(RigConnection {
         telescope_id,
         session_id: hello.session_id,
-        payload_version: hello.payload_version,
+        payload_version,
         capabilities: hello.capabilities,
         profile_name: hello.profile_name.clone(),
         outgoing: outgoing_tx,
@@ -384,21 +468,26 @@ async fn handle_socket(state: HubState, mut socket: WebSocket, client_ip: String
     // A newer connection for the same telescope replaces the older one. The
     // old session is told to close — its own task holds an Arc of its
     // connection, so only an explicit close ends its write loop.
-    let compatibility = if hello.payload_version == LEGACY_PAYLOAD_VERSION {
-        "legacy"
-    } else {
-        "current"
+    let compatibility = match payload_version {
+        LEGACY_PAYLOAD_VERSION => "legacy",
+        CURRENT_PAYLOAD_VERSION => "current",
+        _ => "downgraded",
     };
+    if hello.payload_version > CURRENT_PAYLOAD_VERSION {
+        println!(
+            "Rig for telescope {telescope_id} advertised payload v{}; this hub speaks v{CURRENT_PAYLOAD_VERSION}, so newer fields will be ignored",
+            hello.payload_version
+        );
+    }
     if let Some(replaced) = state.rig_connections.insert(connection.clone()) {
         replaced.request_close("replaced by a newer connection for this telescope", true);
         println!(
-            "Rig for telescope {telescope_id} reconnected with payload v{} {compatibility}; replacing previous session",
-            hello.payload_version
+            "Rig for telescope {telescope_id} reconnected with payload v{payload_version} {compatibility}; replacing previous session"
         );
     } else {
         println!(
-            "Rig connected for telescope {telescope_id} ({}, payload v{} {compatibility})",
-            hello.profile_name, hello.payload_version
+            "Rig connected for telescope {telescope_id} ({}, payload v{payload_version} {compatibility})",
+            hello.profile_name
         );
     }
 
@@ -506,16 +595,32 @@ mod tests {
         assert_eq!(agent_hello(&hello).payload_version, LEGACY_PAYLOAD_VERSION);
     }
 
-    #[test]
-    fn websocket_hello_rejects_unknown_payload_versions() {
+    fn hello_fixture() -> ClientHello {
         let message: DirectMessage = serde_json::from_str(include_str!(
             "../../contracts/direct/v1/fixtures/client-hello.json"
         ))
         .unwrap();
-        let DirectMessage::ClientHello(mut hello) = message else {
+        let DirectMessage::ClientHello(hello) = message else {
             panic!("expected client hello");
         };
+        hello
+    }
+
+    #[test]
+    fn websocket_hello_clamps_newer_payload_versions_instead_of_refusing() {
+        let mut hello = hello_fixture();
         hello.payload_version = CURRENT_PAYLOAD_VERSION + 1;
+
+        // A plugin from a future release still connects; the hub simply tells
+        // it which contract was selected so it can withhold newer payloads.
+        check_hello(&hello).unwrap();
+        assert_eq!(agent_hello(&hello).payload_version, CURRENT_PAYLOAD_VERSION);
+    }
+
+    #[test]
+    fn websocket_hello_rejects_payload_versions_below_the_legacy_floor() {
+        let mut hello = hello_fixture();
+        hello.payload_version = LEGACY_PAYLOAD_VERSION - 1;
 
         let error = check_hello(&hello).unwrap_err();
         assert!(error.contains("unsupported payload version"));

@@ -12,31 +12,41 @@ mod tests {
         Command::new(env!("CARGO_BIN_EXE_chatstronomy"))
     }
 
-    #[test]
-    fn test_help_command() {
+    fn help_text() -> String {
         let output = chatstronomy()
             .arg("--help")
             .output()
             .expect("Failed to execute command");
-
         assert!(output.status.success());
-        let stdout = String::from_utf8_lossy(&output.stdout);
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    }
+
+    #[test]
+    fn test_help_command() {
+        let stdout = help_text();
         assert!(stdout.contains("Chatstronomy"));
+        // Always assert something structural. Every other assertion here is
+        // gated on a platform or a feature, and on Linux with
+        // --no-default-features they all compile out — which once left this
+        // suite passing against a binary that exposed no subcommands at all.
+        assert!(stdout.contains("Usage:"));
     }
 
     #[test]
     fn test_basic_commands_available() {
-        let output = chatstronomy()
-            .arg("--help")
-            .output()
-            .expect("Failed to execute command");
+        let stdout = help_text();
 
-        assert!(output.status.success());
-        let stdout = String::from_utf8_lossy(&output.stdout);
-
+        // `plugin-runtime` speaks over a Windows named pipe, so the subcommand
+        // only exists there. Assert it is absent elsewhere rather than simply
+        // skipping the check.
         #[cfg(windows)]
         assert!(stdout.contains("plugin-runtime"));
+        #[cfg(not(windows))]
+        assert!(!stdout.contains("plugin-runtime"));
+
         #[cfg(feature = "hub")]
         assert!(stdout.contains("hub"));
+        #[cfg(not(feature = "hub"))]
+        assert!(!stdout.contains("\n  hub"));
     }
 }

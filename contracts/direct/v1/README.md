@@ -10,7 +10,10 @@ fields may be introduced within v1; incompatible wire changes require a new
 protocol directory and protocol version.
 
 `payload_version` marks the additive data contract independently of the Direct
-envelope. Current clients advertise payload version 2. A Direct v1 hello that
-omits the field is an explicitly supported legacy payload-version-1 client;
-the Hub echoes version 1 in its agent hello and keeps accepting its original
-frames. `fixtures/client-hello-legacy.json` is the frozen unmarked legacy form.
+envelope. Current clients advertise payload version 3. Version 2 added
+sequence-operation reporting and Hub image attachments; version 3 adds event
+delivery flags, explicit target names, N.I.N.A. logs, and N.I.N.A. popup
+notifications. A Direct v1 hello that omits the field is an explicitly
+supported legacy payload-version-1 client; the Hub echoes version 1 in its
+agent hello and keeps accepting its original frames.
+`fixtures/client-hello-legacy.json` is the frozen unmarked legacy form.
