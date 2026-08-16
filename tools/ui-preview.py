@@ -3,7 +3,9 @@
 
 Extracts INDEX_HTML from src/hub/web_ui.rs and injects a fetch() stub
 before the page script, so the real markup/CSS/JS runs against fixture
-data — no server, no login. Variants: full, empty, loggedout.
+data — no server, no login. Variants: full, empty, loggedout, token
+(token = full plus an auto-click on the second telescope's "Connect rig"
+so the pairing box is visible in the screenshot).
 
 Usage:
     python3 tools/ui-preview.py full
@@ -115,7 +117,16 @@ fixtures = {
     "/api/guilds/2000/attachments": attachments_2000,
     "/api/guilds/1000/options": options,
     "/api/guilds/2000/options": options,
+    "/api/telescopes/2/pairing-token":
+        {"token": "cspt_EXAMPLEEXAMPLEEXAMPLEEXAMPLEEXAMPLE", "expires_in_seconds": 3600},
 }
+
+click_script = ""
+if variant == "token":
+    click_script = ("<script>setTimeout(() => {\n"
+                    "  const rows = document.querySelectorAll('.telescope');\n"
+                    "  if (rows[1]) rows[1].querySelector('.b-token').click();\n"
+                    "}, 500);</script>\n")
 
 stub = """<script>
 const FIXTURES = %s;
@@ -135,7 +146,7 @@ src = open(SRC).read()
 start = src.index('r#"') + 3
 end = src.index('"#;', start)
 html = src[start:end]
-html = html.replace("<script>", stub + "<script>", 1)
+html = html.replace("<script>", stub + "<script>", 1) + click_script
 os.makedirs(OUT_DIR, exist_ok=True)
 out = OUT_DIR + "preview-" + variant + ".html"
 open(out, "w").write(html)
