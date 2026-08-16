@@ -14,6 +14,10 @@ env:
   # Embedded in the binary by build.rs; the RPM builds from a source
   # tarball with no .git directory, so git can't provide it there.
   CHATSTRONOMY_GIT_SHA: ${{ github.sha }}
+  # rpmbuild unpacks into a clean source tree, so cache compiler outputs rather
+  # than its disposable Cargo target directory.
+  RUSTC_WRAPPER: sccache
+  SCCACHE_DIR: ${{ github.workspace }}/.cache/sccache
 
 jobs:
   build:
@@ -33,7 +37,7 @@ jobs:
           # BuildRequires are pulled from the spec via `dnf builddep` below.
           dnf -y install --setopt=install_weak_deps=False \
             rpm-build rpmdevtools 'dnf-command(builddep)' \
-            cargo git xz tar findutils
+            cargo git xz tar findutils sccache
           rpmdev-setuptree
 
       - uses: actions/checkout@v7
@@ -45,6 +49,14 @@ jobs:
       - name: Mark checkout as a safe git directory
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
+      - name: Cache RPM Rust compiler outputs
+        uses: actions/cache@v6
+        with:
+          path: .cache/sccache
+          key: rpm-fedora-${{ matrix.fedora }}-sccache-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml', 'packaging/rpm/chatstronomy.spec') }}
+          restore-keys: |
+            rpm-fedora-${{ matrix.fedora }}-sccache-
+
       - name: Generate source tarballs (vendored crates)
         run: ./scripts/make-rpm-sources.sh
 
@@ -53,6 +65,10 @@ jobs:
           cp packaging/rpm/chatstronomy.spec ~/rpmbuild/SPECS/
           dnf -y builddep ~/rpmbuild/SPECS/chatstronomy.spec
           rpmbuild -ba ~/rpmbuild/SPECS/chatstronomy.spec
+
+      - name: Report Rust compiler cache
+        if: always()
+        run: sccache --show-stats
 
       - name: Collect artifacts
         run: |

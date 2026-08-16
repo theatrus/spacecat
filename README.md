@@ -10,16 +10,38 @@
 [![Rust](https://img.shields.io/badge/rust-1.97+-orange.svg)](https://www.rust-lang.org)
 [![Build Status](https://github.com/theatrus/chatstronomy/workflows/CI/badge.svg)](https://github.com/theatrus/chatstronomy/actions)
 
-**Chatstronomy** is a Rust-based monitor that watches one or more [NINA](https://nighttime-imaging.eu) imaging
-rigs over the [Advanced API](https://github.com/christian-photo/ninaAPI) extension and posts events,
-images, autofocus results, and live status to Discord (via webhook or a full bot) and/or Matrix.
+**Chatstronomy** bridges one or more [N.I.N.A.](https://nighttime-imaging.eu)
+imaging rigs with Discord and Matrix. It posts events, images, autofocus and
+guider graphs, and live status, and can expose an allowlisted set of bot slash
+commands for control.
+
+For the easiest Windows installation, use the separate
+[`chatstronomy-nina-plugin`](https://github.com/theatrus/chatstronomy-nina-plugin).
+It reads N.I.N.A. natively with no Advanced API requirement, supervises a
+bundled local runtime, or connects outbound to a central Chatstronomy hub. This
+repository owns that Rust runtime, the standalone Advanced API polling mode,
+Discord and Matrix bots, and the hosted hub.
 
 The name is bilingual: *chat* describes the destination in English and means
 “cat” in French. The logo expresses the same idea as a Unix pipeline:
 `space cat | chat`.
 
-A single Chatstronomy instance can drive **multiple telescopes** concurrently — one process, one Discord bot
-identity, one Matrix login, with per-telescope channels, webhooks, and rooms.
+A single standalone or hosted Chatstronomy instance can serve **multiple
+telescopes** concurrently—even when their N.I.N.A. plugins run on different
+systems—with per-telescope channels, webhooks, and rooms.
+
+## Choose an integration
+
+| Mode | N.I.N.A. data | Chat connection | Best for |
+|---|---|---|---|
+| Plugin + local runtime | Native Direct pipe (recommended) or Advanced API polling | Discord webhook, your Discord application, Matrix over HTTPS, or Discord plus Matrix | One Windows imaging computer with no central service |
+| Plugin + hosted hub | Native Direct data over outbound authenticated WSS | Central bot at `https://hub.chatstronomy.com/` | Several N.I.N.A. instances on different systems sharing one bot |
+| Standalone backend | Advanced API over HTTP(S) | Locally managed Discord and/or Matrix credentials | Existing multi-rig deployments, Windows services, and Linux/systemd |
+
+The plugin and backend share versioned Direct/runtime protocols and the native
+Rust graph renderer. Released plugin packages consume an immutable,
+Authenticode-signed runtime from this repository; the plugin repository never
+compiles Rust.
 
 ## On Vibe Coding
 
@@ -31,11 +53,16 @@ really.
 
 ### Installation
 
-> **N.I.N.A. plugin work is in progress.** Chatstronomy supports the existing
-> Advanced API source alongside native Direct mode. Direct mode can run with a
-> local Chatstronomy bot or pair outbound to a central hub with no Advanced API
-> or inbound port; see the
-> [N.I.N.A. integration architecture](docs/NINA_PLUGIN_ARCHITECTURE.md).
+> **N.I.N.A. plugin development builds are available now.** Download the latest
+> successful `main` package or build it from source in the
+> [plugin repository](https://github.com/theatrus/chatstronomy-nina-plugin#install-a-development-build).
+> Exit N.I.N.A., extract the inner plugin ZIP into
+> `%LOCALAPPDATA%\NINA\Plugins\3.0.0\Chatstronomy`, restart N.I.N.A., then open
+> **Plugins > Installed > Chatstronomy**. Development packages use the signed,
+> release-pinned Rust runtime but an unsigned test `Chatstronomy.dll`; official
+> tagged packages sign and verify both. See the
+> [N.I.N.A. integration architecture](docs/NINA_PLUGIN_ARCHITECTURE.md) for the
+> protocol and topology details.
 
 #### Option 1: RPM Package (Recommended for Fedora/RHEL/CentOS)
 
