@@ -241,6 +241,7 @@ mod tests {
     fn hello(node_id: u128, profile_id: u128, session_id: u128, process_id: u32) -> ClientHello {
         ClientHello {
             protocol_version: PROTOCOL_VERSION,
+            payload_version: crate::direct::protocol::CURRENT_PAYLOAD_VERSION,
             node_id: id(node_id),
             session_id: id(session_id),
             process_id,
