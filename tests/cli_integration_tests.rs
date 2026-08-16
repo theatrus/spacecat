@@ -4,10 +4,18 @@
 mod tests {
     use std::process::Command;
 
+    fn chatstronomy() -> Command {
+        // Cargo already builds the package binary for integration tests and
+        // exposes its exact path here. Spawning nested `cargo run` processes
+        // made these tiny help checks contend for Cargo's target lock and take
+        // more than a minute on Windows release runners.
+        Command::new(env!("CARGO_BIN_EXE_chatstronomy"))
+    }
+
     #[test]
     fn test_help_command() {
-        let output = Command::new("cargo")
-            .args(["run", "--", "--help"])
+        let output = chatstronomy()
+            .arg("--help")
             .output()
             .expect("Failed to execute command");
 
@@ -20,8 +28,8 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn test_windows_service_help() {
-        let output = Command::new("cargo")
-            .args(["run", "--", "windows-service", "--help"])
+        let output = chatstronomy()
+            .args(["windows-service", "--help"])
             .output()
             .expect("Failed to execute command");
 
@@ -38,8 +46,8 @@ mod tests {
     #[cfg(not(windows))]
     #[test]
     fn test_windows_service_unavailable() {
-        let output = Command::new("cargo")
-            .args(["run", "--", "--help"])
+        let output = chatstronomy()
+            .arg("--help")
             .output()
             .expect("Failed to execute command");
 
@@ -52,8 +60,8 @@ mod tests {
 
     #[test]
     fn test_basic_commands_available() {
-        let output = Command::new("cargo")
-            .args(["run", "--", "--help"])
+        let output = chatstronomy()
+            .arg("--help")
             .output()
             .expect("Failed to execute command");
 

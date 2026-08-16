@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chatstronomy.com/contracts/runtime-manifest-v1.schema.json",
+  "title": "Chatstronomy runtime release manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "release", "protocols", "assets"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "tag", "version", "commit"],
+      "properties": {
+        "repository": { "const": "theatrus/chatstronomy" },
+        "tag": { "type": "string", "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$" },
+        "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+        "commit": { "type": "string", "pattern": "^[0-9a-fA-F]{40}$" }
+      }
+    },
+    "protocols": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["direct", "plugin_runtime"],
+      "properties": {
+        "direct": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["version", "websocket_path", "local_pipe_prefix"],
+          "properties": {
+            "version": { "type": "integer", "minimum": 1 },
+            "websocket_path": { "type": "string", "pattern": "^/" },
+            "local_pipe_prefix": { "type": "string", "minLength": 1 }
+          }
+        },
+        "plugin_runtime": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["version"],
+          "properties": {
+            "version": { "type": "integer", "minimum": 1 }
+          }
+        }
+      }
+    },
+    "assets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["plugin_runtime_windows_x64", "full_windows_x64", "plugin_contracts"],
+      "properties": {
+        "plugin_runtime_windows_x64": { "$ref": "#/$defs/asset" },
+        "full_windows_x64": { "$ref": "#/$defs/asset" },
+        "plugin_contracts": { "$ref": "#/$defs/asset" }
+      }
+    }
+  },
+  "$defs": {
+    "asset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "sha256", "size"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "size": { "type": "integer", "minimum": 1 }
+      }
+    }
+  }
+}

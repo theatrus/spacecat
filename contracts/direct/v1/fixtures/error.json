@@ -1,0 +1,7 @@
+{
+  "type": "error",
+  "payload": {
+    "message": "fixture authentication failure",
+    "retryable": false
+  }
+}
