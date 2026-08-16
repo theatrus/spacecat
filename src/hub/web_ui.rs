@@ -108,10 +108,29 @@ pub const INDEX_HTML: &str = r#"<!doctype html>
 
   .token-box {
     background: var(--bg); border: 1px dashed var(--warn); border-radius: 8px;
-    padding: .8rem .9rem; margin-top: .8rem; word-break: break-all;
+    padding: .7rem .9rem .8rem; margin-top: .8rem; word-break: break-all;
     font-family: ui-monospace, monospace; font-size: .85rem;
   }
-  .token-box .b-copy { margin-top: .4rem; }
+  .token-box .token-head {
+    display: flex; align-items: center; justify-content: space-between;
+    font-family: system-ui, sans-serif; color: var(--warn);
+    margin-bottom: .35rem; gap: .5rem;
+  }
+  .token-box .token-head .rm {
+    background: none; border: none; color: var(--muted); cursor: pointer;
+    height: auto; padding: 0;
+  }
+  .token-box .token-head .rm:hover { color: var(--text); }
+  .token-box .b-copy { margin-top: .45rem; }
+  .token-box .hint {
+    display: block; margin-top: .45rem;
+    font-family: system-ui, sans-serif; word-break: normal;
+  }
+  .ico {
+    width: 1em; height: 1em; vertical-align: -0.12em; margin-right: .4em;
+    flex: none;
+  }
+  label .ico { width: 1.2em; height: 1.2em; vertical-align: -0.28em; }
   .hint { color: var(--muted); font-size: .8rem; }
   .next {
     display: flex; gap: .55rem; align-items: center; margin-top: .8rem;
@@ -277,7 +296,8 @@ function rigBadge(connected) {
 function renderMyTelescopes(telescopes) {
   const card = document.createElement("div");
   card.className = "card";
-  let html = '<div class="head"><h2>My telescopes</h2>' +
+  let html = '<div class="head"><h2>' + ico("telescope") + "My telescopes</h2>" +
+    '' +
     '<div class="badges"><span class="hint">yours across every server</span></div></div>';
   if (!telescopes.length) {
     html += '<div class="steps"><span><b>1</b> Add a telescope</span>' +
@@ -300,13 +320,14 @@ function renderMyTelescopes(telescopes) {
       : "";
     html +=
       '<div class="sub telescope" data-id="' + t.id + '">' +
-      '<div class="head"><b>' + esc(t.name) + '</b>' +
+      '<div class="head"><b>' + ico("telescope") + esc(t.name) + "</b>" + '' +
       '<div class="badges">' + rigBadge(t.connected) +
-      '<button class="' + (t.connected ? "subtle " : "") + 'b-token">Connect rig…</button>' +
-      '<button class="subtle b-share">Share…</button></div></div>' +
+      '<button class="' + (t.connected ? "subtle " : "") + 'b-token">' + ico("key") + "Connect rig…</button>" + '' +
+      '<button class="subtle b-share">' + ico("share") + "Share…</button></div></div>" + '' +
       nextStep(t) +
-      '<div class="section"><label>Servers</label>' + servers + attachControls + "</div>" +
-      '<div class="section"><label>Image cooldown</label>' +
+      '<div class="token-out"></div>' +
+      '<div class="section"><label>' + ico("globe") + "Servers</label>" + '' + servers + attachControls + "</div>" +
+      '<div class="section"><label>' + ico("clock") + "Image cooldown</label>" + '' +
       '<div class="controls"><input class="num f-cooldown" type="number" min="0" max="86400" value="' +
       t.image_cooldown_seconds + '"><span class="hint">Seconds between image posts — applies on change.</span>' +
       "</div></div>" +
@@ -317,8 +338,7 @@ function renderMyTelescopes(telescopes) {
   html +=
     '<div class="controls" style="margin-top:.9rem">' +
     '<input class="name new-name" placeholder="telescope name (e.g. c925)">' +
-    '<button class="primary b-create">Add telescope</button></div>' +
-    '<div class="token-out"></div>';
+    '<button class="primary b-create">Add telescope</button></div>';
   card.innerHTML = html;
   app.appendChild(card);
 
@@ -356,7 +376,7 @@ function renderMyTelescopes(telescopes) {
     row.querySelector(".b-token").onclick = async () => {
       try {
         const out = await api("/api/telescopes/" + id + "/pairing-token", { method: "POST" });
-        showToken(card, "Pairing token — shown once, valid " +
+        showToken(row, "key", "Pairing token — shown once, valid " +
           Math.round(out.expires_in_seconds / 60) + " minutes", out.token,
           "Paste into the N.I.N.A. plugin or the relay config, then connect. " +
           "Issuing a new token cancels this one.");
@@ -365,7 +385,7 @@ function renderMyTelescopes(telescopes) {
     row.querySelector(".b-share").onclick = async () => {
       try {
         const out = await api("/api/telescopes/" + id + "/share-code", { method: "POST" });
-        showToken(card, "Share code — single use, valid " +
+        showToken(row, "share", "Share code — single use, valid " +
           Math.round(out.expires_in_seconds / 86400) + " days", out.code,
           "Give this to a manager of another server. They redeem it on their server " +
           "card, against one of their channels. Their server gets the feed and read " +
@@ -394,13 +414,34 @@ function renderMyTelescopes(telescopes) {
   });
 }
 
-function showToken(card, title, value, hint) {
-  const box = card.querySelector(".token-out");
-  box.innerHTML = '<div class="token-box">' + esc(title) + ":<br><b>" + esc(value) +
-    '</b><br><button class="b-copy">Copy</button> <span class="hint">' + hint + "</span></div>";
+function ico(name) {
+  const paths = {
+    telescope: '<path d="M2.5 10.2 13 3.8l3.2 5.2L5.7 15.4Z"/><path d="M9.8 13.6 6.2 21"/><path d="M12.2 12.4 15.8 21"/><path d="M16.2 9l4.8-2"/>',
+    key: '<path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/>',
+    share: '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>',
+    globe: '<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>',
+    clock: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+    zap: '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>',
+  };
+  return '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+    'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    paths[name] + "</svg>";
+}
+
+function showToken(row, icon, title, value, hint) {
+  // Render inside the telescope's own card, right where the click happened.
+  document.querySelectorAll(".token-out").forEach((b) => { b.innerHTML = ""; });
+  const box = row.querySelector(".token-out");
+  box.innerHTML =
+    '<div class="token-box"><div class="token-head"><span>' + ico(icon) + esc(title) +
+    '</span><button type="button" class="rm b-close" title="Dismiss">✕</button></div>' +
+    "<b>" + esc(value) + "</b><br>" +
+    '<button class="b-copy">Copy</button><span class="hint">' + hint + "</span></div>";
   box.querySelector(".b-copy").onclick = () => {
     navigator.clipboard.writeText(value).then(() => toast("Copied"));
   };
+  box.querySelector(".b-close").onclick = () => { box.innerHTML = ""; };
+  box.scrollIntoView({ block: "nearest", behavior: "smooth" });
 }
 
 // ---------- Server cards ----------
@@ -502,7 +543,7 @@ async function renderAttachments(g, el) {
     const owner = a.owned_by_me ? "" :
       '<span class="sub-note">shared by ' + esc(a.owner_name) + "</span>";
     const commands = a.can_command
-      ? '<div class="section"><label>Commands — who may drive this telescope here</label>' +
+      ? '<div class="section"><label>' + ico("zap") + "Commands — who may drive this telescope here</label>" + '' +
         '<div class="controls"><select class="pick f-policy">' +
         POLICY_OPTIONS.map(([v, label]) =>
           '<option value="' + v + '"' + (a.write_policy === v ? " selected" : "") + ">" +
@@ -511,14 +552,14 @@ async function renderAttachments(g, el) {
         '<div class="roles-field" style="margin-top:.5rem' +
         (a.write_policy === "roles" ? "" : ";display:none") + '">' +
         roleChips(options, a.allowed_role_ids) + "</div></div>"
-      : '<div class="section"><label>Commands</label>' +
+      : '<div class="section"><label>' + ico("zap") + "Commands</label>" + '' +
         '<span class="hint">This server receives the feed and read commands only.</span></div>';
     html +=
       '<div class="sub attachment" data-id="' + a.attachment_id + '">' +
-      '<div class="head"><b>' + esc(a.telescope_name) + "</b>" + owner +
+      '<div class="head"><b>' + ico("telescope") + esc(a.telescope_name) + "</b>" + owner +
       '<div class="badges">' + badges +
       '<button class="subtle danger b-detach">Detach</button></div></div>' +
-      '<div class="section"><label>Channels — where this telescope posts</label>' +
+      '<div class="section"><label># Channels — where this telescope posts</label>' +
       channelChips(a) +
       '<div class="controls">' + channelPicker(options, usedChannels, "f-addchan") +
       '<button class="b-addchan">Add channel</button></div></div>' +
@@ -677,6 +718,17 @@ mod tests {
         for policy in ["admins", "roles", "disabled"] {
             assert!(INDEX_HTML.contains(policy), "missing policy {policy}");
         }
+    }
+
+    #[test]
+    fn tokens_render_inside_their_telescope_card() {
+        // Pairing tokens and share codes appear in the clicked telescope's
+        // own sub-card, not in one shared box below every telescope.
+        assert!(INDEX_HTML.contains("function showToken(row"));
+        assert!(INDEX_HTML.contains("token-head"));
+        assert!(INDEX_HTML.contains("b-close"));
+        // Exactly one token-out container, inside the telescope template.
+        assert_eq!(INDEX_HTML.matches("class=\"token-out\"").count(), 1);
     }
 
     #[test]
