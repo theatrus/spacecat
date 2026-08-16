@@ -14,8 +14,24 @@ param(
 
     [string] $RuntimePath = '',
 
-    [switch] $SkipRuntime
+    [switch] $SkipRuntime,
+
+    # Split the build so Authenticode signing has a seam. -StageOnly builds the
+    # plugin DLL and the runtime into the package directory and stops; the
+    # caller signs what is there; -PackageOnly then zips and writes the
+    # manifest. Neither switch changes what a plain invocation does.
+    #
+    # The zip's SHA-256 goes into the manifest N.I.N.A. checks, so the archive
+    # MUST be created after signing -- sign the contents afterwards and the
+    # checksum no longer matches what was published.
+    [switch] $StageOnly,
+
+    [switch] $PackageOnly
 )
+
+if ($StageOnly -and $PackageOnly) {
+    throw 'Specify at most one of -StageOnly and -PackageOnly.'
+}
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -50,11 +66,18 @@ $packageDirectory = Join-Path $outputRoot 'package/Chatstronomy'
 $archivePath = Join-Path $outputRoot $archiveName
 $manifestPath = Join-Path $outputRoot "Chatstronomy.NINA.$Version.manifest.json"
 
-foreach ($directory in @($buildDirectory, $packageDirectory)) {
-    if (Test-Path -LiteralPath $directory) {
-        Remove-Item -LiteralPath $directory -Recurse -Force
+# -PackageOnly resumes from a staged (and by then signed) package directory, so
+# it must not wipe or rebuild it -- that would discard the signatures it exists
+# to preserve.
+if (-not $PackageOnly) {
+    foreach ($directory in @($buildDirectory, $packageDirectory)) {
+        if (Test-Path -LiteralPath $directory) {
+            Remove-Item -LiteralPath $directory -Recurse -Force
+        }
+        New-Item -ItemType Directory -Path $directory -Force | Out-Null
     }
-    New-Item -ItemType Directory -Path $directory -Force | Out-Null
+} elseif (-not (Test-Path -LiteralPath $packageDirectory)) {
+    throw "-PackageOnly needs a staged package at $packageDirectory; run -StageOnly first."
 }
 
 foreach ($file in @($archivePath, $manifestPath)) {
@@ -62,6 +85,13 @@ foreach ($file in @($archivePath, $manifestPath)) {
         Remove-Item -LiteralPath $file -Force
     }
 }
+
+# Declared out here on purpose: -PackageOnly skips the block below, and
+# Set-StrictMode turns a later read of an unset variable into a hard failure at
+# the very end -- after the signing work is done and thrown away.
+$packagedRuntime = $null
+
+if (-not $PackageOnly) {
 
 dotnet build $project `
     --configuration Release `
@@ -80,7 +110,6 @@ if (-not (Test-Path -LiteralPath $pluginDll)) {
 
 Copy-Item -LiteralPath $pluginDll -Destination $packageDirectory
 
-$packagedRuntime = $null
 if (-not $SkipRuntime) {
     if ([string]::IsNullOrWhiteSpace($RuntimePath)) {
         if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
@@ -107,6 +136,21 @@ if (-not $SkipRuntime) {
     New-Item -ItemType Directory -Path $runtimeDirectory -Force | Out-Null
     $packagedRuntime = Join-Path $runtimeDirectory 'chatstronomy.exe'
     Copy-Item -LiteralPath $RuntimePath -Destination $packagedRuntime
+}
+
+} else {
+    # Resuming from a staged package: report the runtime that staging produced,
+    # so the summary means the same thing on both paths.
+    $stagedRuntime = Join-Path $packageDirectory 'runtime/chatstronomy.exe'
+    if (Test-Path -LiteralPath $stagedRuntime -PathType Leaf) {
+        $packagedRuntime = $stagedRuntime
+    }
+}  # end of the build/stage phase skipped by -PackageOnly
+
+if ($StageOnly) {
+    Write-Host "Staged plugin package at $packageDirectory (not archived)."
+    Write-Host 'Sign the contents, then re-run with -PackageOnly.'
+    return
 }
 
 Compress-Archive -Path (Join-Path $packageDirectory '*') -DestinationPath $archivePath
