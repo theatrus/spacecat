@@ -13,6 +13,12 @@ jobs:
   test:
     name: Test Suite
     runs-on: ${{ matrix.os }}
+    env:
+      # The repository toolchain file pins release builds, but this matrix is
+      # explicitly responsible for testing the installed stable/beta channel.
+      # Override the file so Cargo does not switch toolchains and download every
+      # cross-target again after dtolnay/rust-toolchain has completed.
+      RUSTUP_TOOLCHAIN: ${{ matrix.rust }}
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
