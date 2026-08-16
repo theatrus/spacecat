@@ -281,8 +281,7 @@ function nextStep(t) {
   }
   if (!t.connected) {
     return '<div class="next"><span class="step">Next</span>' +
-      "Connect your rig: get a pairing token and paste it into the N.I.N.A. plugin " +
-      "or relay config.</div>";
+      "Connect your rig: get a pairing token and paste it into the N.I.N.A. plugin.</div>";
   }
   return "";
 }
@@ -378,7 +377,7 @@ function renderMyTelescopes(telescopes) {
         const out = await api("/api/telescopes/" + id + "/pairing-token", { method: "POST" });
         showToken(row, "key", "Pairing token — shown once, valid " +
           Math.round(out.expires_in_seconds / 60) + " minutes", out.token,
-          "Paste into the N.I.N.A. plugin or the relay config, then connect. " +
+          "Paste into the N.I.N.A. plugin, then connect. " +
           "Issuing a new token cancels this one.");
       } catch (e) { toast(e.message); }
     };

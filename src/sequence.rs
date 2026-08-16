@@ -178,7 +178,7 @@ pub struct SequenceOperation {
     pub name: String,
     pub status: String,
     /// Whether this operation should produce chat updates. Missing wire
-    /// values default to true for older Direct and Advanced API payloads.
+    /// values default to true for older Direct payloads.
     pub chat_enabled: bool,
     pub kind: SequenceOperationKind,
 }
@@ -195,7 +195,7 @@ pub enum SequenceOperationKind {
     },
     MountSlew {
         coordinates: Option<OperationCoordinates>,
-        /// Older Advanced API payloads expose coordinates but not the
+        /// Older Direct payloads can expose coordinates but not the
         /// concrete sequence-item type. A nearby MOUNT-CENTER event can
         /// safely promote one of these otherwise-slew operations.
         may_be_center: bool,
@@ -284,8 +284,8 @@ impl SequenceOperation {
 }
 
 /// Find chat-visible, long-running sequence items without depending on
-/// localized display names. Direct snapshots supply `OperationKind`; older
-/// plugin and Advanced API payloads are recognized from their stable fields.
+/// localized display names. Current snapshots supply `OperationKind`; older
+/// Direct payloads are recognized from their stable fields.
 pub fn extract_sequence_operations(sequence: &SequenceResponse) -> Vec<SequenceOperation> {
     fn visit_items(values: &[Value], parent: &str, output: &mut Vec<SequenceOperation>) {
         for (index, value) in values.iter().enumerate() {
@@ -608,7 +608,7 @@ impl Container {
 /// Extract the current target name from a sequence response
 ///
 /// Native Direct targets are identified by their explicit `IsTargetContainer`
-/// marker. Older Direct and Advanced API payloads fall back to active containers
+/// marker. Older Direct payloads fall back to active containers
 /// with a `_Container` suffix after known N.I.N.A. infrastructure wrappers are
 /// excluded. The suffix is removed from the returned target name.
 ///
@@ -668,7 +668,7 @@ pub fn extract_current_target_with_delivery(sequence: &SequenceResponse) -> Opti
         None
     }
 
-    // Older Direct plugins and Advanced API responses predate the explicit
+    // Older Direct plugins predate the explicit
     // marker. Preserve their container-name heuristic as a fallback.
     fn search_legacy_containers(values: &[Value]) -> Option<(String, bool)> {
         for value in values {
@@ -1190,7 +1190,7 @@ mod tests {
     }
 
     #[test]
-    fn recognizes_advanced_api_fields_but_ignores_timed_conditions() {
+    fn recognizes_legacy_fields_but_ignores_timed_conditions() {
         let sequence: SequenceResponse = serde_json::from_value(serde_json::json!({
             "Response": [{
                 "Name": "Target_Container",
@@ -1320,7 +1320,7 @@ mod tests {
     }
 
     #[test]
-    fn advanced_api_coordinate_items_remain_center_promotable() {
+    fn legacy_coordinate_items_remain_center_promotable() {
         let sequence: SequenceResponse = serde_json::from_value(serde_json::json!({
             "Response": [{
                 "Name": "Custom renamed operation",

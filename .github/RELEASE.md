@@ -1,63 +1,32 @@
-# Chatstronomy Release Process
+# Chatstronomy release process
 
-## Creating a Release
+## Before tagging
 
-1. Update version in `Cargo.toml`
-2. Update `CLAUDE.md` with any new features or changes
-3. Commit changes: `git commit -m "Bump version to vX.Y.Z"`
-4. Create and push tag: `git tag vX.Y.Z && git push origin vX.Y.Z`
-5. GitHub Actions will automatically build and create the release
+1. Update the package version in `Cargo.toml` and refresh `Cargo.lock`.
+2. Run `cargo fmt --all --check`.
+3. Run `cargo test --all-features` and `cargo test --no-default-features`.
+4. Run `cargo clippy --all-targets --all-features -- -D warnings`.
+5. If the Direct protocol changed, update its schema, compatibility fixtures,
+   and protocol version before releasing.
+6. Confirm the Windows signing environment and Azure signing secrets are
+   available to the canonical repository.
 
-## Release Artifacts
+Create and push a signed or annotated `vX.Y.Z` tag only after CI is green. The
+release workflow publishes:
 
-Each release includes:
+- `chatstronomy-linux-x86_64`
+- `chatstronomy-linux-aarch64`
+- signed `chatstronomy-windows-x64.exe`
+- signed `chatstronomy-plugin-runtime-windows-x64.exe`
+- `chatstronomy-plugin-contracts-v1.zip`
+- `chatstronomy-runtime-manifest.json`
 
-- **chatstronomy-linux-x86_64**: Linux binary for x86_64 systems
-- **chatstronomy-linux-aarch64**: Linux binary for ARM64 systems (Raspberry Pi 4, etc.)
-- **chatstronomy-windows-x64.exe**: Full Windows binary for 64-bit systems
-- **chatstronomy-plugin-runtime-windows-x64.exe**: Lean Windows runtime bundled by the N.I.N.A. plugin
-- **chatstronomy-plugin-contracts-v1.zip**: Versioned Direct protocol schema and fixtures
-- **chatstronomy-runtime-manifest.json**: Release identity, protocol versions, asset names, sizes, and SHA-256 hashes
+The runtime manifest records the release identity, Direct protocol versions,
+artifact names, sizes, and SHA-256 hashes after signing.
 
-Both Windows executables are Authenticode-signed as StackFoundry LLC before the
-runtime manifest records their hashes. The full signed build is restored as the
-MSI payload; the separately signed lean build is consumed unchanged by the
-standalone N.I.N.A. plugin repository, which signs its own C# DLL before
-archiving.
+## Plugin follow-up
 
-The N.I.N.A. plugin repository pins an exact Chatstronomy release and manifest
-checksum. It never downloads `latest` or builds the Rust runtime from a backend
-branch.
-
-## Installation
-
-### Linux
-```bash
-# Download the appropriate binary for your architecture
-curl -L -o chatstronomy https://github.com/USERNAME/chatstronomy/releases/latest/download/chatstronomy-linux-x86_64
-chmod +x chatstronomy
-sudo mv chatstronomy /usr/local/bin/
-```
-
-### Windows
-1. Download `chatstronomy-windows-x64.exe`
-2. Rename to `chatstronomy.exe`
-3. Add to your PATH or run from the download directory
-
-## Usage
-
-```bash
-# Show help
-chatstronomy --help
-
-# Create sample config
-cp config.example.json config.json
-# Edit config.json with your API settings
-
-# Run basic commands
-chatstronomy sequence
-chatstronomy events
-chatstronomy discord-updater
-```
-
-See [CLAUDE.md](../CLAUDE.md) for detailed documentation.
+After the backend release succeeds, update `runtime.lock.json` in the
+standalone `chatstronomy-nina-plugin` repository to the exact tag and manifest
+checksum. Package and test the plugin there, sign its DLL, then publish its
+registry entry. Plugin packaging must never fetch `latest` or build Rust.

@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use tokio::time::sleep;
 
 /// Default first-retry wait when a telescope is unreachable at startup. A rig
-/// that's powered off (or whose API isn't up yet) shouldn't permanently kill
+/// that's powered off (or whose plugin is not connected yet) should not kill
 /// its monitoring task — we keep re-checking until it comes back, starting
 /// here and backing off exponentially.
 pub(crate) const DEFAULT_RECONNECT_INITIAL: Duration = Duration::from_secs(60);
@@ -220,7 +220,7 @@ struct UpdaterState {
     sequence_running: bool,
     /// Active TS-WAITSTART wait-end time, if NINA is currently waiting.
     wait_until: Option<DateTime<FixedOffset>>,
-    /// A recent Advanced API signal that the otherwise-ambiguous coordinate
+    /// A recent legacy signal that the otherwise-ambiguous coordinate
     /// operation is a center rather than a plain slew.
     center_event_seen_at: Option<DateTime<Utc>>,
     /// Long-running operations reconstructed from the live sequence tree.
@@ -474,16 +474,16 @@ impl ChatUpdater {
             }
         }
 
-        // Steady-state polling. The pollers themselves report whether the API
-        // answered, so a rig that drops mid-session is noticed without a
-        // separate health probe: when a whole cycle fails to reach the API we
-        // back off on the shared schedule instead of hammering every endpoint
-        // at the fast poll rate. Catching up on missed data is automatic — the
-        // pollers dedupe against seen state — so no re-baseline is needed.
+        // Steady-state Direct reconciliation. Each reader reports whether the
+        // plugin answered, so a rig that drops mid-session is noticed without a
+        // separate health probe. Failed cycles use the shared backoff schedule
+        // instead of hammering the plugin.
+        // Catching up on missed bounded history is automatic because readers
+        // deduplicate against seen state, so no re-baseline is needed.
         let mut reconnect_delay = self.reconnect_initial;
         loop {
-            // Run every poller so live state stays current; the cycle counts as
-            // "reachable" if any endpoint answered.
+            // Run every reader so live state stays current; the cycle counts as
+            // reachable if any Direct query answered.
             let events_ok = self.poll_events().await;
             let seq_ok = self.poll_sequence().await;
             let images_ok = self.poll_images().await;
@@ -506,13 +506,13 @@ impl ChatUpdater {
     /// state. Logs and posts a chat alert on each transition, debouncing the
     /// offline direction until `OFFLINE_FAILURE_THRESHOLD` consecutive cycles
     /// have failed (so a single transient blip stays quiet); reconnect fires as
-    /// soon as the API answers again.
+    /// soon as the plugin answers again.
     pub async fn record_reachability(&mut self, reachable: bool) {
         if reachable {
             self.state.consecutive_failures = 0;
             if !self.state.connected {
                 eprintln!(
-                    "[{}] Telescope reconnected; resuming polling.",
+                    "[{}] Telescope reconnected; resuming updates.",
                     self.telescope_name
                 );
                 self.state.connected = true;
@@ -675,8 +675,8 @@ impl ChatUpdater {
             .into_iter()
             .map(|mut operation| {
                 // Once a recent MOUNT-CENTER event has identified an
-                // Advanced API coordinate item, retain that classification
-                // on later polls even though the API still omits its type.
+                // legacy coordinate item, retain that classification
+                // on later snapshots even when an older Direct payload omits its type.
                 if self
                     .state
                     .sequence_operations
@@ -1330,9 +1330,8 @@ impl ChatUpdater {
         }
     }
 
-    /// Returns whether the API responded (i.e. the telescope is reachable),
-    /// so the poll loop can detect a mid-run disconnect without a separate
-    /// health probe.
+    /// Returns whether the Direct source responded, so the update loop can
+    /// detect a mid-run disconnect without a separate health probe.
     pub async fn poll_events(&mut self) -> bool {
         if !self.source.capabilities().event_history {
             return false;
@@ -1606,8 +1605,8 @@ impl ChatUpdater {
         self.send_sequence_event_notification(event).await;
     }
 
-    /// ROTATOR-SYNCED ships only `{Time, Event}`. Fetch /equipment/rotator/info
-    /// to surface the current angle + mechanical position in the notification.
+    /// ROTATOR-SYNCED ships only `{Time, Event}`. Query the Direct equipment
+    /// snapshot to surface angle and mechanical position in the notification.
     async fn handle_rotator_synced(&self, event: &Event) {
         if self.chat_manager.service_count() == 0 {
             return;
@@ -1618,8 +1617,8 @@ impl ChatUpdater {
     }
 
     /// FOCUSER-USER-FOCUSED ships only `{Time, Event}` (someone tweaked focus
-    /// manually). Fetch /equipment/focuser/info to surface the new position
-    /// + temperature.
+    /// manually). Query the Direct equipment snapshot for position and
+    /// temperature.
     async fn handle_focuser_user_focused(&self, event: &Event) {
         if self.chat_manager.service_count() == 0 {
             return;
@@ -1635,7 +1634,7 @@ impl ChatUpdater {
         }
     }
 
-    /// Returns whether the API responded (see [`Self::poll_events`]).
+    /// Returns whether the Direct source responded (see [`Self::poll_events`]).
     pub async fn poll_sequence(&mut self) -> bool {
         if !self.source.capabilities().sequence {
             return false;
@@ -1700,7 +1699,7 @@ impl ChatUpdater {
         }
     }
 
-    /// Returns whether the API responded (see [`Self::poll_events`]).
+    /// Returns whether the Direct source responded (see [`Self::poll_events`]).
     pub async fn poll_images(&mut self) -> bool {
         if !self.source.capabilities().image_history {
             return false;
@@ -2755,7 +2754,7 @@ mod tests {
     }
 
     #[test]
-    fn advanced_api_mount_operation_can_be_promoted_to_center() {
+    fn legacy_mount_operation_can_be_promoted_to_center() {
         let mut promoted = operation(SequenceOperationKind::MountSlew {
             coordinates: None,
             may_be_center: true,

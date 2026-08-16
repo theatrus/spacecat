@@ -1,6 +1,6 @@
 #![recursion_limit = "256"]
 
-pub mod api;
+pub mod api_types;
 pub mod artifact_contract;
 pub mod autofocus;
 pub mod camera;
@@ -20,13 +20,9 @@ pub mod hub;
 pub mod images;
 pub mod mount;
 pub mod plugin_runtime;
-pub mod poller;
-pub mod relay;
 pub mod rotator;
 pub mod sequence;
 pub mod serde_helpers;
 pub mod service_wrapper;
 pub mod source;
 pub mod version;
-#[cfg(windows)]
-pub mod windows_service;

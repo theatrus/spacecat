@@ -148,9 +148,7 @@ impl TargetCoordinates {
     }
 }
 
-// Event type constants for easier matching.
-// Source of truth: ninaAPI source (christian-photo/ninaAPI). Only events actually
-// emitted by NINA appear here.
+// Event type constants emitted by the N.I.N.A. plugin's Direct projector.
 pub mod event_types {
     pub const CAMERA_DISCONNECTED: &str = "CAMERA-DISCONNECTED";
     pub const CAMERA_CONNECTED: &str = "CAMERA-CONNECTED";

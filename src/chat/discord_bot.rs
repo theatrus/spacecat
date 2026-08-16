@@ -1175,7 +1175,7 @@ async fn home(
 }
 
 /// Change the filter wheel position by filter name (resolved to id via
-/// `/equipment/filterwheel/info`).
+/// Direct filter-wheel snapshot).
 #[poise::command(slash_command, rename = "change-filter")]
 async fn change_filter(
     ctx: Context<'_>,
@@ -1333,7 +1333,7 @@ async fn warm(
 #[poise::command(slash_command)]
 async fn autofocus(
     ctx: Context<'_>,
-    #[description = "Cancel a running API-triggered autofocus"] cancel: Option<bool>,
+    #[description = "Cancel a running autofocus"] cancel: Option<bool>,
     #[description = "Telescope name"] telescope: Option<String>,
 ) -> Result<(), BotError> {
     let (name, client) = match resolve_write_or_reply(ctx, telescope).await {
