@@ -6,11 +6,15 @@ use crate::chat::{
 use crate::chat_updater::ChatUpdater;
 use crate::config::{Config, TelescopeConfig};
 use crate::error::{ChatError, ChatstronomyError, ServiceError, ServiceResult};
-use crate::source::{AdvancedApiSource, SharedRigSource};
+use crate::source::{ADVANCED_API_DEPRECATION_NOTICE, AdvancedApiSource, SharedRigSource};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::Duration;
+
+fn warn_advanced_api_deprecation() {
+    eprintln!("Warning: {ADVANCED_API_DEPRECATION_NOTICE}");
+}
 
 pub struct ServiceWrapper {
     config: Config,
@@ -41,6 +45,15 @@ impl ServiceWrapper {
             return Err(ServiceError::Initialization {
                 reason: "No telescopes configured.".to_string(),
             });
+        }
+
+        if self
+            .config
+            .telescopes
+            .iter()
+            .any(|telescope| !source_overrides.contains_key(&telescope.name))
+        {
+            warn_advanced_api_deprecation();
         }
 
         let (chat_manager, _bot_join) =
@@ -232,6 +245,9 @@ mod windows_service_impl {
         /// graceful shutdown. One shared chat manager is constructed inside
         /// the runtime; each telescope poll loop runs as its own task.
         pub fn run_with_shutdown(&self, shutdown_rx: mpsc::Receiver<()>) -> ServiceResult<()> {
+            if !self.config.telescopes.is_empty() {
+                warn_advanced_api_deprecation();
+            }
             let rt = tokio::runtime::Runtime::new().map_err(|e| ServiceError::Initialization {
                 reason: format!("Failed to create Tokio runtime: {}", e),
             })?;

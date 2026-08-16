@@ -19,9 +19,10 @@ The recommended Windows setup is the separate
 [`chatstronomy-nina-plugin`](https://github.com/theatrus/chatstronomy-nina-plugin)
 paired with [Chatstronomy Hub](https://hub.chatstronomy.com/). It reads N.I.N.A.
 natively with no Advanced API requirement and connects outbound to the central
-bot. A supervised local runtime and standalone Advanced API polling remain
-available for self-hosted installations. This repository owns those Rust
-runtimes, the Discord and Matrix bots, and the hosted Hub.
+bot. A supervised local Direct runtime remains supported. Standalone Advanced
+API polling is deprecated and retained only for existing self-hosted
+installations during migration. This repository owns those Rust runtimes, the
+Discord and Matrix bots, and the hosted Hub.
 
 The name is bilingual: *chat* describes the destination in English and means
 “cat” in French. The logo expresses the same idea as a Unix pipeline:
@@ -36,8 +37,8 @@ systems—with per-telescope channels, webhooks, and rooms.
 | Mode | N.I.N.A. data | Chat connection | Best for |
 |---|---|---|---|
 | Plugin + hosted Hub (recommended) | Native Direct data over outbound authenticated WSS | Central bot at [`hub.chatstronomy.com`](https://hub.chatstronomy.com/) | The simplest setup and several N.I.N.A. instances on different systems sharing one bot |
-| Plugin + local runtime | Native Direct pipe (recommended) or Advanced API polling | Discord webhook, your Discord application, Matrix over HTTPS, or Discord plus Matrix | One Windows imaging computer with no central service |
-| Standalone backend | Advanced API over HTTP(S) | Locally managed Discord and/or Matrix credentials | Existing multi-rig deployments, Windows services, and Linux/systemd |
+| Plugin + local runtime | Native Direct pipe | Discord webhook, your Discord application, Matrix over HTTPS, or Discord plus Matrix | One Windows imaging computer with no central service |
+| Standalone backend (deprecated compatibility) | Advanced API over HTTP(S) | Locally managed Discord and/or Matrix credentials | Existing multi-rig, Windows service, and Linux/systemd deployments during migration |
 
 The plugin and backend share versioned Direct/runtime protocols and the native
 Rust graph renderer. Released plugin packages consume an immutable,
@@ -65,11 +66,12 @@ really.
 > code, and choose **Chatstronomy.com — hosted bot** in the installed plugin.
 > See the [plugin installation guide](https://github.com/theatrus/chatstronomy-nina-plugin#install-from-nina)
 > and [N.I.N.A. integration architecture](docs/NINA_PLUGIN_ARCHITECTURE.md) for
-> local Direct and Advanced API alternatives.
+> local Direct setup and the deprecated Advanced API migration path.
 
-The remaining installation options are for the standalone backend.
+The remaining installation options are deprecated migration paths for existing
+standalone backend deployments.
 
-#### Option 1: RPM Package (Recommended for Fedora/RHEL/CentOS)
+#### Legacy option 1: RPM package for Fedora/RHEL/CentOS
 
 ```bash
 # Download the latest release
@@ -88,7 +90,7 @@ sudo systemctl enable --now chatstronomy.service
 sudo systemctl status chatstronomy.service
 ```
 
-#### Option 2: Build from Source
+#### Legacy option 2: Build from source
 
 ```bash
 # Clone the repository

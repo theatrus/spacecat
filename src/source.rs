@@ -1,10 +1,10 @@
 //! Observatory data-source abstraction.
 //!
-//! Chatstronomy supports two ways to communicate with N.I.N.A.:
-//! [`RigSourceKind::AdvancedApi`] uses the existing Advanced API HTTP plugin,
-//! while [`RigSourceKind::NinaDirect`] is reserved for the native Chatstronomy
-//! N.I.N.A. plugin transport.  Consumers such as the chat updater and Discord
-//! command handlers depend on [`RigSource`] rather than either transport.
+//! Native [`RigSourceKind::NinaDirect`] is the supported Chatstronomy N.I.N.A.
+//! plugin transport. Deprecated [`RigSourceKind::AdvancedApi`] compatibility
+//! keeps existing standalone and plugin deployments operational while they
+//! migrate. Consumers such as the chat updater and Discord command handlers
+//! depend on [`RigSource`] rather than either transport.
 
 use crate::api::{ApiError, ChatstronomyApiClient, CommandResponse};
 use crate::autofocus::AutofocusResponse;
@@ -23,11 +23,16 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use thiserror::Error;
 
+pub const ADVANCED_API_DEPRECATION_NOTICE: &str = concat!(
+    "Advanced API mode is deprecated and retained only for existing installations. ",
+    "Migrate this rig to the Chatstronomy N.I.N.A. plugin's native Direct mode."
+);
+
 /// How a rig supplies N.I.N.A. data to Chatstronomy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RigSourceKind {
-    /// Poll the separately installed N.I.N.A. Advanced API plugin over HTTP.
+    /// Deprecated compatibility for polling the separately installed Advanced API plugin.
     AdvancedApi,
     /// Receive events and execute commands through the Chatstronomy N.I.N.A. plugin.
     NinaDirect,

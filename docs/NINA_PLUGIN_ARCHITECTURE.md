@@ -1,8 +1,8 @@
 # N.I.N.A. integration architecture
 
 Chatstronomy treats **how observatory data is collected** and **where chat services
-run** as independent choices. Direct mode is an additional integration, not a
-replacement for Advanced API mode.
+run** as independent choices. Direct mode is the supported integration;
+Advanced API mode remains only as deprecated migration compatibility.
 
 ## Repository and release boundary
 
@@ -32,13 +32,13 @@ HTTP server or require the C# plugin to parse HTTP route names.
 
 | Source | Local delivery | Central/hosted delivery |
 |---|---|---|
-| Advanced API | Rust agent polls N.I.N.A. and runs user-owned Discord/Matrix clients | Rust agent polls N.I.N.A. and relays outbound to the hosted service |
+| Advanced API (deprecated) | Existing Rust agents may continue polling N.I.N.A. and running user-owned Discord/Matrix clients during migration | Existing relays remain compatible during migration |
 | N.I.N.A. Direct | N.I.N.A. plugin connects to Chatstronomy over a Windows named pipe | N.I.N.A. plugin opens an outbound authenticated WebSocket to the Chatstronomy hub |
 
-Advanced API deployments remain usable without installing the Chatstronomy N.I.N.A.
-plugin. When the plugin is installed in Advanced API mode, it acts as an
-in-application configuration and health surface for the Rust agent rather than
-becoming a second data source.
+Advanced API deployments remain usable as deprecated compatibility without
+installing the Chatstronomy N.I.N.A. plugin. When an existing plugin profile is
+configured for Advanced API mode, it acts as an in-application configuration
+and health surface for the Rust agent rather than becoming a second data source.
 
 ## Chat delivery configuration
 
@@ -192,21 +192,21 @@ Local is the simple all-in-one path for a single imaging computer:
 2. Leave **Connection mode** set to **Local**.
 3. Select Discord webhook, Discord app / bot, or Matrix-only delivery. Matrix can
    also be enabled alongside either Discord choice.
-4. Leave **N.I.N.A. data source** set to **Direct** for the simple setup. In
-   Advanced API compatibility mode, leave the endpoint at
-   `http://127.0.0.1:1888/` or enter the configured API address and choose the
-   polling interval.
+4. Leave **N.I.N.A. data source** set to **Direct**. Existing profiles already
+   configured for deprecated Advanced API polling may keep their endpoint and
+   polling interval until they switch to Direct; new profiles cannot select it.
 5. The plugin starts the bundled Chatstronomy runtime, transfers the in-memory
    configuration over its bootstrap pipe, and supervises the owned process.
 
 Native Direct local mode requires no URL, pairing code, open port, or Advanced API
 installation because the plugin implements Chatstronomy's required source hooks
-directly from N.I.N.A. The initial working compatibility path continues to poll
-the separately installed Advanced API plugin. Chat credentials remain on that
-computer in Windows Credential Manager rather than normal profile JSON.
+directly from N.I.N.A. Deprecated existing profiles may continue polling the
+separately installed Advanced API plugin during migration. Chat credentials
+remain on that computer in Windows Credential Manager rather than normal
+profile JSON.
 The local Direct runtime is necessarily supervised for the lifetime of the
-N.I.N.A. plugin session; only Advanced API mode can detach and continue after
-N.I.N.A. exits.
+N.I.N.A. plugin session; only the deprecated Advanced API mode can detach and
+continue after N.I.N.A. exits.
 
 ### Remote
 
