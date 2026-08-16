@@ -86,6 +86,11 @@ foreach ($file in @($archivePath, $manifestPath)) {
     }
 }
 
+# Declared out here on purpose: -PackageOnly skips the block below, and
+# Set-StrictMode turns a later read of an unset variable into a hard failure at
+# the very end -- after the signing work is done and thrown away.
+$packagedRuntime = $null
+
 if (-not $PackageOnly) {
 
 dotnet build $project `
@@ -105,7 +110,6 @@ if (-not (Test-Path -LiteralPath $pluginDll)) {
 
 Copy-Item -LiteralPath $pluginDll -Destination $packageDirectory
 
-$packagedRuntime = $null
 if (-not $SkipRuntime) {
     if ([string]::IsNullOrWhiteSpace($RuntimePath)) {
         if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
@@ -134,6 +138,13 @@ if (-not $SkipRuntime) {
     Copy-Item -LiteralPath $RuntimePath -Destination $packagedRuntime
 }
 
+} else {
+    # Resuming from a staged package: report the runtime that staging produced,
+    # so the summary means the same thing on both paths.
+    $stagedRuntime = Join-Path $packageDirectory 'runtime/chatstronomy.exe'
+    if (Test-Path -LiteralPath $stagedRuntime -PathType Leaf) {
+        $packagedRuntime = $stagedRuntime
+    }
 }  # end of the build/stage phase skipped by -PackageOnly
 
 if ($StageOnly) {
