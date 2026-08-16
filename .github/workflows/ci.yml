@@ -117,6 +117,23 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      # This job builds the crate twice (full hub features and the lean plugin
+      # runtime). Cache both Cargo inputs and target fingerprints so unchanged
+      # dependencies are reused across PRs instead of paying for two cold
+      # release builds on every documentation-only change.
+      - name: Cache N.I.N.A. runtime builds
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-nina-runtime-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-nina-runtime-
+            ${{ runner.os }}-cargo-
+
       - name: Build hosted probe and bundled plugin runtimes
         shell: pwsh
         run: |
