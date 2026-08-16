@@ -6,7 +6,7 @@
 %global debug_package %{nil}
 
 Name:           chatstronomy
-Version:        0.3.1
+Version:        0.3.2
 Release:        1%{?dist}
 Summary:        Chatstronomy - Astronomical Observation System
 
@@ -114,6 +114,9 @@ install -Dpm0640 packaging/rpm/chatstronomy-default.json \
 %attr(0640,root,chatstronomy) %config(noreplace) %{_sysconfdir}/%{name}/config.json
 
 %changelog
+* Sun Aug 16 2026 Yann Ramin <github@theatr.us> - 0.3.2-1
+- Mark and negotiate legacy Direct WebSocket payload contracts
+
 * Sun Aug 16 2026 Yann Ramin <github@theatr.us> - 0.3.1-1
 - Report cooling, waits, slews, and centering with plate-solve output
 - Restore Hub image attachments and enlarge native N.I.N.A. chat previews
