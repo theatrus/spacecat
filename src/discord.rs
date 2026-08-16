@@ -29,9 +29,9 @@ fn retry_delay_for(status: reqwest::StatusCode, retry_after: Option<&str>) -> Op
         let header = retry_after
             .and_then(|value| value.parse::<f64>().ok())
             .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
-            .map(Duration::from_secs_f64)
+            .map(|seconds| Duration::from_secs_f64(seconds.min(MAX_RETRY_DELAY.as_secs_f64())))
             .unwrap_or(DEFAULT_RETRY_DELAY);
-        return Some(header.min(MAX_RETRY_DELAY));
+        return Some(header);
     }
     if status.is_server_error() {
         return Some(DEFAULT_RETRY_DELAY);
@@ -501,6 +501,10 @@ mod tests {
         );
         assert_eq!(
             retry_delay_for(reqwest::StatusCode::TOO_MANY_REQUESTS, Some("120")),
+            Some(MAX_RETRY_DELAY)
+        );
+        assert_eq!(
+            retry_delay_for(reqwest::StatusCode::TOO_MANY_REQUESTS, Some("1e300")),
             Some(MAX_RETRY_DELAY)
         );
         assert_eq!(
