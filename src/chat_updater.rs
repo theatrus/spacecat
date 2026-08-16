@@ -82,6 +82,7 @@ struct TrackedSequenceOperation {
     initial_temperature: Option<f64>,
     camera: Option<CameraInfo>,
     last_milestone: u8,
+    last_output_key: Option<String>,
 }
 
 impl TrackedSequenceOperation {
@@ -108,6 +109,7 @@ impl TrackedSequenceOperation {
             initial_temperature,
             camera,
             last_milestone: 0,
+            last_output_key: None,
         }
     }
 
@@ -142,6 +144,9 @@ impl TrackedSequenceOperation {
                 let remaining = (camera.temperature - target_temperature).abs();
                 Some(((1.0 - remaining / total).clamp(0.0, 1.0) * 100.0).round() as u8)
             }
+            SequenceOperationKind::MountSlew { .. } | SequenceOperationKind::MountCenter { .. } => {
+                None
+            }
         }
     }
 
@@ -153,12 +158,48 @@ impl TrackedSequenceOperation {
     }
 }
 
+fn plate_solve_output_key(operation: &SequenceOperation) -> Option<String> {
+    let SequenceOperationKind::MountCenter {
+        output: Some(output),
+        ..
+    } = &operation.kind
+    else {
+        return None;
+    };
+    output.solve_time.clone().or_else(|| {
+        Some(format!(
+            "{:?}:{:?}:{:?}:{:?}",
+            output.success,
+            output.position_angle,
+            output.separation_arcseconds,
+            output.thumbnail.as_ref().map(Vec::len)
+        ))
+    })
+}
+
+fn promote_ambiguous_slew_to_center(operation: &mut SequenceOperation) -> bool {
+    let SequenceOperationKind::MountSlew {
+        coordinates,
+        may_be_center: true,
+    } = &operation.kind
+    else {
+        return false;
+    };
+    operation.kind = SequenceOperationKind::MountCenter {
+        coordinates: coordinates.clone(),
+        rotation: None,
+        output: None,
+    };
+    true
+}
+
 #[derive(Debug, Clone, Copy)]
 enum OperationUpdate {
     Started,
     Progress(u8),
-    Finished,
-    Failed,
+    Output,
+    Finished { attach_output: bool },
+    Failed { attach_output: bool },
 }
 
 /// State management for the chat updater
@@ -179,8 +220,15 @@ struct UpdaterState {
     sequence_running: bool,
     /// Active TS-WAITSTART wait-end time, if NINA is currently waiting.
     wait_until: Option<DateTime<FixedOffset>>,
+    /// A recent Advanced API signal that the otherwise-ambiguous coordinate
+    /// operation is a center rather than a plain slew.
+    center_event_seen_at: Option<DateTime<Utc>>,
     /// Long-running operations reconstructed from the live sequence tree.
     sequence_operations: HashMap<String, TrackedSequenceOperation>,
+    /// Solve attempts already announced during this updater lifetime. NINA
+    /// retains a Center item's last result when a sequence loop restarts, so
+    /// operation-local state alone would resend the stale image.
+    plate_solve_outputs_seen: HashSet<String>,
     /// Fingerprint of the last live-status embed posted. Lets us skip the
     /// `upsert_status` call when nothing meaningful has changed since the
     /// previous poll cycle.
@@ -209,7 +257,9 @@ impl UpdaterState {
             last_guider_event: None,
             sequence_running: false,
             wait_until: None,
+            center_event_seen_at: None,
             sequence_operations: HashMap::new(),
+            plate_solve_outputs_seen: HashSet::new(),
             last_status_fingerprint: None,
             connected: false,
             consecutive_failures: 0,
@@ -247,15 +297,34 @@ impl UpdaterState {
             .iter()
             .map(|(key, operation)| {
                 let bucket = match &operation.operation.kind {
-                    SequenceOperationKind::TimeWait { .. } => operation
-                        .estimated_end
-                        .map(|end| end.signed_duration_since(Utc::now()).num_minutes())
-                        .unwrap_or(-1),
-                    SequenceOperationKind::CameraCooling { .. } => operation
-                        .camera
-                        .as_ref()
-                        .map(|camera| (camera.temperature * 2.0).round() as i64)
-                        .unwrap_or(i64::MIN),
+                    SequenceOperationKind::TimeWait { .. } => format!(
+                        "wait:{}",
+                        operation
+                            .estimated_end
+                            .map(|end| end.signed_duration_since(Utc::now()).num_minutes())
+                            .unwrap_or(-1)
+                    ),
+                    SequenceOperationKind::CameraCooling { .. } => format!(
+                        "cool:{}",
+                        operation
+                            .camera
+                            .as_ref()
+                            .map(|camera| (camera.temperature * 2.0).round() as i64)
+                            .unwrap_or(i64::MIN)
+                    ),
+                    SequenceOperationKind::MountSlew { coordinates, .. } => format!(
+                        "slew:{}",
+                        coordinates.as_ref().map_or("", |coordinates| {
+                            coordinates.ra_string.as_deref().unwrap_or("")
+                        })
+                    ),
+                    SequenceOperationKind::MountCenter { output, .. } => format!(
+                        "center:{}",
+                        output
+                            .as_ref()
+                            .and_then(|output| output.solve_time.as_deref())
+                            .unwrap_or("")
+                    ),
                 };
                 format!("{key}:{bucket}")
             })
@@ -595,10 +664,54 @@ impl ChatUpdater {
         announce: bool,
     ) {
         let now = Utc::now();
-        let incoming = operations
+        if self
+            .state
+            .center_event_seen_at
+            .is_some_and(|seen| now.signed_duration_since(seen) > chrono::Duration::minutes(2))
+        {
+            self.state.center_event_seen_at = None;
+        }
+        let mut incoming = operations
             .into_iter()
-            .map(|operation| (operation.key.clone(), operation))
+            .map(|mut operation| {
+                // Once a recent MOUNT-CENTER event has identified an
+                // Advanced API coordinate item, retain that classification
+                // on later polls even though the API still omits its type.
+                if self
+                    .state
+                    .sequence_operations
+                    .get(&operation.key)
+                    .is_some_and(|previous| {
+                        matches!(
+                            previous.operation.kind,
+                            SequenceOperationKind::MountCenter { .. }
+                        )
+                    })
+                {
+                    promote_ambiguous_slew_to_center(&mut operation);
+                }
+                (operation.key.clone(), operation)
+            })
             .collect::<HashMap<_, _>>();
+        let mut center_event_operation = None;
+        if self.state.center_event_seen_at.is_some() {
+            for (key, operation) in &mut incoming {
+                if !operation.is_active() {
+                    continue;
+                }
+                let is_center = matches!(operation.kind, SequenceOperationKind::MountCenter { .. })
+                    || promote_ambiguous_slew_to_center(operation);
+                if !is_center {
+                    continue;
+                }
+                if let Some(previous) = self.state.sequence_operations.get_mut(key) {
+                    promote_ambiguous_slew_to_center(&mut previous.operation);
+                }
+                center_event_operation = Some(key.clone());
+                self.state.center_event_seen_at = None;
+                break;
+            }
+        }
         let event_wait_end = self.state.wait_until.map(|end| end.with_timezone(&Utc));
         let mut notifications = Vec::new();
         let mut sequence_wait_ended = false;
@@ -622,7 +735,12 @@ impl ChatUpdater {
                         previous.operation.kind,
                         SequenceOperationKind::TimeWait { .. }
                     );
-                    notifications.push((previous, OperationUpdate::Finished));
+                    notifications.push((
+                        previous,
+                        OperationUpdate::Finished {
+                            attach_output: false,
+                        },
+                    ));
                 }
                 continue;
             };
@@ -647,7 +765,12 @@ impl ChatUpdater {
                         previous.operation.kind,
                         SequenceOperationKind::TimeWait { .. }
                     );
-                    notifications.push((previous, OperationUpdate::Finished));
+                    notifications.push((
+                        previous,
+                        OperationUpdate::Finished {
+                            attach_output: false,
+                        },
+                    ));
                 }
                 // The second pass treats the replacement at this path as a
                 // newly started operation instead of retaining stale timing
@@ -666,12 +789,18 @@ impl ChatUpdater {
                         previous.operation.kind,
                         SequenceOperationKind::TimeWait { .. }
                     );
+                    let output_key = plate_solve_output_key(next);
+                    let attach_output = output_key
+                        .as_ref()
+                        .is_some_and(|key| self.state.plate_solve_outputs_seen.insert(key.clone()));
+                    previous.last_output_key = output_key;
+                    previous.operation = next.clone();
                     notifications.push((
                         previous,
                         if next.is_failed() {
-                            OperationUpdate::Failed
+                            OperationUpdate::Failed { attach_output }
                         } else {
-                            OperationUpdate::Finished
+                            OperationUpdate::Finished { attach_output }
                         },
                     ));
                 }
@@ -709,6 +838,16 @@ impl ChatUpdater {
                     tracked.last_milestone = milestone;
                     notifications.push((tracked.clone(), OperationUpdate::Progress(milestone)));
                 }
+                let output_key = plate_solve_output_key(&tracked.operation);
+                if output_key.is_some() && output_key != tracked.last_output_key {
+                    tracked.last_output_key = output_key.clone();
+                    if output_key
+                        .as_ref()
+                        .is_some_and(|key| self.state.plate_solve_outputs_seen.insert(key.clone()))
+                    {
+                        notifications.push((tracked.clone(), OperationUpdate::Output));
+                    }
+                }
             }
         }
 
@@ -716,6 +855,7 @@ impl ChatUpdater {
             if !operation.is_active() || self.state.sequence_operations.contains_key(&key) {
                 continue;
             }
+            let suppress_duplicate_center = center_event_operation.as_deref() == Some(key.as_str());
             let operation_camera =
                 matches!(operation.kind, SequenceOperationKind::CameraCooling { .. })
                     .then(|| camera.clone())
@@ -734,13 +874,21 @@ impl ChatUpdater {
                     .map(completed_milestone)
                     .unwrap_or(0);
             }
+            let output_key = plate_solve_output_key(&tracked.operation);
+            let output_is_new = output_key
+                .as_ref()
+                .is_some_and(|key| self.state.plate_solve_outputs_seen.insert(key.clone()));
             let suppress_duplicate_wait = matches!(
                 tracked.operation.kind,
                 SequenceOperationKind::TimeWait { .. }
             ) && self.state.wait_until.is_some();
-            if announce && !suppress_duplicate_wait {
+            if announce && !suppress_duplicate_wait && !suppress_duplicate_center {
                 notifications.push((tracked.clone(), OperationUpdate::Started));
             }
+            if announce && output_is_new {
+                notifications.push((tracked.clone(), OperationUpdate::Output));
+            }
+            tracked.last_output_key = output_key;
             self.state.sequence_operations.insert(key, tracked);
         }
 
@@ -775,10 +923,10 @@ impl ChatUpdater {
             (SequenceOperationKind::CameraCooling { .. }, OperationUpdate::Progress(_)) => {
                 ("Camera cooling", "❄️ Camera cooling update")
             }
-            (SequenceOperationKind::CameraCooling { .. }, OperationUpdate::Finished) => {
+            (SequenceOperationKind::CameraCooling { .. }, OperationUpdate::Finished { .. }) => {
                 ("Camera cooling", "✅ Camera cooling finished")
             }
-            (SequenceOperationKind::CameraCooling { .. }, OperationUpdate::Failed) => {
+            (SequenceOperationKind::CameraCooling { .. }, OperationUpdate::Failed { .. }) => {
                 ("Camera cooling", "❌ Camera cooling failed")
             }
             (SequenceOperationKind::TimeWait { .. }, OperationUpdate::Started) => {
@@ -787,16 +935,51 @@ impl ChatUpdater {
             (SequenceOperationKind::TimeWait { .. }, OperationUpdate::Progress(_)) => {
                 ("Timed wait", "⏳ Timed wait update")
             }
-            (SequenceOperationKind::TimeWait { .. }, OperationUpdate::Finished) => {
+            (SequenceOperationKind::TimeWait { .. }, OperationUpdate::Finished { .. }) => {
                 ("Timed wait", "✅ Timed wait finished")
             }
-            (SequenceOperationKind::TimeWait { .. }, OperationUpdate::Failed) => {
+            (SequenceOperationKind::TimeWait { .. }, OperationUpdate::Failed { .. }) => {
                 ("Timed wait", "❌ Timed wait failed")
+            }
+            (SequenceOperationKind::MountSlew { .. }, OperationUpdate::Started) => {
+                ("Mount slew", "🔭 Mount slew started")
+            }
+            (SequenceOperationKind::MountSlew { .. }, OperationUpdate::Finished { .. }) => {
+                ("Mount slew", "✅ Mount slew finished")
+            }
+            (SequenceOperationKind::MountSlew { .. }, OperationUpdate::Failed { .. }) => {
+                ("Mount slew", "❌ Mount slew failed")
+            }
+            (SequenceOperationKind::MountCenter { .. }, OperationUpdate::Started) => {
+                ("Center", "🎯 Centering started")
+            }
+            (SequenceOperationKind::MountCenter { .. }, OperationUpdate::Output) => {
+                ("Center", "🔎 Plate solve result")
+            }
+            (SequenceOperationKind::MountCenter { .. }, OperationUpdate::Finished { .. }) => {
+                ("Center", "✅ Centering finished")
+            }
+            (SequenceOperationKind::MountCenter { .. }, OperationUpdate::Failed { .. }) => {
+                ("Center", "❌ Centering failed")
+            }
+            (SequenceOperationKind::MountSlew { .. }, OperationUpdate::Progress(_))
+            | (SequenceOperationKind::MountSlew { .. }, OperationUpdate::Output)
+            | (SequenceOperationKind::MountCenter { .. }, OperationUpdate::Progress(_))
+            | (SequenceOperationKind::CameraCooling { .. }, OperationUpdate::Output)
+            | (SequenceOperationKind::TimeWait { .. }, OperationUpdate::Output) => {
+                ("Sequence operation", "Sequence operation update")
             }
         };
         let color = match update {
-            OperationUpdate::Finished => colors::GREEN,
-            OperationUpdate::Failed => colors::RED,
+            OperationUpdate::Finished { .. } => colors::GREEN,
+            OperationUpdate::Failed { .. } => colors::RED,
+            OperationUpdate::Output => match &tracked.operation.kind {
+                SequenceOperationKind::MountCenter {
+                    output: Some(output),
+                    ..
+                } if output.success == Some(false) => colors::RED,
+                _ => colors::CYAN,
+            },
             OperationUpdate::Started | OperationUpdate::Progress(_) => colors::YELLOW,
         };
         let mut message = ChatMessage::new(&self.titled(title))
@@ -851,9 +1034,120 @@ impl ChatUpdater {
                         .field("Remaining", &format_duration(remaining), true);
                 }
             }
+            SequenceOperationKind::MountSlew { coordinates, .. } => {
+                if let Some(coordinates) = coordinates {
+                    message = message.field("Destination", &coordinates.display(), false);
+                }
+            }
+            SequenceOperationKind::MountCenter {
+                coordinates,
+                rotation,
+                output,
+            } => {
+                if let Some(coordinates) = coordinates {
+                    message = message.field("Target", &coordinates.display(), false);
+                }
+                if let Some(rotation) = rotation {
+                    message = message.field("Target rotation", &format!("{rotation:.1}°"), true);
+                }
+                if let Some(output) = output {
+                    if let Some(success) = output.success {
+                        message = message.field(
+                            "Plate solve",
+                            if success { "Succeeded" } else { "Failed" },
+                            true,
+                        );
+                    }
+                    if let Some(coordinates) = &output.coordinates {
+                        message = message.field("Solved position", &coordinates.display(), false);
+                    }
+                    if let Some(angle) = output.position_angle {
+                        message = message.field("Position angle", &format!("{angle:.2}°"), true);
+                    }
+                    if let Some(scale) = output.pixel_scale {
+                        message =
+                            message.field("Image scale", &format!("{scale:.2} arcsec/px"), true);
+                    }
+                    if let Some(radius) = output.radius_degrees {
+                        message = message.field("Solve radius", &format!("{radius:.2}°"), true);
+                    }
+                    if let Some(separation) = output.separation_arcseconds {
+                        message = message.field(
+                            "Pointing error",
+                            &format!("{separation:.1} arcsec"),
+                            true,
+                        );
+                    }
+                    if output.ra_error.is_some() || output.dec_error.is_some() {
+                        message = message.field(
+                            "Axis error",
+                            &format!(
+                                "RA {} · Dec {}",
+                                output.ra_error.as_deref().unwrap_or("--"),
+                                output.dec_error.as_deref().unwrap_or("--")
+                            ),
+                            false,
+                        );
+                    }
+                    if output.ra_pixel_error.is_some() || output.dec_pixel_error.is_some() {
+                        message = message.field(
+                            "Pixel error",
+                            &format!(
+                                "RA {} · Dec {}",
+                                output
+                                    .ra_pixel_error
+                                    .map(|value| format!("{value:.2} px"))
+                                    .unwrap_or_else(|| "--".to_string()),
+                                output
+                                    .dec_pixel_error
+                                    .map(|value| format!("{value:.2} px"))
+                                    .unwrap_or_else(|| "--".to_string())
+                            ),
+                            false,
+                        );
+                    }
+                    if output.flipped == Some(true) {
+                        message = message.field("Orientation", "Flipped", true);
+                    }
+                }
+            }
         }
+        let attach_output = matches!(update, OperationUpdate::Output)
+            || matches!(
+                update,
+                OperationUpdate::Finished {
+                    attach_output: true
+                } | OperationUpdate::Failed {
+                    attach_output: true
+                }
+            );
+        let attachments = if attach_output {
+            match &tracked.operation.kind {
+                SequenceOperationKind::MountCenter {
+                    output: Some(output),
+                    ..
+                } => output
+                    .thumbnail
+                    .as_ref()
+                    .map(|thumbnail| {
+                        vec![ChatAttachment {
+                            data: thumbnail.clone(),
+                            filename: if output.thumbnail_media_type.as_deref() == Some("image/png")
+                            {
+                                "plate_solve.png".to_string()
+                            } else {
+                                "plate_solve.jpg".to_string()
+                            },
+                        }]
+                    })
+                    .unwrap_or_default(),
+                _ => Vec::new(),
+            }
+        } else {
+            Vec::new()
+        };
         self.chat_manager
-            .send_message(&message, &self.chat_target)
+            .send_message_with_attachments(&message, &self.chat_target, &attachments)
             .await;
     }
 
@@ -1087,6 +1381,9 @@ impl ChatUpdater {
             | event_types::MOUNT_AFTER_FLIP
             | event_types::MOUNT_CENTER => {
                 self.state.last_mount_event = Some(event.event.clone());
+                if event.event == event_types::MOUNT_CENTER {
+                    self.state.center_event_seen_at = Some(Utc::now());
+                }
             }
             event_types::GUIDER_START | event_types::GUIDER_STOP | event_types::GUIDER_DITHER => {
                 self.state.last_guider_event = Some(event.event.clone());
@@ -1622,6 +1919,34 @@ impl ChatUpdater {
                         parts.push("⏳ Timed wait in progress".to_string());
                     }
                 }
+                SequenceOperationKind::MountSlew { coordinates, .. } => {
+                    parts.push(coordinates.as_ref().map_or_else(
+                        || "🔭 Mount slew in progress".to_string(),
+                        |coordinates| format!("🔭 Slewing to {}", coordinates.display()),
+                    ));
+                }
+                SequenceOperationKind::MountCenter {
+                    coordinates,
+                    output,
+                    ..
+                } => {
+                    let target = coordinates
+                        .as_ref()
+                        .map_or_else(String::new, |coordinates| {
+                            format!(" on {}", coordinates.display())
+                        });
+                    let solve = output
+                        .as_ref()
+                        .and_then(|output| output.success)
+                        .map_or_else(String::new, |success| {
+                            if success {
+                                "; latest plate solve succeeded".to_string()
+                            } else {
+                                "; latest plate solve failed".to_string()
+                            }
+                        });
+                    parts.push(format!("🎯 Centering{target}{solve}"));
+                }
             }
         }
 
@@ -1651,7 +1976,7 @@ impl ChatUpdater {
                 event_types::MOUNT_HOMED => "🏠 Mount homed",
                 event_types::MOUNT_BEFORE_FLIP => "🔄 Mount pre-flip",
                 event_types::MOUNT_AFTER_FLIP => "✅ Mount post-flip",
-                event_types::MOUNT_CENTER => "🎯 Mount centered",
+                event_types::MOUNT_CENTER => "🎯 Centering started",
                 _ => "🔭 Mount active",
             };
             parts.push(label.to_string());
@@ -1819,7 +2144,7 @@ impl ChatUpdater {
             event_types::MOUNT_PARKED => ("🅿️ Mount Parked", colors::YELLOW),
             event_types::MOUNT_UNPARKED => ("🔭 Mount Unparked", colors::YELLOW),
             event_types::MOUNT_HOMED => ("🏠 Mount Homed", colors::CYAN),
-            event_types::MOUNT_CENTER => ("🎯 Mount Centered", colors::CYAN),
+            event_types::MOUNT_CENTER => ("🎯 Centering Started", colors::CYAN),
             _ => ("🔭 Mount Event", colors::GRAY),
         };
 
@@ -2347,6 +2672,33 @@ mod tests {
 
         assert_eq!(tracked.progress_percent(now), Some(50));
         assert_eq!(tracked.next_milestone(now), Some(50));
+    }
+
+    #[test]
+    fn advanced_api_mount_operation_can_be_promoted_to_center() {
+        let mut promoted = operation(SequenceOperationKind::MountSlew {
+            coordinates: None,
+            may_be_center: true,
+        });
+        assert!(promote_ambiguous_slew_to_center(&mut promoted));
+        assert!(matches!(
+            promoted.kind,
+            SequenceOperationKind::MountCenter {
+                coordinates: None,
+                rotation: None,
+                output: None,
+            }
+        ));
+
+        let mut direct_slew = operation(SequenceOperationKind::MountSlew {
+            coordinates: None,
+            may_be_center: false,
+        });
+        assert!(!promote_ambiguous_slew_to_center(&mut direct_slew));
+        assert!(matches!(
+            direct_slew.kind,
+            SequenceOperationKind::MountSlew { .. }
+        ));
     }
 
     #[test]

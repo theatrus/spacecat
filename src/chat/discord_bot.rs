@@ -706,6 +706,35 @@ fn sequence_operation_summary(
                 "⏳ Timed wait".to_string()
             }
         }
+        SequenceOperationKind::MountSlew { coordinates, .. } => coordinates.as_ref().map_or_else(
+            || "🔭 Mount slew in progress".to_string(),
+            |coordinates| format!("🔭 Slewing to {}", coordinates.display()),
+        ),
+        SequenceOperationKind::MountCenter {
+            coordinates,
+            rotation,
+            output,
+        } => {
+            let target = coordinates
+                .as_ref()
+                .map(|coordinates| format!(" on {}", coordinates.display()))
+                .unwrap_or_default();
+            let rotation = rotation
+                .map(|rotation| format!(" at {rotation:.1}°"))
+                .unwrap_or_default();
+            let solve = output
+                .as_ref()
+                .and_then(|output| output.success)
+                .map(|success| {
+                    if success {
+                        "; solve succeeded"
+                    } else {
+                        "; solve failed"
+                    }
+                })
+                .unwrap_or_default();
+            format!("🎯 Centering{target}{rotation}{solve}")
+        }
     }
 }
 

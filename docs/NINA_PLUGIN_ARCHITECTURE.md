@@ -99,7 +99,7 @@ format:
 |---|---|
 | Event history | Subscribe to application/device events and keep a bounded journal |
 | Image history and thumbnails | Observe saved images and keep a bounded metadata/thumbnail cache |
-| Sequence | Read the active sequence through N.I.N.A. sequence services |
+| Sequence | Read the active sequence, stable operation types, and center/plate-solve output through N.I.N.A. sequence services |
 | Last autofocus | Capture autofocus completion/results in a bounded cache |
 | Mount, filter wheel, guider, rotator, focuser | Build live snapshots from the corresponding mediators |
 | Guider graph | Accumulate recent guide-step events in a bounded ring buffer |
@@ -124,6 +124,13 @@ Matrix. Discord's `/guider`, `/focus`, and `/last-image` inspection tools also
 surface those graphics on demand. Direct graph contract tests cover N.I.N.A.'s
 raw-pixel RMS semantics, arcsecond display scaling, signed correction pulses,
 dither markers, and an actual named-pipe-to-PNG round trip.
+
+The Direct sequence projection also identifies cooling, timed waits, mount slews,
+and centers without localized display-name matching. Center items include the
+latest plate-solve result and a bounded JPEG thumbnail, allowing both the local
+runtime and hosted Hub to post solve output and images. Advanced API compatibility
+mode tracks the same operation lifecycle but cannot supply a historical center
+thumbnail because that API does not expose one.
 
 Only one source is authoritative for a rig. Chatstronomy will not automatically
 merge or fail over between Direct and Advanced API sources because duplicate

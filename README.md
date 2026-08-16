@@ -12,8 +12,8 @@
 
 **Chatstronomy** bridges one or more [N.I.N.A.](https://nighttime-imaging.eu)
 imaging rigs with Discord and Matrix. It posts events, images, autofocus and
-guider graphs, and live status, and can expose an allowlisted set of bot slash
-commands for control.
+guider graphs, slew/center progress with plate-solve output, and live status,
+and can expose an allowlisted set of bot slash commands for control.
 
 The recommended Windows setup is the separate
 [`chatstronomy-nina-plugin`](https://github.com/theatrus/chatstronomy-nina-plugin)
@@ -287,6 +287,10 @@ every configured telescope concurrently using the same shared Discord bot and Ma
   so the same embed survives restarts.
 - **Smart target tracking** — TS-TARGETSTART / TS-NEWTARGETSTART events override generic
   sequence target names; tolerant parsing handles NINA's empty-array coord payloads.
+- **Sequence-operation updates** — camera cooling, timed waits, mount slews, and
+  centering report start/completion/failure state. Native Direct mode also posts each
+  center attempt's plate-solve coordinates, pointing error, image scale, and thumbnail;
+  Advanced API mode reports the lifecycle data its legacy surface exposes.
 - **Rich event notifications** — events are enriched on the fly:
   - `AUTOFOCUS-FINISHED` → fetches `/equipment/focuser/last-af` for HFR, R², position
   - `FILTERWHEEL-CHANGED` → fetches `/equipment/filterwheel/info` when payload is incomplete

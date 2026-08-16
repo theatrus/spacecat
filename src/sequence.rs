@@ -1,3 +1,4 @@
+use base64::Engine;
 use chrono::{DateTime as ChronoDateTime, FixedOffset};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -189,6 +190,78 @@ pub enum SequenceOperationKind {
         target_time: Option<ChronoDateTime<FixedOffset>>,
         configured_duration: Option<chrono::Duration>,
     },
+    MountSlew {
+        coordinates: Option<OperationCoordinates>,
+        /// Older Advanced API payloads expose coordinates but not the
+        /// concrete sequence-item type. A nearby MOUNT-CENTER event can
+        /// safely promote one of these otherwise-slew operations.
+        may_be_center: bool,
+    },
+    MountCenter {
+        coordinates: Option<OperationCoordinates>,
+        rotation: Option<f64>,
+        output: Option<Box<PlateSolveOutput>>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct OperationCoordinates {
+    pub ra_hours: Option<f64>,
+    pub ra_string: Option<String>,
+    pub dec_degrees: Option<f64>,
+    pub dec_string: Option<String>,
+    pub epoch: Option<String>,
+    pub altitude_degrees: Option<f64>,
+    pub azimuth_degrees: Option<f64>,
+}
+
+impl OperationCoordinates {
+    pub fn display(&self) -> String {
+        if self.altitude_degrees.is_some() || self.azimuth_degrees.is_some() {
+            return format!(
+                "Alt {} · Az {}",
+                self.altitude_degrees
+                    .map(|value| format!("{value:.2}°"))
+                    .unwrap_or_else(|| "--".to_string()),
+                self.azimuth_degrees
+                    .map(|value| format!("{value:.2}°"))
+                    .unwrap_or_else(|| "--".to_string())
+            );
+        }
+
+        let ra = self.ra_string.clone().unwrap_or_else(|| {
+            self.ra_hours
+                .map(|value| format!("{value:.5} h"))
+                .unwrap_or_else(|| "--".to_string())
+        });
+        let dec = self.dec_string.clone().unwrap_or_else(|| {
+            self.dec_degrees
+                .map(|value| format!("{value:.5}°"))
+                .unwrap_or_else(|| "--".to_string())
+        });
+        match self.epoch.as_deref() {
+            Some(epoch) => format!("RA {ra} · Dec {dec} ({epoch})"),
+            None => format!("RA {ra} · Dec {dec}"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlateSolveOutput {
+    pub solve_time: Option<String>,
+    pub success: Option<bool>,
+    pub coordinates: Option<OperationCoordinates>,
+    pub position_angle: Option<f64>,
+    pub pixel_scale: Option<f64>,
+    pub radius_degrees: Option<f64>,
+    pub separation_arcseconds: Option<f64>,
+    pub ra_error: Option<String>,
+    pub dec_error: Option<String>,
+    pub ra_pixel_error: Option<f64>,
+    pub dec_pixel_error: Option<f64>,
+    pub flipped: Option<bool>,
+    pub thumbnail: Option<Vec<u8>>,
+    pub thumbnail_media_type: Option<String>,
 }
 
 impl SequenceOperation {
@@ -207,9 +280,9 @@ impl SequenceOperation {
     }
 }
 
-/// Find camera-cooling and timed-wait items without depending on localized
-/// display names. Direct snapshots supply `OperationKind`; older plugin and
-/// Advanced API payloads are recognized from their stable data fields.
+/// Find chat-visible, long-running sequence items without depending on
+/// localized display names. Direct snapshots supply `OperationKind`; older
+/// plugin and Advanced API payloads are recognized from their stable fields.
 pub fn extract_sequence_operations(sequence: &SequenceResponse) -> Vec<SequenceOperation> {
     fn visit_items(values: &[Value], parent: &str, output: &mut Vec<SequenceOperation>) {
         for (index, value) in values.iter().enumerate() {
@@ -238,6 +311,15 @@ pub fn extract_sequence_operations(sequence: &SequenceResponse) -> Vec<SequenceO
             let is_wait = explicit_kind == Some("time_wait")
                 || object.contains_key("CalculatedWaitDuration")
                 || object.contains_key("Delay");
+            let has_coordinates =
+                object.contains_key("Coordinates") && !name.ends_with("_Container");
+            let lower_name = name.to_ascii_lowercase();
+            let name_is_center = lower_name.contains("center")
+                || lower_name.contains("centr")
+                || lower_name.contains("zentrier");
+            let is_center = explicit_kind == Some("mount_center")
+                || (has_coordinates && (object.contains_key("Rotation") || name_is_center));
+            let is_slew = explicit_kind == Some("mount_slew") || (has_coordinates && !is_center);
 
             if is_cooling {
                 if let Some(target_temperature) = object.get("Temperature").and_then(value_as_f64) {
@@ -273,6 +355,34 @@ pub fn extract_sequence_operations(sequence: &SequenceResponse) -> Vec<SequenceO
                         },
                     });
                 }
+            } else if is_center {
+                output.push(SequenceOperation {
+                    key: key.clone(),
+                    name: name.clone(),
+                    status: status.clone(),
+                    kind: SequenceOperationKind::MountCenter {
+                        coordinates: object
+                            .get("Coordinates")
+                            .and_then(parse_operation_coordinates),
+                        rotation: object.get("Rotation").and_then(value_as_f64),
+                        output: object
+                            .get("PlateSolveOutput")
+                            .and_then(parse_plate_solve_output)
+                            .map(Box::new),
+                    },
+                });
+            } else if is_slew {
+                output.push(SequenceOperation {
+                    key: key.clone(),
+                    name: name.clone(),
+                    status: status.clone(),
+                    kind: SequenceOperationKind::MountSlew {
+                        coordinates: object
+                            .get("Coordinates")
+                            .and_then(parse_operation_coordinates),
+                        may_be_center: explicit_kind.is_none(),
+                    },
+                });
             }
 
             if let Some(items) = object.get("Items").and_then(Value::as_array) {
@@ -284,6 +394,91 @@ pub fn extract_sequence_operations(sequence: &SequenceResponse) -> Vec<SequenceO
     let mut operations = Vec::new();
     visit_items(&sequence.response, "", &mut operations);
     operations
+}
+
+fn parse_operation_coordinates(value: &Value) -> Option<OperationCoordinates> {
+    let object = value.as_object()?;
+    let angle = |name: &str| {
+        object.get(name).and_then(|value| {
+            value_as_f64(value).or_else(|| value.get("Degree").and_then(value_as_f64))
+        })
+    };
+    let coordinates = OperationCoordinates {
+        ra_hours: object.get("RA").and_then(value_as_f64),
+        ra_string: object
+            .get("RAString")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        dec_degrees: object.get("Dec").and_then(value_as_f64),
+        dec_string: object
+            .get("DecString")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        epoch: object.get("Epoch").map(|value| {
+            value
+                .as_str()
+                .map(str::to_string)
+                .unwrap_or_else(|| value.to_string())
+        }),
+        altitude_degrees: angle("Altitude"),
+        azimuth_degrees: angle("Azimuth"),
+    };
+    (coordinates.ra_hours.is_some()
+        || coordinates.dec_degrees.is_some()
+        || coordinates.altitude_degrees.is_some()
+        || coordinates.azimuth_degrees.is_some()
+        || coordinates.ra_string.is_some()
+        || coordinates.dec_string.is_some())
+    .then_some(coordinates)
+}
+
+fn parse_plate_solve_output(value: &Value) -> Option<PlateSolveOutput> {
+    const MAX_THUMBNAIL_BASE64_LEN: usize = 8 * 1024 * 1024;
+    let object = value.as_object()?;
+    let thumbnail = object
+        .get("ThumbnailBase64")
+        .and_then(Value::as_str)
+        .filter(|encoded| encoded.len() <= MAX_THUMBNAIL_BASE64_LEN)
+        .and_then(|encoded| {
+            base64::engine::general_purpose::STANDARD
+                .decode(encoded)
+                .ok()
+        });
+    let output = PlateSolveOutput {
+        solve_time: object
+            .get("SolveTime")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        success: object.get("Success").and_then(Value::as_bool),
+        coordinates: object
+            .get("Coordinates")
+            .and_then(parse_operation_coordinates),
+        position_angle: object.get("PositionAngle").and_then(value_as_f64),
+        pixel_scale: object.get("PixelScale").and_then(value_as_f64),
+        radius_degrees: object.get("RadiusDegrees").and_then(value_as_f64),
+        separation_arcseconds: object.get("SeparationArcseconds").and_then(value_as_f64),
+        ra_error: object
+            .get("RaError")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        dec_error: object
+            .get("DecError")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        ra_pixel_error: object.get("RaPixelError").and_then(value_as_f64),
+        dec_pixel_error: object.get("DecPixelError").and_then(value_as_f64),
+        flipped: object.get("Flipped").and_then(Value::as_bool),
+        thumbnail,
+        thumbnail_media_type: object
+            .get("ThumbnailMediaType")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+    };
+    (output.solve_time.is_some()
+        || output.success.is_some()
+        || output.coordinates.is_some()
+        || output.thumbnail.is_some())
+    .then_some(output)
 }
 
 fn value_as_f64(value: &Value) -> Option<f64> {
@@ -901,6 +1096,105 @@ mod tests {
                 target_time: None,
                 configured_duration: Some(duration)
             } if duration == chrono::Duration::seconds(45)
+        ));
+    }
+
+    #[test]
+    fn extracts_slew_center_and_direct_plate_solve_output() {
+        let sequence: SequenceResponse = serde_json::from_value(serde_json::json!({
+            "Response": [{
+                "Name": "Target_Container",
+                "Status": "RUNNING",
+                "Items": [{
+                    "Name": "Slew to target",
+                    "Status": "RUNNING",
+                    "OperationKind": "mount_slew",
+                    "Coordinates": {
+                        "RA": 12.5,
+                        "RAString": "12:30:00",
+                        "Dec": 42.25,
+                        "DecString": "+42:15:00",
+                        "Epoch": "J2000"
+                    }
+                }, {
+                    "Name": "Center and rotate",
+                    "Status": "RUNNING",
+                    "OperationKind": "mount_center",
+                    "Coordinates": { "RA": 12.5, "Dec": 42.25 },
+                    "Rotation": 91.5,
+                    "PlateSolveOutput": {
+                        "SolveTime": "2026-08-16T06:45:00Z",
+                        "Success": true,
+                        "Coordinates": {
+                            "RA": 12.5001,
+                            "RAString": "12:30:00.4",
+                            "Dec": 42.2502,
+                            "DecString": "+42:15:00.7",
+                            "Epoch": "J2000"
+                        },
+                        "PositionAngle": 91.45,
+                        "PixelScale": 1.25,
+                        "SeparationArcseconds": 2.4,
+                        "ThumbnailBase64": "AQID",
+                        "ThumbnailMediaType": "image/jpeg"
+                    }
+                }]
+            }],
+            "Error": "",
+            "StatusCode": 200,
+            "Success": true,
+            "Type": "API"
+        }))
+        .unwrap();
+
+        let operations = extract_sequence_operations(&sequence);
+        assert_eq!(operations.len(), 2);
+        assert!(matches!(
+            &operations[0].kind,
+            SequenceOperationKind::MountSlew {
+                coordinates: Some(coordinates),
+                may_be_center: false,
+            } if coordinates.ra_string.as_deref() == Some("12:30:00")
+        ));
+        assert!(matches!(
+            &operations[1].kind,
+            SequenceOperationKind::MountCenter {
+                rotation: Some(rotation),
+                output: Some(output),
+                ..
+            } if (*rotation - 91.5).abs() < f64::EPSILON
+                && output.success == Some(true)
+                && output.separation_arcseconds == Some(2.4)
+                && output.thumbnail.as_deref() == Some(&[1, 2, 3][..])
+        ));
+    }
+
+    #[test]
+    fn advanced_api_coordinate_items_remain_center_promotable() {
+        let sequence: SequenceResponse = serde_json::from_value(serde_json::json!({
+            "Response": [{
+                "Name": "Custom renamed operation",
+                "Status": "RUNNING",
+                "Coordinates": {
+                    "Altitude": { "Degree": 50.5 },
+                    "Azimuth": { "Degree": 182.25 }
+                }
+            }],
+            "Error": "",
+            "StatusCode": 200,
+            "Success": true,
+            "Type": "API"
+        }))
+        .unwrap();
+
+        let operations = extract_sequence_operations(&sequence);
+        assert!(matches!(
+            &operations[0].kind,
+            SequenceOperationKind::MountSlew {
+                coordinates: Some(coordinates),
+                may_be_center: true,
+            } if coordinates.altitude_degrees == Some(50.5)
+                && coordinates.azimuth_degrees == Some(182.25)
         ));
     }
 
