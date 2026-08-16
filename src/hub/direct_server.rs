@@ -9,8 +9,9 @@
 
 use super::server::HubState;
 use crate::direct::protocol::{
-    AgentHello, AuthRequest, ClientHello, DirectMessage, PROTOCOL_VERSION, PairRequest, QueryKind,
-    QueryRequest, QueryResult, RigId,
+    AgentHello, AuthRequest, CURRENT_PAYLOAD_VERSION, ClientHello, DirectMessage,
+    LEGACY_PAYLOAD_VERSION, PROTOCOL_VERSION, PairRequest, QueryKind, QueryRequest, QueryResult,
+    RigId,
 };
 use crate::source::RigCapabilities;
 use axum::extract::State;
@@ -32,6 +33,9 @@ pub const QUERY_TIMEOUT: Duration = Duration::from_secs(20);
 pub struct RigConnection {
     pub telescope_id: i64,
     pub session_id: Uuid,
+    /// Additive response-payload contract selected during the hello exchange.
+    /// Version 1 means an older, unmarked Direct client.
+    pub payload_version: u16,
     pub capabilities: RigCapabilities,
     pub profile_name: String,
     outgoing: mpsc::UnboundedSender<DirectMessage>,
@@ -119,6 +123,7 @@ impl RigConnection {
             Arc::new(RigConnection {
                 telescope_id,
                 session_id,
+                payload_version: CURRENT_PAYLOAD_VERSION,
                 capabilities: crate::source::RigCapabilities::advanced_api(),
                 profile_name: format!("stub-{telescope_id}"),
                 outgoing,
@@ -303,12 +308,19 @@ fn check_hello(hello: &ClientHello) -> Result<(), String> {
             hello.protocol_version
         ));
     }
+    if !(LEGACY_PAYLOAD_VERSION..=CURRENT_PAYLOAD_VERSION).contains(&hello.payload_version) {
+        return Err(format!(
+            "unsupported payload version {} (hub supports {LEGACY_PAYLOAD_VERSION} through {CURRENT_PAYLOAD_VERSION})",
+            hello.payload_version
+        ));
+    }
     Ok(())
 }
 
 fn agent_hello(hello: &ClientHello) -> AgentHello {
     AgentHello {
         protocol_version: PROTOCOL_VERSION,
+        payload_version: hello.payload_version,
         connection_id: Uuid::new_v4(),
         rig_id: RigId {
             node_id: hello.node_id,
@@ -362,6 +374,7 @@ async fn handle_socket(state: HubState, mut socket: WebSocket, client_ip: String
     let connection = Arc::new(RigConnection {
         telescope_id,
         session_id: hello.session_id,
+        payload_version: hello.payload_version,
         capabilities: hello.capabilities,
         profile_name: hello.profile_name.clone(),
         outgoing: outgoing_tx,
@@ -371,13 +384,21 @@ async fn handle_socket(state: HubState, mut socket: WebSocket, client_ip: String
     // A newer connection for the same telescope replaces the older one. The
     // old session is told to close — its own task holds an Arc of its
     // connection, so only an explicit close ends its write loop.
+    let compatibility = if hello.payload_version == LEGACY_PAYLOAD_VERSION {
+        "legacy"
+    } else {
+        "current"
+    };
     if let Some(replaced) = state.rig_connections.insert(connection.clone()) {
         replaced.request_close("replaced by a newer connection for this telescope", true);
-        println!("Rig for telescope {telescope_id} reconnected; replacing previous session");
+        println!(
+            "Rig for telescope {telescope_id} reconnected with payload v{} {compatibility}; replacing previous session",
+            hello.payload_version
+        );
     } else {
         println!(
-            "Rig connected for telescope {telescope_id} ({})",
-            hello.profile_name
+            "Rig connected for telescope {telescope_id} ({}, payload v{} {compatibility})",
+            hello.profile_name, hello.payload_version
         );
     }
 
@@ -436,6 +457,9 @@ mod tests {
     use crate::source::RigSource;
     use axum::routing::get;
     use axum::{Json, Router};
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::connect_async;
+    use tokio_tungstenite::tungstenite::Message as WsMessage;
 
     /// Stub of the two NINA Advanced API endpoints the tests exercise.
     async fn spawn_stub_nina() -> String {
@@ -686,6 +710,74 @@ mod tests {
             .unwrap();
         assert!(!credential_row.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unmarked_websocket_hello_is_accepted_and_echoed_as_legacy() {
+        let message: DirectMessage = serde_json::from_str(include_str!(
+            "../../contracts/direct/v1/fixtures/client-hello-legacy.json"
+        ))
+        .unwrap();
+        let DirectMessage::ClientHello(hello) = message else {
+            panic!("expected client hello");
+        };
+
+        check_hello(&hello).unwrap();
+        assert_eq!(hello.payload_version, LEGACY_PAYLOAD_VERSION);
+        assert_eq!(agent_hello(&hello).payload_version, LEGACY_PAYLOAD_VERSION);
+    }
+
+    #[test]
+    fn websocket_hello_rejects_unknown_payload_versions() {
+        let message: DirectMessage = serde_json::from_str(include_str!(
+            "../../contracts/direct/v1/fixtures/client-hello.json"
+        ))
+        .unwrap();
+        let DirectMessage::ClientHello(mut hello) = message else {
+            panic!("expected client hello");
+        };
+        hello.payload_version = CURRENT_PAYLOAD_VERSION + 1;
+
+        let error = check_hello(&hello).unwrap_err();
+        assert!(error.contains("unsupported payload version"));
+    }
+
+    #[tokio::test]
+    async fn websocket_pairs_unmarked_legacy_payload_client() {
+        let (hub_base, _db, state, telescope_id, pairing_token) = spawn_hub().await;
+        let url = format!("{}/v1/direct", hub_base.replacen("http://", "ws://", 1));
+        let (mut socket, _) = connect_async(&url).await.unwrap();
+        let fixture: DirectMessage = serde_json::from_str(include_str!(
+            "../../contracts/direct/v1/fixtures/client-hello-legacy.json"
+        ))
+        .unwrap();
+        let DirectMessage::ClientHello(hello) = fixture else {
+            panic!("expected client hello");
+        };
+        let request = DirectMessage::Pair(PairRequest {
+            pairing_token,
+            hello,
+        });
+        socket
+            .send(WsMessage::Text(
+                serde_json::to_string(&request).unwrap().into(),
+            ))
+            .await
+            .unwrap();
+
+        let frame = socket.next().await.unwrap().unwrap();
+        let response: DirectMessage = serde_json::from_str(frame.to_text().unwrap()).unwrap();
+        let DirectMessage::PairResult(result) = response else {
+            panic!("expected pair result");
+        };
+        assert_eq!(result.agent_hello.payload_version, LEGACY_PAYLOAD_VERSION);
+
+        let connected = state
+            .rig_connections
+            .get(telescope_id)
+            .expect("legacy rig connected");
+        assert_eq!(connected.payload_version, LEGACY_PAYLOAD_VERSION);
+        socket.close(None).await.unwrap();
     }
 
     #[tokio::test]

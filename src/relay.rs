@@ -177,6 +177,7 @@ pub async fn run_connection(
 
     let hello = ClientHello {
         protocol_version: PROTOCOL_VERSION,
+        payload_version: crate::direct::protocol::CURRENT_PAYLOAD_VERSION,
         node_id: state.node_id,
         session_id: Uuid::new_v4(),
         process_id: std::process::id(),

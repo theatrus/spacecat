@@ -7,6 +7,22 @@ use uuid::Uuid;
 /// The first Chatstronomy Direct protocol version.
 pub const PROTOCOL_VERSION: u16 = 1;
 
+/// Payload contract emitted by the first Direct v1 clients. Those clients did
+/// not identify their payload contract in the hello frame, so an absent field
+/// is deliberately classified as this legacy version.
+pub const LEGACY_PAYLOAD_VERSION: u16 = 1;
+
+/// Current additive payload contract carried inside Direct v1 envelopes.
+///
+/// This is separate from [`PROTOCOL_VERSION`]: the envelope and handshake stay
+/// on Direct v1 while response objects gain optional Chatstronomy fields. A
+/// future incompatible envelope still requires a new Direct protocol version.
+pub const CURRENT_PAYLOAD_VERSION: u16 = 2;
+
+const fn legacy_payload_version() -> u16 {
+    LEGACY_PAYLOAD_VERSION
+}
+
 /// Prefix for the per-installation Windows named pipe used by local plugins.
 ///
 /// Windows APIs expect the pipe name without the `\\.\pipe\` prefix when
@@ -44,6 +60,10 @@ impl std::fmt::Display for RigId {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClientHello {
     pub protocol_version: u16,
+    /// Version of the query-result payload contract. Missing on older clients,
+    /// which the server explicitly marks as legacy v1.
+    #[serde(default = "legacy_payload_version")]
+    pub payload_version: u16,
     pub node_id: Uuid,
     pub session_id: Uuid,
     pub process_id: u32,
@@ -58,6 +78,10 @@ pub struct ClientHello {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentHello {
     pub protocol_version: u16,
+    /// Payload contract selected for this connection. Older clients ignore the
+    /// additive field; newer clients can display or diagnose legacy operation.
+    #[serde(default = "legacy_payload_version")]
+    pub payload_version: u16,
     pub connection_id: Uuid,
     pub rig_id: RigId,
 }
@@ -193,6 +217,7 @@ mod tests {
     fn sample_client_hello() -> ClientHello {
         ClientHello {
             protocol_version: PROTOCOL_VERSION,
+            payload_version: CURRENT_PAYLOAD_VERSION,
             node_id: Uuid::parse_str("363db028-9d79-4fdc-8940-1b1ff52b9e8d").unwrap(),
             session_id: Uuid::parse_str("7afcde18-b5a8-46fd-ad1f-ed54cf3bbc4e").unwrap(),
             process_id: 4242,
@@ -211,6 +236,7 @@ mod tests {
 
         assert_eq!(value["type"], "client_hello");
         assert_eq!(value["payload"]["protocol_version"], PROTOCOL_VERSION);
+        assert_eq!(value["payload"]["payload_version"], CURRENT_PAYLOAD_VERSION);
         assert_eq!(
             value["payload"]["node_id"],
             "363db028-9d79-4fdc-8940-1b1ff52b9e8d"
@@ -297,6 +323,29 @@ mod tests {
     }
 
     #[test]
+    fn unmarked_v1_hello_is_classified_as_legacy_payloads() {
+        let message: DirectMessage = serde_json::from_str(include_str!(
+            "../../contracts/direct/v1/fixtures/client-hello-legacy.json"
+        ))
+        .unwrap();
+        let DirectMessage::ClientHello(hello) = message else {
+            panic!("expected client hello");
+        };
+        assert_eq!(hello.protocol_version, PROTOCOL_VERSION);
+        assert_eq!(hello.payload_version, LEGACY_PAYLOAD_VERSION);
+    }
+
+    #[test]
+    fn old_agent_hello_without_payload_marker_remains_accepted() {
+        let json = r#"{"type":"agent_hello","payload":{"protocol_version":1,"connection_id":"7afcde18-b5a8-46fd-ad1f-ed54cf3bbc4e","rig_id":{"node_id":"363db028-9d79-4fdc-8940-1b1ff52b9e8d","profile_id":"460a8c62-28ce-4781-92e5-ab2440982175"}}}"#;
+        let message: DirectMessage = serde_json::from_str(json).unwrap();
+        let DirectMessage::AgentHello(hello) = message else {
+            panic!("expected agent hello");
+        };
+        assert_eq!(hello.payload_version, LEGACY_PAYLOAD_VERSION);
+    }
+
+    #[test]
     fn query_expiry_semantics() {
         let no_deadline = QueryRequest {
             id: Uuid::new_v4(),
@@ -374,6 +423,7 @@ mod tests {
     fn published_v1_fixtures_are_accepted_by_the_normative_implementation() {
         let fixtures = [
             include_str!("../../contracts/direct/v1/fixtures/client-hello.json"),
+            include_str!("../../contracts/direct/v1/fixtures/client-hello-legacy.json"),
             include_str!("../../contracts/direct/v1/fixtures/pair.json"),
             include_str!("../../contracts/direct/v1/fixtures/query-guider-graph.json"),
             include_str!("../../contracts/direct/v1/fixtures/query-command.json"),

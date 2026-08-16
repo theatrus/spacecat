@@ -273,6 +273,13 @@ Cross-system communication uses the same logical envelopes over an outbound TLS
 WebSocket at `/v1/direct`. The initial wire representation is JSON so both
 implementations can be inspected and evolved easily.
 
+Direct protocol and payload versions are independent. The WebSocket envelope
+remains protocol v1; current clients advertise payload version 2 in their hello.
+An omitted `payload_version` is the frozen legacy payload-version-1 form and is
+accepted as such. The Hub echoes the selected payload version in `agent_hello`,
+records it on the live rig connection, and labels legacy connections in logs.
+Additive response fields remain optional for older payload producers.
+
 ## Identity and safety
 
 - A rig is identified by a per-installation node ID plus the N.I.N.A. profile
