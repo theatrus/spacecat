@@ -7,13 +7,10 @@
 use crate::chat::{
     ChatConfig, DiscordBotConfig, SharedDiscordConfig, SharedMatrixConfig, TelescopeChatOverrides,
 };
-use crate::config::{
-    ApiConfig, Config, TelescopeConfig, is_valid_discord_webhook_url, is_valid_https_url,
-};
+use crate::config::{Config, TelescopeConfig, is_valid_discord_webhook_url, is_valid_https_url};
 use crate::source::RigCapabilities;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
-use url::Url;
 use uuid::Uuid;
 
 pub const PLUGIN_RUNTIME_PROTOCOL_VERSION: u16 = 1;
@@ -46,10 +43,6 @@ pub enum PluginRuntimeSource {
     NinaDirect {
         pipe_name: String,
         capabilities: RigCapabilities,
-    },
-    AdvancedApiPolling {
-        base_url: String,
-        poll_interval_seconds: u64,
     },
 }
 
@@ -110,20 +103,7 @@ impl PluginRuntimeBootstrap {
         }
 
         match &self.source {
-            PluginRuntimeSource::NinaDirect { pipe_name, .. } => {
-                validate_pipe_name(pipe_name)?;
-            }
-            PluginRuntimeSource::AdvancedApiPolling {
-                base_url,
-                poll_interval_seconds,
-            } => {
-                validate_http_url(base_url, "Advanced API")?;
-                if !(1..=300).contains(poll_interval_seconds) {
-                    return Err(
-                        "Advanced API polling interval must be from 1 to 300 seconds".to_string(),
-                    );
-                }
-            }
+            PluginRuntimeSource::NinaDirect { pipe_name, .. } => validate_pipe_name(pipe_name)?,
         }
 
         match &self.delivery {
@@ -166,13 +146,7 @@ impl PluginRuntimeBootstrap {
     }
 
     pub fn poll_interval_seconds(&self) -> u64 {
-        match &self.source {
-            PluginRuntimeSource::NinaDirect { .. } => 5,
-            PluginRuntimeSource::AdvancedApiPolling {
-                poll_interval_seconds,
-                ..
-            } => *poll_interval_seconds,
-        }
+        5
     }
 
     pub fn into_config(self) -> Result<Config, String> {
@@ -225,27 +199,10 @@ impl PluginRuntimeBootstrap {
             });
         }
 
-        let (base_url, _) = match self.source {
-            // The source override passed to ServiceWrapper owns all I/O in
-            // Direct mode. Config still carries an ApiConfig for compatibility
-            // with the existing on-disk telescope schema, but this loopback
-            // value is never contacted.
-            PluginRuntimeSource::NinaDirect { .. } => ("http://127.0.0.1:1/".to_string(), 5),
-            PluginRuntimeSource::AdvancedApiPolling {
-                base_url,
-                poll_interval_seconds,
-            } => (base_url, poll_interval_seconds),
-        };
-
         let config = Config {
             chat,
             telescopes: vec![TelescopeConfig {
                 name: self.profile.profile_name,
-                api: ApiConfig {
-                    base_url,
-                    timeout_seconds: 30,
-                    retry_attempts: 3,
-                },
                 chat: telescope_chat,
                 ..TelescopeConfig::default()
             }],
@@ -254,16 +211,6 @@ impl PluginRuntimeBootstrap {
         config.validate()?;
         Ok(config)
     }
-}
-
-fn validate_http_url(value: &str, label: &str) -> Result<(), String> {
-    let url = Url::parse(value).map_err(|error| format!("invalid {label} URL: {error}"))?;
-    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
-        return Err(format!(
-            "{label} URL must be an absolute http:// or https:// URL"
-        ));
-    }
-    Ok(())
 }
 
 fn validate_pipe_name(value: &str) -> Result<(), String> {
@@ -347,14 +294,11 @@ pub async fn run_from_named_pipe(
     let poll_interval = bootstrap.poll_interval_seconds();
     let exit_on_disconnect = bootstrap.exit_on_control_disconnect;
     let telescope_name = bootstrap.profile.profile_name.clone();
-    let direct_source: Option<SharedRigSource> = match &bootstrap.source {
+    let direct_source: SharedRigSource = match &bootstrap.source {
         PluginRuntimeSource::NinaDirect {
             pipe_name,
             capabilities,
-        } => Some(std::sync::Arc::new(
-            DirectPipeRigSource::connect(pipe_name, *capabilities).await?,
-        )),
-        PluginRuntimeSource::AdvancedApiPolling { .. } => None,
+        } => std::sync::Arc::new(DirectPipeRigSource::connect(pipe_name, *capabilities).await?),
     };
     let config = bootstrap.into_config()?;
 
@@ -370,9 +314,7 @@ pub async fn run_from_named_pipe(
 
     let service = ServiceWrapper::new(config)?;
     let mut source_overrides = HashMap::new();
-    if let Some(source) = direct_source {
-        source_overrides.insert(telescope_name, source);
-    }
+    source_overrides.insert(telescope_name, direct_source);
     let control = async move {
         loop {
             match lines.next_line().await? {
@@ -420,9 +362,18 @@ mod tests {
                     "profile_name": "North Rig"
                 }},
                 "source": {{
-                    "kind": "advanced_api_polling",
-                    "base_url": "http://127.0.0.1:1888/",
-                    "poll_interval_seconds": 7
+                    "kind": "nina_direct",
+                    "pipe_name": "chatstronomy-direct-test",
+                    "capabilities": {{
+                        "event_history": true,
+                        "image_history": true,
+                        "thumbnails": true,
+                        "sequence": true,
+                        "equipment_snapshots": true,
+                        "autofocus_details": true,
+                        "guider_graph": true,
+                        "commands": true
+                    }}
                 }},
                 "delivery": {delivery},
                 "matrix": {matrix},
@@ -440,10 +391,9 @@ mod tests {
             "null",
         );
         let bootstrap = PluginRuntimeBootstrap::from_json(&json).unwrap();
-        assert_eq!(bootstrap.poll_interval_seconds(), 7);
+        assert_eq!(bootstrap.poll_interval_seconds(), 5);
         let config = bootstrap.into_config().unwrap();
         assert_eq!(config.telescopes[0].name, "North Rig");
-        assert_eq!(config.telescopes[0].api.base_url, "http://127.0.0.1:1888/");
         assert_eq!(
             config.chat.discord.unwrap().default_webhook_url.as_deref(),
             Some("https://discord.com/api/v10/webhooks/123/token")
@@ -486,51 +436,16 @@ mod tests {
     }
 
     #[test]
-    fn polling_interval_is_bounded() {
-        let json = sample_json(
-            r#"{"kind":"discord_webhook","webhook_url":"https://discord.com/api/webhooks/123/token"}"#,
-            "null",
-        )
-        .replace("\"poll_interval_seconds\": 7", "\"poll_interval_seconds\": 0");
-        let error = PluginRuntimeBootstrap::from_json(&json)
-            .unwrap()
-            .validate()
-            .unwrap_err();
-        assert!(error.contains("polling interval"));
-    }
-
-    #[test]
     fn native_direct_source_has_no_http_dependency() {
         let json = sample_json(
             r#"{"kind":"discord_webhook","webhook_url":"https://discord.com/api/webhooks/123/token"}"#,
             "null",
-        )
-        .replace(
-            r#""source": {
-                    "kind": "advanced_api_polling",
-                    "base_url": "http://127.0.0.1:1888/",
-                    "poll_interval_seconds": 7
-                }"#,
-            r#""source": {
-                    "kind": "nina_direct",
-                    "pipe_name": "chatstronomy-direct-test",
-                    "capabilities": {
-                        "event_history": true,
-                        "image_history": true,
-                        "thumbnails": true,
-                        "sequence": true,
-                        "equipment_snapshots": true,
-                        "autofocus_details": true,
-                        "guider_graph": true,
-                        "commands": true
-                    }
-                }"#,
         );
         let bootstrap = PluginRuntimeBootstrap::from_json(&json).unwrap();
         bootstrap.validate().unwrap();
         assert_eq!(bootstrap.poll_interval_seconds(), 5);
         let config = bootstrap.into_config().unwrap();
         assert_eq!(config.telescopes[0].name, "North Rig");
-        assert!(!json.contains("127.0.0.1:1888"));
+        assert!(!json.contains("http://"));
     }
 }

@@ -1,7 +1,7 @@
 use crate::serde_helpers::de_f64_tolerant;
 use serde::{Deserialize, Serialize};
 
-/// Advanced API-compatible camera snapshot used by both HTTP and Direct rigs.
+/// Camera snapshot returned by a Direct N.I.N.A. rig.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct CameraInfoResponse {
@@ -14,7 +14,7 @@ pub struct CameraInfoResponse {
 }
 
 /// The cooling fields Chatstronomy needs for live operation progress.
-/// Unknown Advanced API fields are intentionally ignored.
+/// Unknown additive fields are intentionally ignored.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct CameraInfo {
@@ -42,7 +42,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_advanced_api_camera_cooling_snapshot() {
+    fn parses_camera_cooling_snapshot() {
         let json = r#"{"Response":{"Connected":true,"CanSetTemperature":true,"CoolerOn":true,"CoolerPower":72.5,"Temperature":-6.4,"TemperatureSetPoint":-10.0,"AtTargetTemp":false,"Name":"ASI2600MM","DisplayName":"ASI2600MM"},"Error":"","StatusCode":200,"Success":true,"Type":"API"}"#;
         let parsed: CameraInfoResponse = serde_json::from_str(json).unwrap();
 

@@ -17,8 +17,14 @@ pub struct EventHistoryResponse {
 pub struct Event {
     pub time: String,
     pub event: String,
+    #[serde(default = "default_true")]
+    pub chat_enabled: bool,
     #[serde(flatten)]
     pub details: Option<EventDetails>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,6 +68,26 @@ pub enum EventDetails {
         from: f64,
         #[serde(rename = "To")]
         to: f64,
+    },
+    NinaNotification {
+        #[serde(rename = "Level")]
+        level: String,
+        #[serde(rename = "Header")]
+        header: String,
+        #[serde(rename = "Message")]
+        message: String,
+    },
+    NinaLog {
+        #[serde(rename = "Level")]
+        level: String,
+        #[serde(rename = "Source")]
+        source: String,
+        #[serde(rename = "Member")]
+        member: String,
+        #[serde(rename = "Line")]
+        line: i32,
+        #[serde(rename = "Message")]
+        message: String,
     },
 }
 
@@ -122,9 +148,7 @@ impl TargetCoordinates {
     }
 }
 
-// Event type constants for easier matching.
-// Source of truth: ninaAPI source (christian-photo/ninaAPI). Only events actually
-// emitted by NINA appear here.
+// Event type constants emitted by the N.I.N.A. plugin's Direct projector.
 pub mod event_types {
     pub const CAMERA_DISCONNECTED: &str = "CAMERA-DISCONNECTED";
     pub const CAMERA_CONNECTED: &str = "CAMERA-CONNECTED";
@@ -177,6 +201,8 @@ pub mod event_types {
     pub const TS_TARGETSTART: &str = "TS-TARGETSTART";
     pub const TS_NEWTARGETSTART: &str = "TS-NEWTARGETSTART";
     pub const TS_WAITSTART: &str = "TS-WAITSTART";
+    pub const NINA_NOTIFICATION: &str = "NINA-NOTIFICATION";
+    pub const NINA_LOG: &str = "NINA-LOG";
 }
 
 impl EventHistoryResponse {
@@ -239,7 +265,36 @@ mod tests {
         let event: Event = serde_json::from_str(event_json).unwrap();
         assert_eq!(event.time, "2025-08-06T21:50:56.545923-07:00");
         assert_eq!(event.event, event_types::AUTOFOCUS_FINISHED);
+        assert!(event.chat_enabled);
         assert!(event.details.is_none());
+    }
+
+    #[test]
+    fn direct_delivery_flag_and_nina_log_details_parse() {
+        let event: Event = serde_json::from_str(
+            r#"{
+                "Time": "2026-08-16T12:00:00-07:00",
+                "Event": "NINA-LOG",
+                "ChatEnabled": false,
+                "Level": "WARNING",
+                "Source": "CameraVM.cs",
+                "Member": "Connect",
+                "Line": 42,
+                "Message": "Camera connection is slow"
+            }"#,
+        )
+        .unwrap();
+
+        assert!(!event.chat_enabled);
+        assert!(matches!(
+            event.details,
+            Some(EventDetails::NinaLog {
+                level,
+                source,
+                line: 42,
+                ..
+            }) if level == "WARNING" && source == "CameraVM.cs"
+        ));
     }
 
     #[test]
@@ -269,6 +324,7 @@ mod tests {
         let camera_connected = Event {
             time: "2025-08-06T18:45:40.1430956-07:00".to_string(),
             event: event_types::CAMERA_CONNECTED.to_string(),
+            chat_enabled: true,
             details: None,
         };
         assert!(camera_connected.is_connection_event());
@@ -276,6 +332,7 @@ mod tests {
         let mount_disconnected = Event {
             time: "2025-08-06T19:20:35.2068582-07:00".to_string(),
             event: event_types::MOUNT_DISCONNECTED.to_string(),
+            chat_enabled: true,
             details: None,
         };
         assert!(mount_disconnected.is_connection_event());

@@ -1,6 +1,6 @@
 //! The hub's `/v1/direct` WebSocket endpoint.
 //!
-//! N.I.N.A. plugins and relay agents connect outward to this endpoint. The
+//! N.I.N.A. plugins connect outward to this endpoint. The
 //! first frame authenticates: a one-time pairing token (first connect) or the
 //! durable rig credential minted by that pairing. After the handshake the hub
 //! sends [`QueryRequest`] frames and the rig answers with [`QueryResult`];
@@ -124,7 +124,7 @@ impl RigConnection {
                 telescope_id,
                 session_id,
                 payload_version: CURRENT_PAYLOAD_VERSION,
-                capabilities: crate::source::RigCapabilities::advanced_api(),
+                capabilities: crate::source::RigCapabilities::all(),
                 profile_name: format!("stub-{telescope_id}"),
                 outgoing,
                 pending: Mutex::new(HashMap::new()),
@@ -448,50 +448,12 @@ async fn handle_socket(state: HubState, mut socket: WebSocket, client_ip: String
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{ApiConfig, TelescopeConfig};
     use crate::hub::config::HubConfig;
     use crate::hub::db::Db;
-    use crate::hub::direct_source::DirectRigSource;
     use crate::hub::store::UserRow;
-    use crate::relay::{RelayConfig, RelayState, run_connection};
-    use crate::source::RigSource;
-    use axum::routing::get;
-    use axum::{Json, Router};
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::connect_async;
     use tokio_tungstenite::tungstenite::Message as WsMessage;
-
-    /// Stub of the two NINA Advanced API endpoints the tests exercise.
-    async fn spawn_stub_nina() -> String {
-        async fn event_history() -> Json<serde_json::Value> {
-            Json(serde_json::json!({
-                "Response": [
-                    {"Time": "2026-08-14T01:02:03", "Event": "IMAGE-SAVE"},
-                    {"Time": "2026-08-14T01:05:00", "Event": "SEQUENCE-FINISHED"}
-                ],
-                "Error": "",
-                "StatusCode": 200,
-                "Success": true,
-                "Type": "API"
-            }))
-        }
-        async fn unpark() -> Json<serde_json::Value> {
-            Json(serde_json::json!({
-                "Response": "Mount unparked",
-                "Error": "",
-                "StatusCode": 200,
-                "Success": true,
-                "Type": "API"
-            }))
-        }
-        let app = Router::new()
-            .route("/v2/api/event-history", get(event_history))
-            .route("/v2/api/equipment/mount/unpark", get(unpark));
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        format!("http://{addr}")
-    }
 
     /// Hub with a telescope, an issued pairing token, and the direct route.
     async fn spawn_hub() -> (String, Db, HubState, i64, String) {
@@ -527,189 +489,6 @@ mod tests {
             telescope.id,
             pairing_token,
         )
-    }
-
-    fn relay_setup(
-        nina_base: &str,
-        hub_base: &str,
-        pairing_token: Option<String>,
-        state_dir: &std::path::Path,
-    ) -> (RelayConfig, TelescopeConfig, String) {
-        let state_path = state_dir.join("relay-state.json");
-        let relay = RelayConfig {
-            hub_url: hub_base.to_string(),
-            pairing_token,
-            state_file: Some(state_path.to_string_lossy().to_string()),
-        };
-        let telescope = TelescopeConfig {
-            name: "c925".to_string(),
-            api: ApiConfig {
-                base_url: nina_base.to_string(),
-                timeout_seconds: 5,
-                retry_attempts: 0,
-            },
-            relay: Some(relay.clone()),
-            ..Default::default()
-        };
-        (relay, telescope, state_path.to_string_lossy().to_string())
-    }
-
-    async fn wait_for_connection(state: &HubState, telescope_id: i64) -> Arc<RigConnection> {
-        for _ in 0..100 {
-            if let Some(connection) = state.rig_connections.get(telescope_id) {
-                return connection;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-        panic!("rig never connected");
-    }
-
-    fn temp_dir(tag: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "chatstronomy-direct-test-{tag}-{}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
-    #[tokio::test]
-    async fn pair_query_and_command_roundtrip() {
-        let nina = spawn_stub_nina().await;
-        let (hub_base, _db, state, telescope_id, pairing_token) = spawn_hub().await;
-        let dir = temp_dir("roundtrip");
-        let (relay, telescope, state_path) =
-            relay_setup(&nina, &hub_base, Some(pairing_token), &dir);
-
-        let api = crate::api::ChatstronomyApiClient::new(telescope.api.clone()).unwrap();
-        let mut relay_state = RelayState::load_or_create(&state_path).unwrap();
-        let relay_task = {
-            let relay = relay.clone();
-            let telescope = telescope.clone();
-            let api = api.clone();
-            let state_path = state_path.clone();
-            tokio::spawn(async move {
-                let _ =
-                    run_connection(&relay, &telescope, &api, &mut relay_state, &state_path).await;
-            })
-        };
-
-        let connection = wait_for_connection(&state, telescope_id).await;
-        assert_eq!(connection.profile_name, "c925");
-        let source = DirectRigSource::new(connection);
-
-        // Read path: event history proxied from the stub NINA API.
-        let events = source.get_event_history().await.unwrap();
-        assert_eq!(events.response.len(), 2);
-        assert_eq!(
-            events.response[0].event,
-            crate::events::event_types::IMAGE_SAVE
-        );
-
-        // Command path.
-        let result = source
-            .execute_command(crate::source::RigCommand::UnparkMount)
-            .await
-            .unwrap();
-        assert!(result.success);
-        assert_eq!(result.response, serde_json::json!("Mount unparked"));
-
-        // Pairing minted and saved a credential.
-        let saved = RelayState::load_or_create(&state_path).unwrap();
-        assert!(
-            saved
-                .credential
-                .as_deref()
-                .is_some_and(|c| c.starts_with(crate::hub::tenants::RIG_CREDENTIAL_PREFIX))
-        );
-
-        relay_task.abort();
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[tokio::test]
-    async fn reconnect_with_credential_and_node_binding() {
-        let nina = spawn_stub_nina().await;
-        let (hub_base, db, state, telescope_id, pairing_token) = spawn_hub().await;
-        let dir = temp_dir("reconnect");
-        let (relay, telescope, state_path) =
-            relay_setup(&nina, &hub_base, Some(pairing_token), &dir);
-        let api = crate::api::ChatstronomyApiClient::new(telescope.api.clone()).unwrap();
-
-        // First connection pairs.
-        let mut relay_state = RelayState::load_or_create(&state_path).unwrap();
-        let first = {
-            let (relay, telescope, api, state_path) = (
-                relay.clone(),
-                telescope.clone(),
-                api.clone(),
-                state_path.clone(),
-            );
-            tokio::spawn(async move {
-                let _ =
-                    run_connection(&relay, &telescope, &api, &mut relay_state, &state_path).await;
-            })
-        };
-        wait_for_connection(&state, telescope_id).await;
-        first.abort();
-
-        // Second connection authenticates with the stored credential (the
-        // pairing token is already consumed).
-        let mut relay_state = RelayState::load_or_create(&state_path).unwrap();
-        assert!(relay_state.credential.is_some());
-        let second = {
-            let (relay, telescope, api, state_path) = (
-                relay.clone(),
-                telescope.clone(),
-                api.clone(),
-                state_path.clone(),
-            );
-            tokio::spawn(async move {
-                let _ =
-                    run_connection(&relay, &telescope, &api, &mut relay_state, &state_path).await;
-            })
-        };
-        // The first task was aborted, so the slot may still hold the stale
-        // connection; wait until a live query works.
-        let mut ok = false;
-        for _ in 0..100 {
-            if let Some(connection) = state.rig_connections.get(telescope_id) {
-                let source = DirectRigSource::new(connection);
-                if source.get_event_history().await.is_ok() {
-                    ok = true;
-                    break;
-                }
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-        assert!(ok, "credential reconnect never became queryable");
-        second.abort();
-
-        // The durable credential is bound to both halves of the rig ID.
-        let mut wrong_profile = RelayState::load_or_create(&state_path).unwrap();
-        wrong_profile.profile_id = Uuid::new_v4();
-        let result =
-            run_connection(&relay, &telescope, &api, &mut wrong_profile, &state_path).await;
-        assert!(
-            matches!(result, Err(crate::relay::RelayError::Rejected(message)) if message.contains("profile"))
-        );
-
-        let mut wrong_node = RelayState::load_or_create(&state_path).unwrap();
-        wrong_node.node_id = Uuid::new_v4();
-        let result = run_connection(&relay, &telescope, &api, &mut wrong_node, &state_path).await;
-        assert!(
-            matches!(result, Err(crate::relay::RelayError::Rejected(message)) if message.contains("node"))
-        );
-
-        let credential_row = db
-            .with_conn(|conn| {
-                conn.query_row("SELECT credential_hash FROM rig_credentials", [], |r| {
-                    r.get::<_, String>(0)
-                })
-            })
-            .unwrap();
-        assert!(!credential_row.is_empty());
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -800,16 +579,34 @@ mod tests {
 
     #[tokio::test]
     async fn bad_pairing_token_rejected() {
-        let nina = spawn_stub_nina().await;
         let (hub_base, _db, _state, _telescope_id, _token) = spawn_hub().await;
-        let dir = temp_dir("badtoken");
-        let (relay, telescope, state_path) =
-            relay_setup(&nina, &hub_base, Some("cspt_bogus".to_string()), &dir);
-        let api = crate::api::ChatstronomyApiClient::new(telescope.api.clone()).unwrap();
-        let mut relay_state = RelayState::load_or_create(&state_path).unwrap();
-
-        let result = run_connection(&relay, &telescope, &api, &mut relay_state, &state_path).await;
-        assert!(matches!(result, Err(crate::relay::RelayError::Rejected(_))));
-        let _ = std::fs::remove_dir_all(&dir);
+        let url = format!("{}/v1/direct", hub_base.replacen("http://", "ws://", 1));
+        let (mut socket, _) = connect_async(&url).await.unwrap();
+        let fixture: DirectMessage = serde_json::from_str(include_str!(
+            "../../contracts/direct/v1/fixtures/client-hello.json"
+        ))
+        .unwrap();
+        let DirectMessage::ClientHello(hello) = fixture else {
+            panic!("expected client hello");
+        };
+        let request = DirectMessage::Pair(PairRequest {
+            pairing_token: "cspt_bogus".to_string(),
+            hello,
+        });
+        socket
+            .send(WsMessage::Text(
+                serde_json::to_string(&request).unwrap().into(),
+            ))
+            .await
+            .unwrap();
+        let frame = socket.next().await.unwrap().unwrap();
+        let response: DirectMessage = serde_json::from_str(frame.to_text().unwrap()).unwrap();
+        assert!(matches!(
+            response,
+            DirectMessage::Error {
+                retryable: false,
+                ..
+            }
+        ));
     }
 }

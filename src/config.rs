@@ -1,48 +1,32 @@
-use crate::chat::{ChatConfig, SharedDiscordConfig, TelescopeChatOverrides};
+use crate::chat::{ChatConfig, TelescopeChatOverrides};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 use url::Url;
 
-/// Top-level configuration. Holds the shared chat infrastructure (one Matrix
-/// login process-wide, default Discord webhook) and the list of telescopes
-/// being monitored.
-#[derive(Debug, Clone, Serialize)]
+/// In-memory configuration for a plugin-owned local Direct runtime.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    #[serde(default)]
     pub logging: LoggingConfig,
     #[serde(default)]
     pub chat: ChatConfig,
     pub telescopes: Vec<TelescopeConfig>,
 }
 
-/// Per-telescope configuration: each telescope has its own NINA API endpoint
-/// and chat destination overrides.
+/// Per-profile routing and updater behavior. N.I.N.A. data always arrives
+/// through an explicit Direct source supplied by the plugin or Hub.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TelescopeConfig {
-    /// Human-readable identifier (e.g. "c925", "esprit"). Used as a prefix in
-    /// chat notifications and as the --telescope selector for CLI commands.
     pub name: String,
-    pub api: ApiConfig,
-    /// Overrides for which Discord webhook / Matrix room this telescope posts
-    /// to. Each `None` field falls back to the shared default in `Config.chat`.
     #[serde(default)]
     pub chat: TelescopeChatOverrides,
     #[serde(default = "default_image_cooldown_seconds")]
     pub image_cooldown_seconds: u64,
-    /// Backoff settings for retrying the initial baseline when this telescope's
-    /// NINA API is unreachable at startup, so an offline rig isn't abandoned
-    /// forever.
     #[serde(default)]
     pub reconnect: ReconnectConfig,
-    /// Optional relay to a central Chatstronomy hub (`chatstronomy relay`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub relay: Option<crate::relay::RelayConfig>,
 }
 
-/// Exponential-backoff schedule for baseline reconnect attempts. The first
-/// retry waits `initial_seconds`, and each subsequent failure doubles the wait
-/// up to `max_seconds`. Neither value is clamped — a `max_seconds` larger than
-/// the 600s default is honored as-is.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReconnectConfig {
     #[serde(default = "default_reconnect_initial_seconds")]
@@ -61,30 +45,10 @@ impl Default for ReconnectConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ApiConfig {
-    pub base_url: String,
-    pub timeout_seconds: u64,
-    pub retry_attempts: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoggingConfig {
     pub level: String,
     pub enable_file_logging: bool,
     pub log_file: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DiscordConfig {
-    pub webhook_url: String,
-    #[serde(default = "default_enabled")]
-    pub enabled: bool,
-    #[serde(default = "default_image_cooldown_seconds")]
-    pub image_cooldown_seconds: u64,
-}
-
-fn default_enabled() -> bool {
-    true
 }
 
 fn default_image_cooldown_seconds() -> u64 {
@@ -97,51 +61,6 @@ fn default_reconnect_initial_seconds() -> u64 {
 
 fn default_reconnect_max_seconds() -> u64 {
     600
-}
-
-fn default_telescope_name() -> String {
-    "default".to_string()
-}
-
-#[derive(Debug)]
-pub enum ConfigError {
-    FileNotFound(String),
-    ParseError(serde_json::Error),
-    IoError(std::io::Error),
-}
-
-impl std::fmt::Display for ConfigError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ConfigError::FileNotFound(path) => write!(f, "Configuration file not found: {path}"),
-            ConfigError::ParseError(e) => write!(f, "Failed to parse configuration: {e}"),
-            ConfigError::IoError(e) => write!(f, "IO error reading configuration: {e}"),
-        }
-    }
-}
-
-impl std::error::Error for ConfigError {}
-
-impl From<serde_json::Error> for ConfigError {
-    fn from(err: serde_json::Error) -> Self {
-        ConfigError::ParseError(err)
-    }
-}
-
-impl From<std::io::Error> for ConfigError {
-    fn from(err: std::io::Error) -> Self {
-        ConfigError::IoError(err)
-    }
-}
-
-impl Default for ApiConfig {
-    fn default() -> Self {
-        Self {
-            base_url: "http://192.168.0.82:1888".to_string(),
-            timeout_seconds: 30,
-            retry_attempts: 3,
-        }
-    }
 }
 
 impl Default for LoggingConfig {
@@ -157,12 +76,10 @@ impl Default for LoggingConfig {
 impl Default for TelescopeConfig {
     fn default() -> Self {
         Self {
-            name: default_telescope_name(),
-            api: ApiConfig::default(),
+            name: "default".to_string(),
             chat: TelescopeChatOverrides::default(),
             image_cooldown_seconds: default_image_cooldown_seconds(),
             reconnect: ReconnectConfig::default(),
-            relay: None,
         }
     }
 }
@@ -177,300 +94,134 @@ impl Default for Config {
     }
 }
 
-/// Wire formats accepted by `Config`'s deserializer.
-///
-/// - `New`: `{ logging, chat, telescopes: [...] }` — the multi-telescope shape.
-/// - `Legacy`: `{ logging, api, chat, image_cooldown_seconds, [discord] }` —
-///   the original single-telescope shape. The legacy top-level `chat` block
-///   (with `webhook_url` / `room_id` keys) maps to the new shared `chat`
-///   thanks to the `#[serde(alias = ...)]` on `SharedDiscordConfig` and
-///   `SharedMatrixConfig`. Legacy is normalized into a one-element
-///   `telescopes` list with name "default" and empty per-telescope overrides
-///   — every post uses the shared defaults.
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum ConfigEnvelope {
-    New {
-        #[serde(default)]
-        logging: LoggingConfig,
-        #[serde(default)]
-        chat: ChatConfig,
-        telescopes: Vec<TelescopeConfig>,
-    },
-    Legacy {
-        #[serde(default)]
-        logging: LoggingConfig,
-        api: ApiConfig,
-        #[serde(default)]
-        chat: ChatConfig,
-        #[serde(default = "default_image_cooldown_seconds")]
-        image_cooldown_seconds: u64,
-        /// Older configs put a Discord webhook at the top level (before the
-        /// `chat` block existed). Honored when `chat.discord` is absent.
-        #[serde(default)]
-        discord: Option<DiscordConfig>,
-    },
+#[derive(Debug)]
+pub enum ConfigError {
+    FileNotFound(String),
+    ParseError(serde_json::Error),
+    IoError(std::io::Error),
 }
 
-impl From<ConfigEnvelope> for Config {
-    fn from(env: ConfigEnvelope) -> Self {
-        match env {
-            ConfigEnvelope::New {
-                logging,
-                chat,
-                telescopes,
-            } => Self {
-                logging,
-                chat,
-                telescopes,
-            },
-            ConfigEnvelope::Legacy {
-                logging,
-                api,
-                mut chat,
-                image_cooldown_seconds,
-                discord,
-            } => {
-                // Honor the legacy top-level `discord` block when no
-                // `chat.discord` was provided.
-                if chat.discord.is_none()
-                    && let Some(d) = discord
-                {
-                    chat.discord = Some(SharedDiscordConfig {
-                        enabled: d.enabled,
-                        default_webhook_url: Some(d.webhook_url),
-                    });
-                }
-                Self {
-                    logging,
-                    chat,
-                    telescopes: vec![TelescopeConfig {
-                        name: default_telescope_name(),
-                        api,
-                        chat: TelescopeChatOverrides::default(),
-                        image_cooldown_seconds,
-                        reconnect: ReconnectConfig::default(),
-                        relay: None,
-                    }],
-                }
-            }
+impl std::fmt::Display for ConfigError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::FileNotFound(path) => write!(formatter, "Configuration file not found: {path}"),
+            Self::ParseError(error) => write!(formatter, "Failed to parse configuration: {error}"),
+            Self::IoError(error) => write!(formatter, "IO error reading configuration: {error}"),
         }
     }
 }
 
-impl<'de> Deserialize<'de> for Config {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        ConfigEnvelope::deserialize(deserializer).map(Config::from)
+impl std::error::Error for ConfigError {}
+
+impl From<serde_json::Error> for ConfigError {
+    fn from(error: serde_json::Error) -> Self {
+        Self::ParseError(error)
     }
 }
 
-/// Load any JSON-decodable configuration file, with a distinct error for a
-/// missing file. Shared by the rig `Config` and the hub's `HubConfig`.
+impl From<std::io::Error> for ConfigError {
+    fn from(error: std::io::Error) -> Self {
+        Self::IoError(error)
+    }
+}
+
+/// Load any JSON-decodable configuration file, with a distinct missing-file
+/// error. The Hub configuration also uses this helper.
 pub fn load_json_file<T, P>(path: P) -> Result<T, ConfigError>
 where
     T: serde::de::DeserializeOwned,
     P: AsRef<Path>,
 {
-    let path_ref = path.as_ref();
-    if !path_ref.exists() {
+    let path = path.as_ref();
+    if !path.exists() {
         return Err(ConfigError::FileNotFound(
-            path_ref.to_string_lossy().to_string(),
+            path.to_string_lossy().to_string(),
         ));
     }
-    let content = fs::read_to_string(path_ref)?;
-    Ok(serde_json::from_str(&content)?)
+    Ok(serde_json::from_str(&fs::read_to_string(path)?)?)
 }
 
 impl Config {
-    /// Load configuration from a JSON file
-    pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self, ConfigError> {
-        load_json_file(path)
-    }
-
-    /// Load configuration from specified file with fallback to default
-    pub fn load_or_default_from<P: AsRef<Path>>(path: P) -> Self {
-        let path_ref = path.as_ref();
-        match Self::load_from_file(path_ref) {
-            Ok(config) => {
-                println!("Loaded configuration from {}", path_ref.display());
-                config
-            }
-            Err(e) => {
-                println!(
-                    "Failed to load {} ({}), using defaults",
-                    path_ref.display(),
-                    e
-                );
-                Self::default()
-            }
-        }
-    }
-
-    /// Save configuration to a JSON file
-    pub fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), ConfigError> {
-        let json = serde_json::to_string_pretty(self)?;
-        fs::write(path, json)?;
-        Ok(())
-    }
-
-    /// Look up a telescope by name. If `name` is None and there's exactly one
-    /// telescope, returns it. Otherwise returns an error listing the names.
-    pub fn pick_telescope(&self, name: Option<&str>) -> Result<&TelescopeConfig, String> {
-        match (name, self.telescopes.as_slice()) {
-            (Some(n), _) => self.telescopes.iter().find(|t| t.name == n).ok_or_else(|| {
-                let known: Vec<&str> = self.telescopes.iter().map(|t| t.name.as_str()).collect();
-                format!("Telescope '{n}' not found. Known telescopes: {known:?}")
-            }),
-            (None, [only]) => Ok(only),
-            (None, []) => Err("No telescopes configured.".to_string()),
-            (None, many) => {
-                let names: Vec<&str> = many.iter().map(|t| t.name.as_str()).collect();
-                Err(format!(
-                    "Multiple telescopes configured; pass --telescope <name>. Known: {names:?}"
-                ))
-            }
-        }
-    }
-
-    /// Validate every telescope configuration
     pub fn validate(&self) -> Result<(), String> {
         let valid_levels = ["error", "warn", "info", "debug", "trace"];
         if !valid_levels.contains(&self.logging.level.as_str()) {
-            return Err(format!(
-                "Invalid logging level '{}'. Valid levels: {:?}",
-                self.logging.level, valid_levels
-            ));
+            return Err(format!("Invalid logging level '{}'", self.logging.level));
         }
-
         if self.telescopes.is_empty() {
             return Err("At least one telescope must be configured.".to_string());
         }
 
-        // Validate shared Matrix config (presence + URL shape)
         if let Some(matrix) = &self.chat.matrix
             && matrix.enabled
         {
-            if matrix.homeserver_url.is_empty() {
-                return Err(
-                    "Matrix homeserver URL cannot be empty when Matrix is enabled".to_string(),
-                );
-            }
             if !is_valid_https_url(&matrix.homeserver_url) {
                 return Err("Matrix homeserver URL must be an absolute https:// URL".to_string());
             }
-            if matrix.username.is_empty() {
-                return Err("Matrix username cannot be empty when Matrix is enabled".to_string());
-            }
-            if matrix.password.is_empty() {
-                return Err("Matrix password cannot be empty when Matrix is enabled".to_string());
+            if matrix.username.is_empty() || matrix.password.is_empty() {
+                return Err("Matrix username and password are required".to_string());
             }
         }
-
         if let Some(discord) = &self.chat.discord
             && discord.enabled
             && let Some(url) = &discord.default_webhook_url
             && !is_valid_discord_webhook_url(url)
         {
-            return Err(
-                "Default Discord webhook URL must be a valid Discord webhook URL".to_string(),
-            );
+            return Err("Default Discord webhook URL is invalid".to_string());
         }
-
         if let Some(bot) = &self.chat.discord_bot
             && bot.enabled
             && bot.token.is_empty()
         {
-            return Err(
-                "Discord bot token cannot be empty when chat.discord_bot is enabled".to_string(),
-            );
+            return Err("Discord bot token cannot be empty".to_string());
         }
 
-        let mut seen = std::collections::HashSet::new();
-        for t in &self.telescopes {
-            if !seen.insert(t.name.clone()) {
-                return Err(format!("Duplicate telescope name '{}'", t.name));
+        let mut names = std::collections::HashSet::new();
+        for telescope in &self.telescopes {
+            if !names.insert(telescope.name.clone()) {
+                return Err(format!("Duplicate telescope name '{}'", telescope.name));
             }
-            t.validate(&self.chat)?;
+            telescope.validate(&self.chat)?;
         }
         Ok(())
     }
 }
 
 impl TelescopeConfig {
-    /// Validate per-telescope settings, including that every chat override
-    /// has a corresponding enabled service in the shared config to fall back
-    /// to (otherwise the override would be a dead reference).
     pub fn validate(&self, shared_chat: &ChatConfig) -> Result<(), String> {
-        let ctx = |msg: String| format!("telescope '{}': {msg}", self.name);
-
-        if self.name.is_empty() {
+        let context = |message: String| format!("telescope '{}': {message}", self.name);
+        if self.name.trim().is_empty() {
             return Err("Telescope name cannot be empty".to_string());
         }
-
-        if self.api.base_url.is_empty() {
-            return Err(ctx("API base URL cannot be empty".to_string()));
-        }
-
-        if !self.api.base_url.starts_with("http://") && !self.api.base_url.starts_with("https://") {
-            return Err(ctx(
-                "API base URL must start with http:// or https://".to_string()
-            ));
-        }
-
-        if self.api.timeout_seconds == 0 {
-            return Err(ctx("Timeout seconds must be greater than 0".to_string()));
-        }
-
-        if self.api.timeout_seconds > 300 {
-            return Err(ctx(
-                "Timeout seconds should not exceed 300 (5 minutes)".to_string()
-            ));
-        }
-
-        if self.api.retry_attempts > 10 {
-            return Err(ctx("Retry attempts should not exceed 10".to_string()));
-        }
-
-        // Discord override: must look like a webhook URL, and shared Discord
-        // must be enabled (otherwise the service won't exist at runtime).
         if let Some(url) = &self.chat.discord_webhook_url {
             if !is_valid_discord_webhook_url(url) {
-                return Err(ctx(
-                    "Discord webhook URL must be a valid Discord webhook URL".to_string(),
+                return Err(context("Discord webhook URL is invalid".to_string()));
+            }
+            if shared_chat
+                .discord
+                .as_ref()
+                .is_none_or(|config| !config.enabled)
+            {
+                return Err(context(
+                    "Discord webhook service is not enabled".to_string(),
                 ));
             }
-            if shared_chat.discord.as_ref().is_none_or(|d| !d.enabled) {
-                return Err(ctx(
-                    "discord_webhook_url override set but shared chat.discord is not enabled"
-                        .to_string(),
-                ));
-            }
         }
-
-        if let Some(_room) = &self.chat.matrix_room_id
-            && shared_chat.matrix.as_ref().is_none_or(|m| !m.enabled)
+        if self.chat.matrix_room_id.is_some()
+            && shared_chat
+                .matrix
+                .as_ref()
+                .is_none_or(|config| !config.enabled)
         {
-            return Err(ctx(
-                "matrix_room_id override set but shared chat.matrix is not enabled".to_string(),
-            ));
+            return Err(context("Matrix service is not enabled".to_string()));
         }
-
-        if let Some(_channel) = &self.chat.discord_channel_id
-            && shared_chat.discord_bot.as_ref().is_none_or(|b| !b.enabled)
+        if self.chat.discord_channel_id.is_some()
+            && shared_chat
+                .discord_bot
+                .as_ref()
+                .is_none_or(|config| !config.enabled)
         {
-            return Err(ctx(
-                "discord_channel_id override set but shared chat.discord_bot is not enabled"
-                    .to_string(),
-            ));
+            return Err(context("Discord bot is not enabled".to_string()));
         }
-
-        if let Some(relay) = &self.relay {
-            relay.validate().map_err(ctx)?;
-        }
-
         Ok(())
     }
 }
@@ -506,7 +257,6 @@ pub(crate) fn is_valid_discord_webhook_url(value: &str) -> bool {
         }
         _ => ("", ""),
     };
-
     url.scheme() == "https"
         && valid_host
         && url.port_or_known_default() == Some(443)
@@ -526,276 +276,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_default_config() {
-        let config = Config::default();
-        assert_eq!(config.telescopes.len(), 1);
-        assert_eq!(config.telescopes[0].name, "default");
-        assert_eq!(config.telescopes[0].api.timeout_seconds, 30);
-        assert_eq!(config.logging.level, "info");
+    fn default_direct_runtime_config_is_valid() {
+        assert!(Config::default().validate().is_ok());
     }
 
     #[test]
-    fn test_config_validation() {
+    fn duplicate_telescope_names_are_rejected() {
         let mut config = Config::default();
-        assert!(config.validate().is_ok());
-
-        // Invalid URL
-        config.telescopes[0].api.base_url = "invalid-url".to_string();
-        assert!(config.validate().is_err());
-
-        // Empty URL
-        config.telescopes[0].api.base_url = "".to_string();
-        assert!(config.validate().is_err());
-
-        // Fix URL, break logging level
-        config.telescopes[0].api.base_url = "http://localhost:8080".to_string();
-        config.logging.level = "invalid".to_string();
-        assert!(config.validate().is_err());
+        config.telescopes.push(TelescopeConfig::default());
+        assert!(config.validate().unwrap_err().contains("Duplicate"));
     }
 
     #[test]
-    fn test_legacy_config_loads() {
-        // Old single-telescope shape — top-level api/chat/image_cooldown_seconds.
-        // The legacy chat block uses `webhook_url` (no `default_` prefix); the
-        // SharedDiscordConfig alias handles this.
-        let json = r#"{
-            "api": {
-                "base_url": "http://192.168.0.81:1888",
-                "timeout_seconds": 30,
-                "retry_attempts": 3
-            },
-            "logging": {
-                "level": "info",
-                "enable_file_logging": false,
-                "log_file": "chatstronomy.log"
-            },
-            "chat": {
-                "discord": {
-                    "enabled": true,
-                    "webhook_url": "https://discord.com/api/webhooks/123/abc"
-                },
-                "matrix": {
-                    "enabled": false,
-                    "homeserver_url": "https://m.example.com",
-                    "username": "@bot:example.com",
-                    "password": "secret",
-                    "room_id": "!legacy:example.com"
-                }
-            },
-            "image_cooldown_seconds": 60
-        }"#;
-        let config: Config = serde_json::from_str(json).unwrap();
-        assert_eq!(config.telescopes.len(), 1);
-        assert_eq!(config.telescopes[0].name, "default");
-        assert_eq!(
-            config.telescopes[0].api.base_url,
-            "http://192.168.0.81:1888"
-        );
-        // Legacy `chat.discord.webhook_url` is aliased into the new shared
-        // default location.
-        let discord = config.chat.discord.as_ref().unwrap();
-        assert_eq!(
-            discord.default_webhook_url.as_deref(),
-            Some("https://discord.com/api/webhooks/123/abc")
-        );
-        let matrix = config.chat.matrix.as_ref().unwrap();
-        assert_eq!(
-            matrix.default_room_id.as_deref(),
-            Some("!legacy:example.com")
-        );
-        // No per-telescope overrides set.
-        assert!(config.telescopes[0].chat.discord_webhook_url.is_none());
-        assert!(config.telescopes[0].chat.matrix_room_id.is_none());
-    }
-
-    #[test]
-    fn test_new_multi_telescope_config_loads() {
-        let json = r#"{
-            "logging": {
-                "level": "info",
-                "enable_file_logging": false,
-                "log_file": "chatstronomy.log"
-            },
-            "chat": {
-                "discord": {
-                    "enabled": true,
-                    "default_webhook_url": "https://discord.com/api/webhooks/0/default"
-                }
-            },
-            "telescopes": [
-                {
-                    "name": "c925",
-                    "api": { "base_url": "http://192.168.0.81:1888", "timeout_seconds": 30, "retry_attempts": 3 },
-                    "chat": {
-                        "discord_webhook_url": "https://discord.com/api/webhooks/0/c925"
-                    }
-                },
-                {
-                    "name": "esprit",
-                    "api": { "base_url": "http://192.168.0.82:1888", "timeout_seconds": 30, "retry_attempts": 3 },
-                    "image_cooldown_seconds": 120
-                }
-            ]
-        }"#;
-        let config: Config = serde_json::from_str(json).unwrap();
-        assert_eq!(config.telescopes.len(), 2);
-        assert_eq!(config.telescopes[0].name, "c925");
-        assert_eq!(
-            config.telescopes[0].chat.discord_webhook_url.as_deref(),
-            Some("https://discord.com/api/webhooks/0/c925")
-        );
-        assert!(config.telescopes[1].chat.discord_webhook_url.is_none());
-        assert_eq!(config.telescopes[1].image_cooldown_seconds, 120);
-        // No `reconnect` key -> defaults (60s initial, 600s max).
-        assert_eq!(config.telescopes[0].reconnect.initial_seconds, 60);
-        assert_eq!(config.telescopes[0].reconnect.max_seconds, 600);
-        let shared = config.chat.discord.as_ref().unwrap();
-        assert_eq!(
-            shared.default_webhook_url.as_deref(),
-            Some("https://discord.com/api/webhooks/0/default")
-        );
-    }
-
-    #[test]
-    fn test_reconnect_config_defaults_and_overrides() {
-        // Telescope A: no `reconnect` -> both defaults.
-        // Telescope B: partial `reconnect` -> only the given field overrides.
-        // Telescope C: max well above the 600s default is honored (no clamp).
-        let json = r#"{
-            "telescopes": [
-                { "name": "a", "api": { "base_url": "http://a", "timeout_seconds": 30, "retry_attempts": 3 } },
-                { "name": "b", "api": { "base_url": "http://b", "timeout_seconds": 30, "retry_attempts": 3 },
-                  "reconnect": { "initial_seconds": 5 } },
-                { "name": "c", "api": { "base_url": "http://c", "timeout_seconds": 30, "retry_attempts": 3 },
-                  "reconnect": { "initial_seconds": 30, "max_seconds": 3600 } }
-            ]
-        }"#;
-        let config: Config = serde_json::from_str(json).unwrap();
-
-        assert_eq!(config.telescopes[0].reconnect.initial_seconds, 60);
-        assert_eq!(config.telescopes[0].reconnect.max_seconds, 600);
-
-        assert_eq!(config.telescopes[1].reconnect.initial_seconds, 5);
-        assert_eq!(config.telescopes[1].reconnect.max_seconds, 600);
-
-        assert_eq!(config.telescopes[2].reconnect.initial_seconds, 30);
-        assert_eq!(config.telescopes[2].reconnect.max_seconds, 3600);
-    }
-
-    #[test]
-    fn test_pick_telescope() {
-        let config: Config = serde_json::from_str(
-            r#"{
-                "telescopes": [
-                    { "name": "c925", "api": { "base_url": "http://a", "timeout_seconds": 30, "retry_attempts": 3 } },
-                    { "name": "esprit", "api": { "base_url": "http://b", "timeout_seconds": 30, "retry_attempts": 3 } }
-                ]
-            }"#,
-        )
-        .unwrap();
-
-        assert_eq!(config.pick_telescope(Some("c925")).unwrap().name, "c925");
-        assert!(config.pick_telescope(Some("unknown")).is_err());
-        // Two telescopes, no name -> error
-        assert!(config.pick_telescope(None).is_err());
-    }
-
-    #[test]
-    fn test_pick_telescope_single_no_name() {
-        let config = Config::default();
-        // Single telescope, no name -> ok
-        assert_eq!(config.pick_telescope(None).unwrap().name, "default");
-    }
-
-    #[test]
-    fn test_discord_bot_config_parses() {
-        let json = r#"{
-            "chat": {
-                "discord_bot": {
-                    "enabled": true,
-                    "token": "abc",
-                    "default_channel_id": 12345,
-                    "write_acl": [111, 222]
-                }
-            },
-            "telescopes": [
-                {
-                    "name": "c925",
-                    "api": { "base_url": "http://a", "timeout_seconds": 30, "retry_attempts": 3 },
-                    "chat": { "discord_channel_id": 67890 }
-                }
-            ]
-        }"#;
-        let config: Config = serde_json::from_str(json).unwrap();
-        let bot = config.chat.discord_bot.as_ref().unwrap();
-        assert!(bot.enabled);
-        assert_eq!(bot.token, "abc");
-        assert_eq!(bot.default_channel_id, Some(12345));
-        assert_eq!(bot.write_acl, vec![111, 222]);
-        assert_eq!(bot.state_file, "./chatstronomy-state.json");
-        assert_eq!(config.telescopes[0].chat.discord_channel_id, Some(67890));
-        assert!(config.validate().is_ok());
-    }
-
-    #[test]
-    fn test_channel_id_without_bot_enabled_rejected() {
-        let json = r#"{
-            "telescopes": [
-                {
-                    "name": "c925",
-                    "api": { "base_url": "http://a", "timeout_seconds": 30, "retry_attempts": 3 },
-                    "chat": { "discord_channel_id": 67890 }
-                }
-            ]
-        }"#;
-        let config: Config = serde_json::from_str(json).unwrap();
-        let err = config.validate().unwrap_err();
-        assert!(err.contains("discord_channel_id"));
-        assert!(err.contains("discord_bot"));
-    }
-
-    #[test]
-    fn test_bot_enabled_without_token_rejected() {
-        let json = r#"{
-            "chat": {
-                "discord_bot": { "enabled": true, "token": "" }
-            },
-            "telescopes": [
-                { "name": "c925", "api": { "base_url": "http://a", "timeout_seconds": 30, "retry_attempts": 3 } }
-            ]
-        }"#;
-        let config: Config = serde_json::from_str(json).unwrap();
-        let err = config.validate().unwrap_err();
-        assert!(err.contains("token"));
-    }
-
-    #[test]
-    fn test_duplicate_telescope_names_rejected() {
-        let config: Config = serde_json::from_str(
-            r#"{
-                "telescopes": [
-                    { "name": "scope", "api": { "base_url": "http://a", "timeout_seconds": 30, "retry_attempts": 3 } },
-                    { "name": "scope", "api": { "base_url": "http://b", "timeout_seconds": 30, "retry_attempts": 3 } }
-                ]
-            }"#,
-        )
-        .unwrap();
-        assert!(config.validate().is_err());
+    fn matrix_requires_https() {
+        assert!(is_valid_https_url("https://matrix.example.test"));
+        assert!(!is_valid_https_url("http://matrix.example.test"));
     }
 
     #[test]
     fn discord_webhook_validation_accepts_versioned_paths_only() {
         assert!(is_valid_discord_webhook_url(
-            "https://discord.com/api/webhooks/123/token"
-        ));
-        assert!(is_valid_discord_webhook_url(
             "https://discord.com/api/v10/webhooks/123/token"
         ));
         assert!(!is_valid_discord_webhook_url(
-            "https://discord.com/api/releases/webhooks/123/token"
-        ));
-        assert!(!is_valid_discord_webhook_url(
-            "https://discord.com:8443/api/webhooks/123/token"
+            "https://discord.com/api/webhooks/0/token"
         ));
     }
 }

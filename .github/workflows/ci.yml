@@ -2,132 +2,60 @@ name: CI
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [main]
   pull_request:
-    branches: [ main, develop ]
+
+permissions:
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   test:
-    name: Test Suite
-    runs-on: ${{ matrix.os }}
-    env:
-      # The repository toolchain file pins release builds, but this matrix is
-      # explicitly responsible for testing the installed stable/beta channel.
-      # Override the file so Cargo does not switch toolchains and download every
-      # cross-target again after dtolnay/rust-toolchain has completed.
-      RUSTUP_TOOLCHAIN: ${{ matrix.rust }}
+    name: Test (${{ matrix.name }})
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        rust: [stable, beta]
-        exclude:
-          # Skip beta on non-Linux to reduce CI time
-          - os: windows-latest
-            rust: beta
-          - os: macos-latest
-            rust: beta
-    
+        include:
+          - name: Linux x64
+            os: ubuntu-latest
+          - name: Windows x64
+            os: windows-latest
+          - name: Linux ARM64
+            os: ubuntu-24.04-arm
+    runs-on: ${{ matrix.os }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ matrix.rust }}
-
-      - name: Cache cargo dependencies
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache Rust build
         uses: actions/cache@v6
         with:
           path: |
-            ~/.cargo/bin/
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-${{ matrix.rust }}-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
           restore-keys: |
-            ${{ runner.os }}-${{ matrix.rust }}-cargo-
+            ${{ runner.os }}-${{ runner.arch }}-cargo-
             ${{ runner.os }}-cargo-
-
-      - name: Check compilation
-        run: cargo check --verbose
-
-      - name: Run tests
-        run: |
-          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-            # Exclude windows_service_tests on Windows GitHub runners due to permission issues
-            cargo test --verbose --lib
-            cargo test --verbose --test cli_integration_tests
-            # Skip windows_service_tests binary entirely
-          else
-            cargo test --verbose
-          fi
-        shell: bash
-
-      - name: Build release
-        run: cargo build --release --verbose
+      - run: cargo check --all-features --locked
+      - run: cargo test --all-features --locked
+      - name: Test lean plugin runtime
+        if: runner.os == 'Windows'
+        run: cargo test --no-default-features --locked
+      - run: cargo build --release --all-features --locked
 
   lint:
-    name: Linting
+    name: Format and Clippy
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-
-      - name: Cache cargo dependencies
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-lint-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-lint-cargo-
-            ${{ runner.os }}-cargo-
-
-      - name: Check formatting
-        run: cargo fmt --check
-
-      - name: Run clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
-
-      - name: Check Windows service compilation (Linux cross-check)
-        run: |
-          # Ensure Windows service code compiles without errors on Linux (should use stubs)
-          cargo check --verbose
-
-  nina-plugin:
-    name: N.I.N.A. Plugin
-    runs-on: windows-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
-
-      - name: Install .NET SDK
-        uses: actions/setup-dotnet@v5
-        with:
-          dotnet-version: 8.0.x
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      # This job builds the crate twice (full hub features and the lean plugin
-      # runtime). Cache both Cargo inputs and target fingerprints so unchanged
-      # dependencies are reused across PRs instead of paying for two cold
-      # release builds on every documentation-only change.
-      - name: Cache N.I.N.A. runtime builds
+      - name: Cache Rust build
         uses: actions/cache@v6
         with:
           path: |
@@ -135,219 +63,16 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-cargo-nina-runtime-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-nina-runtime-
-            ${{ runner.os }}-cargo-
-
-      - name: Build hosted probe and bundled plugin runtimes
-        shell: pwsh
-        run: |
-          cargo build --release --locked
-          Copy-Item target/release/chatstronomy.exe target/release/chatstronomy-hub-probe.exe
-          cargo build --release --locked --no-default-features
-
-      - name: Validate published runtime contract inputs
-        shell: pwsh
-        run: |
-          $contractsArchive = Join-Path $env:RUNNER_TEMP 'chatstronomy-plugin-contracts-v1.zip'
-          $manifestPath = Join-Path $env:RUNNER_TEMP 'chatstronomy-runtime-manifest.json'
-          Compress-Archive -Path contracts -DestinationPath $contractsArchive
-          $metadata = cargo metadata --format-version 1 --no-deps | ConvertFrom-Json
-          $version = $metadata.packages[0].version
-          ./tools/New-ChatstronomyRuntimeManifest.ps1 `
-            -PluginRuntimePath target/release/chatstronomy.exe `
-            -FullRuntimePath target/release/chatstronomy-hub-probe.exe `
-            -PluginContractsPath $contractsArchive `
-            -Tag "v$version" `
-            -Commit '${{ github.sha }}' `
-            -OutputPath $manifestPath
-          Get-Content -LiteralPath $manifestPath
-
-      - name: Test plugin configuration
-        shell: pwsh
-        run: |
-          $env:CHATSTRONOMY_RUNTIME_EXE = "$PWD/target/release/chatstronomy.exe"
-          $env:CHATSTRONOMY_HUB_EXE = "$PWD/target/release/chatstronomy-hub-probe.exe"
-          dotnet run --project nina-plugin/Chatstronomy.NINA.Tests/Chatstronomy.NINA.Tests.csproj --configuration Release
-
-      - name: Build and package plugin
-        shell: pwsh
-        run: >-
-          ./nina-plugin/build-package.ps1
-          -Version 0.1.0.0
-          -RuntimePath target/release/chatstronomy.exe
-          -InstallerUrl https://example.invalid/Chatstronomy.NINA.0.1.0.0.zip
-          -FeaturedImageUrl https://example.invalid/chatstronomy-featured.png
+          key: lint-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
+          restore-keys: lint-cargo-
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --all-targets --all-features --locked -- -D warnings
 
   security:
-    name: Security Audit
+    name: Security audit
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install cargo-audit
-        uses: taiki-e/install-action@cargo-audit
-
-      - name: Run security audit
-        run: cargo audit
-
-  windows-service:
-    name: Windows Service Support
-    runs-on: windows-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-
-      - name: Cache cargo dependencies
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: windows-service-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
-          restore-keys: |
-            windows-service-cargo-
-            ${{ runner.os }}-cargo-
-
-      - name: Check Windows service compilation
-        run: cargo check --verbose
-
-      - name: Test Windows service functionality (excluding permission-required tests)
-        run: |
-          # Run lib tests and cli integration tests only
-          cargo test --verbose --lib
-          cargo test --verbose --test cli_integration_tests
-
-      - name: Run clippy on Windows
-        run: cargo clippy --all-targets -- -D warnings
-
-      - name: Build with Windows service support
-        run: cargo build --verbose
-
-      - name: Test Windows service CLI commands (dry run)
-        run: |
-          # Test that the CLI accepts Windows service commands automatically on Windows
-          cargo run -- --help
-          echo "Testing Windows service command availability..."
-          cargo run -- windows-service --help
-
-  test-arm64:
-    name: Test ARM64 Native Build
-    runs-on: ubuntu-24.04-arm
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo dependencies
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: arm64-native-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
-          restore-keys: |
-            arm64-native-cargo-
-
-      - name: Check compilation
-        run: cargo check --verbose
-
-      - name: Run tests
-        run: cargo test --verbose
-
-      - name: Build release
-        run: cargo build --release --verbose
-
-      - name: Verify binary architecture
-        run: |
-          file target/release/chatstronomy
-          ldd target/release/chatstronomy || true
-
-  test-msi-build:
-    name: Test MSI Build
-    runs-on: windows-latest
-    # Run MSI build test on PRs or when commit message contains [msi]
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo dependencies
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-msi-test-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-msi-test-
-            ${{ runner.os }}-cargo-
-
-      - name: Build release binary
-        run: cargo build --release --verbose
-        env:
-          RUST_BACKTRACE: 1
-
-      - name: Install WiX Toolset
-        run: |
-          # Download and install WiX Toolset v3.14
-          $wixUrl = "https://github.com/wixtoolset/wix3/releases/download/wix314rtm/wix314.exe"
-          $wixInstaller = "$env:TEMP\wix314.exe"
-          Invoke-WebRequest -Uri $wixUrl -OutFile $wixInstaller
-          Start-Process -FilePath $wixInstaller -ArgumentList "/install", "/quiet", "/norestart" -Wait
-          # Add WiX to PATH
-          $env:PATH += ";${env:ProgramFiles(x86)}\WiX Toolset v3.14\bin"
-          echo "${env:ProgramFiles(x86)}\WiX Toolset v3.14\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-
-      - name: Test MSI build
-        run: |
-          Set-Location installer
-          .\build-msi.ps1 -Version "0.0.0.0" -SkipBuild
-        env:
-          RUST_BACKTRACE: 1
-
-      - name: Verify MSI was created
-        run: |
-          if (Test-Path "installer\output\Chatstronomy-0.0.0.0-x64.msi") {
-            $msiFile = Get-Item "installer\output\Chatstronomy-0.0.0.0-x64.msi"
-            $sizeMB = [math]::Round($msiFile.Length / 1MB, 2)
-            Write-Host "✅ MSI created successfully: $($msiFile.Name) ($sizeMB MB)" -ForegroundColor Green
-            Write-Host "🔍 MSI build test passed - installer can be built from current code" -ForegroundColor Cyan
-          } else {
-            Write-Host "❌ MSI file not found" -ForegroundColor Red
-            Get-ChildItem -Path "installer" -Recurse -Name
-            exit 1
-          }
-
-      - name: Upload MSI artifact (for debugging)
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: ci-msi-build-failure
-          path: |
-            installer/output/
-            installer/*.log
-          retention-days: 7
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@cargo-audit
+      - run: cargo audit

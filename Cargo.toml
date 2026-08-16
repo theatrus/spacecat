@@ -1,13 +1,13 @@
 [package]
 name = "chatstronomy"
-version = "0.3.2"
+version = "0.4.0"
 edition = "2024"
 license = "Apache-2.0"
 authors = ["Yann Ramin"]
 description = "Chatstronomy - pipe N.I.N.A. observatory status and commands into Discord and Matrix"
 repository = "https://github.com/theatrus/chatstronomy"
 keywords = ["astronomy", "telescope", "automation", "chatstronomy"]
-categories = ["science", "api-bindings"]
+categories = ["science"]
 
 [features]
 default = ["hub"]
@@ -39,7 +39,7 @@ png = "0.18"
 # → rustls 0.22 → an old rustls-webpki line. The associated RUSTSEC
 # advisories (-0049/-0098/-0099/-0104) are ignored in `.cargo/audit.toml`
 # until serenity ships against a newer tokio-tungstenite. The HTTP path
-# (reqwest 0.13 / matrix-sdk / our NINA client) uses modern rustls 0.23.
+# (reqwest 0.13 / matrix-sdk) uses modern rustls 0.23.
 serenity = { version = "0.12", default-features = false, features = ["client", "gateway", "rustls_backend", "model", "cache", "http", "builder", "utils"] }
 poise = "0.6"
 # SQLite bundled to avoid libsqlite3 dependency issues on Windows CI/releases
@@ -52,17 +52,15 @@ rusqlite = { version = "0.37", optional = true }
 hmac = { version = "0.12", optional = true }
 sha2 = { version = "0.10", optional = true }
 subtle = { version = "2", optional = true }
-# Relay client (rig side): outbound WebSocket to a Chatstronomy hub. Tracks
-# the tokio-tungstenite line axum's ws feature uses, which also keeps our
-# outbound TLS on modern rustls. (serenity 0.12 still pins its own 0.21 copy
+# WebSocket client used by Direct Hub integration tests. Serenity 0.12 still
+# pins its own older tokio-tungstenite copy
 # for the gateway — an upstream limitation, see the audit.toml note.)
 tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
 futures-util = "0.3"
 
-# Windows service dependencies (Windows only)
+# Windows executable metadata and process helpers
 [target.'cfg(windows)'.dependencies]
-windows-service = "0.8"
-winapi = { version = "0.3", features = ["winsvc", "winuser", "winerror", "processenv", "winbase"] }
+winapi = { version = "0.3", features = ["processenv", "winbase"] }
 
 [target.'cfg(windows)'.build-dependencies]
 winresource = "0.1"

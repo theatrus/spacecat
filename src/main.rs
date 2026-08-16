@@ -1,378 +1,88 @@
-use base64::Engine;
-use chatstronomy::{
-    api::ChatstronomyApiClient,
-    autofocus::AutofocusResponse,
-    config::Config,
-    error::ChatstronomyError,
-    events::{EventDetails, EventHistoryResponse, event_types},
-    images::ImageHistoryResponse,
-    mount::MountInfoResponse,
-    poller::EventPoller,
-    sequence::{
-        extract_current_target, extract_meridian_flip_time, meridian_flip_time_formatted_with_clock,
-    },
-    service_wrapper::ServiceWrapper,
-};
 use clap::{Parser, Subcommand};
-
-#[cfg(windows)]
-use chatstronomy::{
-    direct::pipe_source::DirectPipeRigSource,
-    source::{RigCapabilities, RigSource},
-    windows_service,
-};
-
-use std::time::Duration;
 
 #[derive(Parser)]
 #[command(name = "chatstronomy")]
-#[command(
-    about = "Chatstronomy — pipe your observatory into chat",
-    long_about = None
-)]
+#[command(about = "Chatstronomy — pipe your observatory into chat")]
 #[command(version = chatstronomy::version::VERSION_STRING)]
 struct Cli {
-    /// Path to configuration file
-    #[arg(long, default_value = "config.json", global = true)]
-    config: String,
-
-    /// Telescope name to target for single-scope commands. Optional when only
-    /// one telescope is configured; required when multiple are. Does not apply
-    /// to `chat-updater`, which fans out across all configured telescopes.
-    #[arg(long, global = true)]
-    telescope: Option<String>,
-
     #[command(subcommand)]
     command: Commands,
 }
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Print the machine-readable runtime and protocol compatibility contract
+    /// Print the machine-readable runtime and protocol compatibility contract.
     #[command(name = "artifact-contract", hide = true)]
     ArtifactContract,
-    /// Get current sequence information from API
-    Sequence,
-    /// Get event history from API
-    Events,
-    /// List the last N events with details
-    LastEvents {
-        /// Number of last events to display
-        #[arg(short, long, default_value = "10")]
-        count: usize,
-    },
-    /// Get image history from API
-    Images,
-    /// Get a specific image by index
-    GetImage {
-        /// Image index to retrieve
-        #[arg(default_value = "0")]
-        index: u32,
-        /// Additional parameters as key=value pairs
-        #[arg(short, long)]
-        params: Vec<String>,
-    },
-    /// Get a thumbnail for a specific image by index
-    GetThumbnail {
-        /// Image index to retrieve thumbnail for
-        #[arg(default_value = "0")]
-        index: u32,
-        /// Output file path for the thumbnail
-        #[arg(short, long, default_value = "thumbnail.jpg")]
-        output: String,
-        /// Image type filter (LIGHT, FLAT, DARK, BIAS, SNAPSHOT)
-        #[arg(long)]
-        image_type: Option<String>,
-    },
-    /// Poll for new events in real-time
-    Poll {
-        /// Poll interval in seconds
-        #[arg(short, long, default_value = "2")]
-        interval: u64,
-        /// Number of poll cycles to run
-        #[arg(short, long, default_value = "5")]
-        count: u32,
-    },
-    /// Update chat services with events and images in real-time
-    ChatUpdater {
-        /// Poll interval in seconds
-        #[arg(short, long, default_value = "5")]
-        interval: u64,
-    },
-    /// Get the last autofocus data from API
-    LastAutofocus {
-        /// Render the autofocus run as a PNG graph to this file
-        #[arg(short, long)]
-        graph: Option<String>,
-    },
-    /// Get the guide graph data from API
-    GuiderGraph {
-        /// Render the guide graph as a PNG to this file
-        #[arg(short, long, default_value = "guider_graph.png")]
-        output: String,
-    },
-    /// Get mount information from API
-    MountInfo,
-    /// Deprecated compatibility: relay this telescope's Advanced API to a hub
-    Relay,
-    /// Run the centralized hub service (web app + Discord app + SQLite)
+    /// Run the centralized Hub service.
     #[cfg(feature = "hub")]
     Hub {
-        /// Path to the hub configuration file. Separate from the rig
-        /// configuration: a hub has no telescope list in its config.
         #[arg(long = "hub-config", default_value = "hub.json")]
         hub_config: String,
-        /// Write a default hub configuration file and exit
+        /// Write a default Hub configuration and exit.
         #[arg(long)]
         init: bool,
     },
-    /// Run a plugin-owned local process configured over a secure named pipe
+    /// Run a plugin-owned local Direct process configured over a secure pipe.
     #[cfg(windows)]
     PluginRuntime {
-        /// Random current-user-only bootstrap pipe created by the N.I.N.A. plugin
         #[arg(long)]
         bootstrap_pipe: String,
-        /// Non-secret runtime log destination
         #[arg(long)]
         log_file: String,
     },
-    /// Internal Direct transport and guider-rendering diagnostic
+    /// Internal Direct transport and chart-rendering diagnostic.
     #[cfg(windows)]
     #[command(name = "direct-render-probe", hide = true)]
     DirectRenderProbe {
-        /// Current-user-only data pipe created by the N.I.N.A. plugin
         #[arg(long)]
         pipe_name: String,
-        /// PNG file to write after querying the guider graph
         #[arg(long)]
         guider_output: String,
-        /// Optional autofocus PNG file to render from the same Direct source
         #[arg(long)]
         autofocus_output: Option<String>,
     },
-    /// Internal cross-process probe for the N.I.N.A. hosted WebSocket client
+    /// Internal end-to-end Hub diagnostic used by the plugin tests.
     #[cfg(all(windows, feature = "hub"))]
     #[command(name = "direct-hub-probe", hide = true)]
     DirectHubProbe {
-        /// PNG file to render from the plugin's guider payload through the hub
         #[arg(long)]
         guider_output: String,
-        /// PNG file to render from the plugin's autofocus payload through the hub
         #[arg(long)]
         autofocus_output: String,
     },
-    /// Windows service management commands
-    #[cfg(windows)]
-    WindowsService {
-        #[command(subcommand)]
-        action: WindowsServiceAction,
-    },
-}
-
-#[cfg(windows)]
-#[derive(Subcommand)]
-enum WindowsServiceAction {
-    /// Install the service
-    Install,
-    /// Uninstall the service
-    Uninstall,
-    /// Start the service
-    Start,
-    /// Stop the service
-    Stop,
-    /// Check service status
-    Status,
-    /// Run as service (internal command used by service manager)
-    Run,
 }
 
 #[tokio::main]
 async fn main() {
-    let cli = Cli::parse();
-
-    if matches!(&cli.command, Commands::ArtifactContract) {
-        match chatstronomy::artifact_contract::json() {
-            Ok(json) => println!("{json}"),
-            Err(error) => {
-                eprintln!("Could not serialize artifact contract: {error}");
-                std::process::exit(1);
-            }
-        }
-        return;
-    }
-
-    #[cfg(windows)]
-    if let Commands::PluginRuntime {
-        bootstrap_pipe,
-        log_file,
-    } = &cli.command
-    {
-        if let Err(error) =
-            chatstronomy::plugin_runtime::run_from_named_pipe(bootstrap_pipe, log_file).await
-        {
-            eprintln!("Plugin runtime failed: {error}");
-            std::process::exit(1);
-        }
-        return;
-    }
-
-    println!(
-        "{} {}",
-        chatstronomy::version::WORDMARK,
-        chatstronomy::version::VERSION_STRING
-    );
-
-    let config_path = &cli.config;
-    let telescope = cli.telescope.as_deref();
-
-    match cli.command {
-        Commands::ArtifactContract => unreachable!("artifact contract handled before CLI banner"),
-        Commands::Sequence => {
-            if let Err(e) = cmd_sequence(config_path, telescope).await {
-                eprintln!("Sequence command failed: {e}");
-                std::process::exit(1);
-            }
-        }
-        Commands::Events => {
-            if let Err(e) = cmd_events(config_path, telescope).await {
-                eprintln!("Events command failed: {e}");
-                std::process::exit(1);
-            }
-        }
-        Commands::LastEvents { count } => {
-            if let Err(e) = cmd_last_events(count, config_path, telescope).await {
-                eprintln!("LastEvents command failed: {e}");
-                std::process::exit(1);
-            }
-        }
-        Commands::Images => {
-            if let Err(e) = cmd_images(config_path, telescope).await {
-                eprintln!("Images command failed: {e}");
-                std::process::exit(1);
-            }
-        }
-        Commands::GetImage { index, params } => {
-            if let Err(e) = cmd_get_image(index, &params, config_path, telescope).await {
-                eprintln!("GetImage command failed: {e}");
-                std::process::exit(1);
-            }
-        }
-        Commands::GetThumbnail {
-            index,
-            output,
-            image_type,
-        } => {
-            if let Err(e) = cmd_get_thumbnail(
-                index,
-                &output,
-                image_type.as_deref(),
-                config_path,
-                telescope,
-            )
-            .await
-            {
-                eprintln!("GetThumbnail command failed: {e}");
-                std::process::exit(1);
-            }
-        }
-        Commands::Poll { interval, count } => {
-            if let Err(e) = cmd_poll(interval, count, config_path, telescope).await {
-                eprintln!("Poll command failed: {e}");
-                std::process::exit(1);
-            }
-        }
-        Commands::ChatUpdater { interval } => {
-            // chat-updater fans out across every configured telescope; the
-            // --telescope flag does not apply here.
-            if let Err(e) = cmd_chat_updater(interval, config_path).await {
-                eprintln!("ChatUpdater command failed: {e}");
-                std::process::exit(1);
-            }
-        }
-        Commands::LastAutofocus { graph } => {
-            if let Err(e) = cmd_last_autofocus(graph.as_deref(), config_path, telescope).await {
-                eprintln!("LastAutofocus command failed: {e}");
-                std::process::exit(1);
-            }
-        }
-        Commands::GuiderGraph { output } => {
-            if let Err(e) = cmd_guider_graph(&output, config_path, telescope).await {
-                eprintln!("GuiderGraph command failed: {e}");
-                std::process::exit(1);
-            }
-        }
-        Commands::MountInfo => {
-            if let Err(e) = cmd_mount_info(config_path, telescope).await {
-                eprintln!("MountInfo command failed: {e}");
-                std::process::exit(1);
-            }
-        }
-        Commands::Relay => {
-            if let Err(e) = cmd_relay(config_path, telescope).await {
-                eprintln!("Relay command failed: {e}");
-                std::process::exit(1);
-            }
-        }
+    let result = match Cli::parse().command {
+        Commands::ArtifactContract => chatstronomy::artifact_contract::json()
+            .map(|json| println!("{json}"))
+            .map_err(|error| error.into()),
         #[cfg(feature = "hub")]
-        Commands::Hub { hub_config, init } => {
-            if let Err(e) = cmd_hub(&hub_config, init).await {
-                eprintln!("Hub command failed: {e}");
-                std::process::exit(1);
-            }
-        }
+        Commands::Hub { hub_config, init } => cmd_hub(&hub_config, init).await,
         #[cfg(windows)]
-        Commands::PluginRuntime { .. } => unreachable!("plugin runtime handled before CLI banner"),
+        Commands::PluginRuntime {
+            bootstrap_pipe,
+            log_file,
+        } => chatstronomy::plugin_runtime::run_from_named_pipe(&bootstrap_pipe, &log_file).await,
         #[cfg(windows)]
         Commands::DirectRenderProbe {
             pipe_name,
             guider_output,
             autofocus_output,
-        } => {
-            if let Err(error) =
-                cmd_direct_render_probe(&pipe_name, &guider_output, autofocus_output.as_deref())
-                    .await
-            {
-                eprintln!("Direct render probe failed: {error}");
-                std::process::exit(1);
-            }
-        }
+        } => cmd_direct_render_probe(&pipe_name, &guider_output, autofocus_output.as_deref()).await,
         #[cfg(all(windows, feature = "hub"))]
         Commands::DirectHubProbe {
             guider_output,
             autofocus_output,
-        } => {
-            if let Err(error) = cmd_direct_hub_probe(&guider_output, &autofocus_output).await {
-                eprintln!("Direct hub probe failed: {error}");
-                std::process::exit(1);
-            }
-        }
-        #[cfg(windows)]
-        Commands::WindowsService { action } => {
-            if let Err(e) = cmd_windows_service(action, config_path).await {
-                eprintln!("WindowsService command failed: {e}");
-                std::process::exit(1);
-            }
-        }
-    }
-}
+        } => cmd_direct_hub_probe(&guider_output, &autofocus_output).await,
+    };
 
-async fn cmd_relay(
-    config_path: &str,
-    telescope: Option<&str>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let config = Config::load_or_default_from(config_path);
-    config.validate()?;
-    let t = config.pick_telescope(telescope)?;
-    if t.relay.is_none() {
-        return Err(format!(
-            "telescope '{}' has no relay configuration; add a `relay` section with hub_url \
-             and pairing_token",
-            t.name
-        )
-        .into());
+    if let Err(error) = result {
+        eprintln!("Chatstronomy failed: {error}");
+        std::process::exit(1);
     }
-    chatstronomy::relay::run_relay(t).await?;
-    Ok(())
 }
 
 #[cfg(feature = "hub")]
@@ -384,16 +94,36 @@ async fn cmd_hub(config_path: &str, init: bool) -> Result<(), Box<dyn std::error
             return Err(format!("Refusing to overwrite existing file {config_path}").into());
         }
         HubConfig::default().save_to_file(config_path)?;
-        println!("Wrote default hub configuration to {config_path}");
-        println!("Edit it (Discord app credentials, signing key), then run: chatstronomy hub");
+        println!("Wrote default Hub configuration to {config_path}");
         return Ok(());
     }
 
-    let config = HubConfig::load_from_file(config_path).map_err(|e| {
-        format!("{e}. Run `chatstronomy hub --init` to create a default hub configuration.")
+    let config = HubConfig::load_from_file(config_path).map_err(|error| {
+        format!("{error}. Run `chatstronomy hub --init` to create a configuration.")
     })?;
     config.validate()?;
     server::run(config).await?;
+    Ok(())
+}
+
+#[cfg(windows)]
+async fn cmd_direct_render_probe(
+    pipe_name: &str,
+    guider_output: &str,
+    autofocus_output: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use chatstronomy::direct::pipe_source::DirectPipeRigSource;
+    use chatstronomy::source::{RigCapabilities, RigSource};
+
+    let source = DirectPipeRigSource::connect(pipe_name, RigCapabilities::all()).await?;
+    let graph = source.get_guider_graph().await?;
+    let png = chatstronomy::charts::render_guider_graph_png(&graph.response)?;
+    std::fs::write(guider_output, png)?;
+    if let Some(output) = autofocus_output {
+        let autofocus = source.get_last_autofocus().await?;
+        let png = chatstronomy::charts::render_autofocus_graph_png(&autofocus.response)?;
+        std::fs::write(output, png)?;
+    }
     Ok(())
 }
 
@@ -409,7 +139,9 @@ async fn cmd_direct_hub_probe(
         server::{self, HubState},
         store::UserRow,
     };
+    use chatstronomy::source::RigSource;
     use std::io::Write;
+    use std::time::Duration;
 
     let db = Db::open_in_memory()?;
     db.upsert_user(&UserRow {
@@ -453,988 +185,21 @@ async fn cmd_direct_hub_probe(
         }
     })
     .await
-    .map_err(|_| "N.I.N.A. plugin did not connect to the hub probe")?;
+    .map_err(|_| "N.I.N.A. plugin did not connect to the Hub probe")?;
     let source = DirectRigSource::new(connection);
     let guider = source.get_guider_graph().await?;
-    let guider_png = chatstronomy::charts::render_guider_graph_png(&guider.response)?;
-    std::fs::write(guider_output, guider_png)?;
+    std::fs::write(
+        guider_output,
+        chatstronomy::charts::render_guider_graph_png(&guider.response)?,
+    )?;
     let autofocus = source.get_last_autofocus().await?;
-    let autofocus_png = chatstronomy::charts::render_autofocus_graph_png(&autofocus.response)?;
-    std::fs::write(autofocus_output, autofocus_png)?;
+    std::fs::write(
+        autofocus_output,
+        chatstronomy::charts::render_autofocus_graph_png(&autofocus.response)?,
+    )?;
 
     println!("{}", serde_json::json!({"probe": "direct_hub_complete"}));
     std::io::stdout().flush()?;
     server_task.abort();
-    Ok(())
-}
-
-/// Load the config, pick the requested telescope, and build an API client.
-/// Used by every single-scope CLI command.
-fn pick_client(
-    config_path: &str,
-    telescope: Option<&str>,
-) -> Result<ChatstronomyApiClient, Box<dyn std::error::Error>> {
-    let config = Config::load_or_default_from(config_path);
-    config.validate()?;
-    let t = config.pick_telescope(telescope)?;
-    ChatstronomyApiClient::new(t.api.clone()).map_err(|e| e.into())
-}
-
-/// Build a client and verify the API is reachable. Used by every read-only
-/// command that wants to fail fast with a clear error if the rig is offline.
-async fn checked_client(
-    config_path: &str,
-    telescope: Option<&str>,
-) -> Result<ChatstronomyApiClient, Box<dyn std::error::Error>> {
-    let client = pick_client(config_path, telescope)?;
-    if let Err(e) = client.get_version().await {
-        return Err(format!("Could not get API version: {e}").into());
-    }
-    Ok(client)
-}
-
-async fn cmd_sequence(
-    config_path: &str,
-    telescope: Option<&str>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    println!("Loading sequence from API...");
-
-    match checked_client(config_path, telescope)
-        .await?
-        .get_sequence()
-        .await
-    {
-        Ok(seq) => {
-            println!(
-                "Successfully loaded sequence with {} items",
-                seq.response.len()
-            );
-            println!("Status: {}, Success: {}", seq.status_code, seq.success);
-
-            // Get global triggers
-            if let Some(triggers) = seq.get_global_triggers() {
-                let trigger_count = triggers.global_triggers.len();
-                println!("Found {trigger_count} global triggers");
-            }
-
-            // Get all containers
-            let containers = seq.get_containers();
-            let container_count = containers.len();
-            println!("Found {container_count} containers:");
-            for container in &containers {
-                println!(
-                    "  - {} (status: {}, {} items)",
-                    container.name,
-                    container.status,
-                    container.items.len()
-                );
-            }
-
-            // Test the new extract_current_target utility function
-            if let Some(target) = extract_current_target(&seq) {
-                println!("Current active target: {target}");
-            } else {
-                println!("No active target found");
-            }
-
-            // Extract meridian flip information
-            if let Some(meridian_flip_hours) = extract_meridian_flip_time(&seq) {
-                let formatted_time = meridian_flip_time_formatted_with_clock(meridian_flip_hours);
-                println!("Meridian flip in: {formatted_time}");
-            } else {
-                println!("No meridian flip information available");
-            }
-        }
-        Err(e) => {
-            return Err(format!("Failed to load sequence from API: {e}").into());
-        }
-    }
-
-    Ok(())
-}
-
-async fn cmd_events(
-    config_path: &str,
-    telescope: Option<&str>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    println!("Loading events from API...");
-    let client = checked_client(config_path, telescope).await?;
-    let events = client
-        .get_event_history()
-        .await
-        .map_err(|e| format!("Failed to load events from API: {e}"))?;
-    println!(
-        "Successfully loaded {} events from API",
-        events.response.len()
-    );
-    display_event_statistics(&events);
-    Ok(())
-}
-
-async fn cmd_last_events(
-    count: usize,
-    config_path: &str,
-    telescope: Option<&str>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    println!("Loading events from API...");
-    let client = checked_client(config_path, telescope).await?;
-    let events = client
-        .get_event_history()
-        .await
-        .map_err(|e| format!("Failed to load events from API: {e}"))?;
-    println!(
-        "Successfully loaded {} events from API",
-        events.response.len()
-    );
-    display_last_events(&events, count);
-    Ok(())
-}
-
-async fn cmd_images(
-    config_path: &str,
-    telescope: Option<&str>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    println!("Loading images from API...");
-    let client = checked_client(config_path, telescope).await?;
-    let images = client
-        .get_all_image_history()
-        .await
-        .map_err(|e| format!("Failed to load images from API: {e}"))?;
-    println!(
-        "Successfully loaded {} images from API",
-        images.response.len()
-    );
-    display_image_statistics(&images);
-    display_last_images(&images, 3);
-    Ok(())
-}
-
-async fn cmd_get_image(
-    index: u32,
-    params: &[String],
-    config_path: &str,
-    telescope: Option<&str>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    println!("Getting image at index {index} from API...");
-
-    // Parse additional parameters
-    let mut param_pairs = vec![("autoPrepare", "true")]; // Default parameter
-    for param in params {
-        if let Some((key, value)) = param.split_once('=') {
-            param_pairs.push((key, value));
-        } else {
-            eprintln!("Warning: Invalid parameter format '{param}', expected 'key=value'");
-        }
-    }
-
-    let client = pick_client(config_path, telescope)?;
-
-    match client.get_image_with_params(index, &param_pairs).await {
-        Ok(image_response) => {
-            println!("Successfully retrieved image:");
-            println!(
-                "  Status: {}, Success: {}",
-                image_response.status_code, image_response.success
-            );
-            println!("  Response Type: {}", image_response.response_type);
-
-            if !image_response.error.is_empty() {
-                println!("  Error: {}", image_response.error);
-            }
-
-            // Check if we got image data
-            if image_response.success && !image_response.response.is_empty() {
-                let data_size = image_response.response.len();
-                println!("  Image data size: {data_size} characters (base64)");
-
-                // Show first few characters of base64 data as a sample
-                let preview = if data_size > 50 {
-                    let preview_data = &image_response.response[0..50];
-                    format!("{preview_data}...")
-                } else {
-                    image_response.response.clone()
-                };
-                println!("  Base64 preview: {preview}");
-
-                // Try to decode base64 to get actual image size
-                match base64::engine::general_purpose::STANDARD.decode(&image_response.response) {
-                    Ok(decoded) => {
-                        let decoded_len = decoded.len();
-                        println!("  Decoded image size: {decoded_len} bytes");
-
-                        // Check if this looks like a valid image by examining the header
-                        if decoded.len() > 10 {
-                            let header = &decoded[0..std::cmp::min(10, decoded.len())];
-                            println!("  Image header (hex): {header:02x?}");
-
-                            // Check for common image formats
-                            if decoded.starts_with(b"\x89PNG\r\n\x1a\n") {
-                                println!("  Image format: PNG");
-                            } else if decoded.starts_with(&[0xFF, 0xD8, 0xFF]) {
-                                println!("  Image format: JPEG");
-                            } else if decoded.starts_with(b"GIF8") {
-                                println!("  Image format: GIF");
-                            } else if decoded.starts_with(b"BM") {
-                                println!("  Image format: BMP");
-                            } else if decoded.starts_with(b"RIFF")
-                                && decoded.len() > 8
-                                && &decoded[8..12] == b"WEBP"
-                            {
-                                println!("  Image format: WebP");
-                            } else {
-                                println!("  Image format: Unknown or custom format");
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        println!("  Failed to decode base64: {e}");
-                    }
-                }
-            } else {
-                println!("  No image data received");
-            }
-        }
-        Err(e) => {
-            return Err(format!("Failed to get image: {e}").into());
-        }
-    }
-
-    Ok(())
-}
-
-async fn cmd_get_thumbnail(
-    index: u32,
-    output_path: &str,
-    image_type: Option<&str>,
-    config_path: &str,
-    telescope: Option<&str>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    println!("Getting thumbnail for image at index {index} from API...");
-
-    let client = pick_client(config_path, telescope)?;
-
-    // Build parameters
-    let mut params = vec![];
-    if let Some(img_type) = image_type {
-        params.push(("imageType", img_type));
-    }
-
-    match client.get_thumbnail_with_params(index, &params).await {
-        Ok(thumbnail_response) => {
-            println!("Successfully retrieved thumbnail:");
-            println!("  Status Code: {}", thumbnail_response.status_code);
-            println!("  Content Type: {}", thumbnail_response.content_type);
-            println!("  Data Size: {} bytes", thumbnail_response.data.len());
-
-            // Save the thumbnail to disk
-            match std::fs::write(output_path, &thumbnail_response.data) {
-                Ok(()) => {
-                    println!("  Thumbnail saved to: {output_path}");
-
-                    // Try to detect image format from first few bytes
-                    if thumbnail_response.data.len() >= 4 {
-                        let header = &thumbnail_response.data[0..4];
-                        if header.starts_with(&[0xFF, 0xD8, 0xFF]) {
-                            println!("  Format: JPEG");
-                        } else if header.starts_with(b"\x89PNG") {
-                            println!("  Format: PNG");
-                        } else {
-                            println!("  Format: Unknown (header: {header:02x?})");
-                        }
-                    }
-                }
-                Err(e) => {
-                    return Err(format!("Failed to save thumbnail to {output_path}: {e}").into());
-                }
-            }
-        }
-        Err(e) => {
-            return Err(format!("Failed to get thumbnail: {e}").into());
-        }
-    }
-
-    Ok(())
-}
-
-async fn cmd_poll(
-    interval: u64,
-    count: u32,
-    config_path: &str,
-    telescope: Option<&str>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    println!("Starting event polling...");
-    println!("Poll interval: {interval}s, Poll cycles: {count}");
-
-    let client = pick_client(config_path, telescope)?;
-    let mut poller = EventPoller::new(client, Duration::from_secs(interval));
-
-    for i in 1..=count {
-        println!("\nPoll #{i}");
-
-        match poller.poll_new_events().await {
-            Ok(result) => {
-                println!("  {}", result.summary());
-
-                if result.has_new_events() {
-                    println!("  New events found:");
-                    for event in &result.new_events {
-                        println!("    {} at {}", event.event, event.time);
-                    }
-
-                    // Show specific event types
-                    let image_saves = result.get_events_by_type(event_types::IMAGE_SAVE);
-                    if !image_saves.is_empty() {
-                        let image_saves_len = image_saves.len();
-                        println!("    → {image_saves_len} image saves in this batch");
-                    }
-
-                    let filter_changes =
-                        result.get_events_by_type(event_types::FILTERWHEEL_CHANGED);
-                    if !filter_changes.is_empty() {
-                        let filter_changes_len = filter_changes.len();
-                        println!("    → {filter_changes_len} filter changes in this batch");
-                    }
-                } else {
-                    println!("  No new events since last poll");
-                }
-
-                let seen_count = poller.seen_event_count();
-                println!("  Total events seen: {seen_count}");
-            }
-            Err(e) => {
-                println!("  Poll failed: {e}");
-            }
-        }
-    }
-
-    Ok(())
-}
-
-async fn cmd_chat_updater(interval: u64, config_path: &str) -> Result<(), ChatstronomyError> {
-    let config = Config::load_or_default_from(config_path);
-    let service_wrapper = ServiceWrapper::new(config).map_err(ChatstronomyError::Service)?;
-    service_wrapper
-        .run_cli(interval)
-        .await
-        .map_err(ChatstronomyError::Service)
-}
-
-async fn cmd_last_autofocus(
-    graph: Option<&str>,
-    config_path: &str,
-    telescope: Option<&str>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    println!("Loading autofocus data from API...");
-    let client = checked_client(config_path, telescope).await?;
-    let autofocus = client
-        .get_last_autofocus()
-        .await
-        .map_err(|e| format!("Failed to load autofocus data from API: {e}"))?;
-    println!("Successfully loaded autofocus data from API");
-    display_autofocus_data(&autofocus);
-    if let Some(path) = graph {
-        let png = chatstronomy::charts::render_autofocus_graph_png(&autofocus.response)
-            .map_err(|e| format!("Failed to render autofocus graph: {e}"))?;
-        std::fs::write(path, &png)?;
-        println!("Autofocus graph written to {path}");
-    }
-    Ok(())
-}
-
-async fn cmd_guider_graph(
-    output: &str,
-    config_path: &str,
-    telescope: Option<&str>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    println!("Loading guide graph data from API...");
-    let client = checked_client(config_path, telescope).await?;
-    let graph = client
-        .get_guider_graph()
-        .await
-        .map_err(|e| format!("Failed to load guide graph from API: {e}"))?;
-    let history = &graph.response;
-    println!(
-        "Guide steps: {} (history size {}, interval {}s, scale: {})",
-        history.guide_steps.len(),
-        history.history_size,
-        history.interval,
-        history.scale_unit()
-    );
-    if let Some(rms) = history.rms_summary() {
-        println!("RMS: {rms}");
-    }
-    let png = chatstronomy::charts::render_guider_graph_png(history)
-        .map_err(|e| format!("Failed to render guide graph: {e}"))?;
-    std::fs::write(output, &png)?;
-    println!("Guide graph written to {output}");
-    Ok(())
-}
-
-#[cfg(windows)]
-async fn cmd_direct_render_probe(
-    pipe_name: &str,
-    guider_output: &str,
-    autofocus_output: Option<&str>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let source = DirectPipeRigSource::connect(pipe_name, RigCapabilities::advanced_api()).await?;
-    let graph = source.get_guider_graph().await?;
-    let png = chatstronomy::charts::render_guider_graph_png(&graph.response)?;
-    std::fs::write(guider_output, png)?;
-    if let Some(output) = autofocus_output {
-        let autofocus = source.get_last_autofocus().await?;
-        let png = chatstronomy::charts::render_autofocus_graph_png(&autofocus.response)?;
-        std::fs::write(output, png)?;
-    }
-    Ok(())
-}
-
-async fn cmd_mount_info(
-    config_path: &str,
-    telescope: Option<&str>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    println!("Loading mount information from API...");
-    let client = checked_client(config_path, telescope).await?;
-    let mount_info = client
-        .get_mount_info()
-        .await
-        .map_err(|e| format!("Failed to load mount information from API: {e}"))?;
-    println!("Successfully loaded mount information from API");
-    display_mount_info(&mount_info);
-    Ok(())
-}
-
-// Helper functions
-
-fn display_autofocus_data(autofocus: &AutofocusResponse) {
-    println!(
-        "Status: {}, Success: {}",
-        autofocus.status_code, autofocus.success
-    );
-
-    if !autofocus.error.is_empty() {
-        println!("Error: {}", autofocus.error);
-        return;
-    }
-
-    let af_data = &autofocus.response;
-
-    println!("\n=== Autofocus Summary ===");
-    println!("Filter: {}", af_data.filter);
-    println!("Focuser: {}", af_data.auto_focuser_name);
-    println!("Star Detector: {}", af_data.star_detector_name);
-    println!("Method: {}", af_data.method);
-    println!("Fitting: {}", af_data.fitting);
-    println!("Temperature: {:.1}°C", af_data.temperature);
-    println!("Duration: {}", af_data.duration);
-    println!("Timestamp: {}", af_data.timestamp);
-
-    println!("\n=== Focus Results ===");
-    println!("Initial Position: {}", af_data.initial_focus_point.position);
-    println!(
-        "Calculated Position: {}",
-        af_data.calculated_focus_point.position
-    );
-    println!(
-        "Calculated HFR: {:.3}",
-        af_data.calculated_focus_point.value
-    );
-    println!(
-        "Previous Position: {}",
-        af_data.previous_focus_point.position
-    );
-
-    let (min_pos, max_pos) = af_data.get_focus_range();
-    println!("Focus Range: {min_pos} - {max_pos}");
-
-    if let Some(best_hfr) = af_data.get_best_measured_hfr() {
-        println!("Best Measured HFR: {best_hfr:.3}");
-    }
-
-    println!(
-        "\n=== Measurement Points ({}) ===",
-        af_data.measure_points.len()
-    );
-    for (i, point) in af_data.measure_points.iter().enumerate() {
-        println!(
-            "  {:2}: Position {}, HFR {:.3}, Error {:.3}",
-            i + 1,
-            point.position,
-            point.value,
-            point.error
-        );
-    }
-
-    println!("\n=== Curve Fitting Results ===");
-    println!("R-squared values:");
-    println!("  Quadratic: {:.4}", af_data.r_squares.quadratic);
-    println!("  Hyperbolic: {:.4}", af_data.r_squares.hyperbolic);
-    println!("  Left Trend: {:.4}", af_data.r_squares.left_trend);
-    println!("  Right Trend: {:.4}", af_data.r_squares.right_trend);
-    println!("Best R-squared: {:.4}", autofocus.get_best_r_squared());
-
-    println!("\n=== Intersections ===");
-    let intersections = &af_data.intersections;
-    if let Some(trend) = &intersections.trend_line_intersection {
-        println!(
-            "Trend Line Intersection: Position {:.1}, Value {:.3}",
-            trend.position, trend.value
-        );
-    }
-    if let Some(hyperbolic) = &intersections.hyperbolic_minimum {
-        println!(
-            "Hyperbolic Minimum: Position {:.1}, Value {:.3}",
-            hyperbolic.position, hyperbolic.value
-        );
-    }
-    if let Some(quadratic) = &intersections.quadratic_minimum {
-        println!(
-            "Quadratic Minimum: Position {:.1}, Value {:.3}",
-            quadratic.position, quadratic.value
-        );
-    }
-    if let Some(gaussian) = &intersections.gaussian_maximum {
-        println!(
-            "Gaussian Maximum: Position {:.1}, Value {:.3}",
-            gaussian.position, gaussian.value
-        );
-    }
-
-    println!("\n=== Backlash Compensation ===");
-    let backlash = &af_data.backlash_compensation;
-    println!("Model: {}", backlash.backlash_compensation_model);
-    println!("Backlash IN: {}", backlash.backlash_in);
-    println!("Backlash OUT: {}", backlash.backlash_out);
-
-    println!("\n=== Analysis ===");
-    if autofocus.is_successful() {
-        println!("✅ Autofocus appears successful");
-    } else {
-        println!("❌ Autofocus may have issues");
-    }
-
-    let position_change =
-        af_data.calculated_focus_point.position - af_data.previous_focus_point.position;
-    if position_change != 0 {
-        println!("Focus position changed by {position_change} steps");
-    } else {
-        println!("Focus position unchanged from previous run");
-    }
-}
-
-fn display_mount_info(mount_info: &MountInfoResponse) {
-    println!(
-        "Status: {}, Success: {}",
-        mount_info.status_code, mount_info.success
-    );
-
-    if !mount_info.error.is_empty() {
-        println!("Error: {}", mount_info.error);
-        return;
-    }
-
-    let mount = &mount_info.response;
-
-    println!("\n=== Mount Information ===");
-    println!("Name: {}", mount.name);
-    println!("Display Name: {}", mount.display_name);
-    println!("Device ID: {}", mount.device_id);
-
-    println!("\n=== Connection Status ===");
-    println!(
-        "Connected: {}",
-        if mount.connected { "✅ Yes" } else { "❌ No" }
-    );
-    println!(
-        "Tracking: {}",
-        if mount.tracking_enabled {
-            "✅ Enabled"
-        } else {
-            "❌ Disabled"
-        }
-    );
-    println!(
-        "Parked: {}",
-        if mount.at_park {
-            "🅿️ Yes"
-        } else {
-            "🔭 No"
-        }
-    );
-    println!(
-        "Slewing: {}",
-        if mount.slewing {
-            "🔄 Yes"
-        } else {
-            "⏸️ No"
-        }
-    );
-    println!(
-        "At Home: {}",
-        if mount.at_home { "🏠 Yes" } else { "❌ No" }
-    );
-
-    println!("\n=== Current Position ===");
-    let (ra, dec) = mount_info.get_coordinates();
-    println!("Right Ascension: {ra}");
-    println!("Declination: {dec}");
-    let (alt, az) = mount_info.get_alt_az();
-    println!("Altitude: {alt}");
-    println!("Azimuth: {az}");
-    println!("Side of Pier: {}", mount_info.get_side_of_pier());
-
-    println!("\n=== Time Information ===");
-    println!("Sidereal Time: {}", mount.sidereal_time_string);
-    println!("UTC Date: {}", mount.utc_date);
-
-    let flip_time = mount_info.get_time_to_meridian_flip_hours();
-    let flip_string = mount_info.get_time_to_meridian_flip_string();
-    println!("Time to Meridian Flip: {flip_time:.3} hours ({flip_string})");
-
-    println!("\n=== Site Information ===");
-    let (lat, lon, elev) = mount_info.get_site_info();
-    println!("Latitude: {lat:.3}°");
-    println!("Longitude: {lon:.3}°");
-    println!("Elevation: {elev} m");
-
-    println!("\n=== Capabilities ===");
-    println!(
-        "Can Find Home: {}",
-        if mount.can_find_home {
-            "✅ Yes"
-        } else {
-            "❌ No"
-        }
-    );
-    println!(
-        "Can Park: {}",
-        if mount.can_park { "✅ Yes" } else { "❌ No" }
-    );
-    println!(
-        "Can Set Park: {}",
-        if mount.can_set_park {
-            "✅ Yes"
-        } else {
-            "❌ No"
-        }
-    );
-    println!(
-        "Can Slew: {}",
-        if mount.can_slew { "✅ Yes" } else { "❌ No" }
-    );
-    println!(
-        "Can Pulse Guide: {}",
-        if mount.can_pulse_guide {
-            "✅ Yes"
-        } else {
-            "❌ No"
-        }
-    );
-    println!(
-        "Is Pulse Guiding: {}",
-        if mount.is_pulse_guiding {
-            "🎯 Yes"
-        } else {
-            "❌ No"
-        }
-    );
-    println!(
-        "Can Set Tracking: {}",
-        if mount.can_set_tracking_enabled {
-            "✅ Yes"
-        } else {
-            "❌ No"
-        }
-    );
-
-    println!("\n=== Tracking ===");
-    println!("Tracking Modes: {}", mount.tracking_modes.join(", "));
-    println!("Equatorial System: {}", mount.equatorial_system);
-    println!("Alignment Mode: {}", mount.alignment_mode);
-    println!(
-        "Guide Rate RA: {:.2} arcsec/sec",
-        mount.guide_rate_right_ascension_arcsec_per_sec
-    );
-    println!(
-        "Guide Rate Dec: {:.2} arcsec/sec",
-        mount.guide_rate_declination_arcsec_per_sec
-    );
-
-    if !mount.supported_actions.is_empty() {
-        println!("\n=== Supported Actions ===");
-        for action in &mount.supported_actions {
-            println!("  • {action}");
-        }
-    }
-}
-
-fn display_event_statistics(events: &EventHistoryResponse) {
-    println!(
-        "Status: {}, Success: {}",
-        events.status_code, events.success
-    );
-
-    // Show event statistics
-    let counts = events.count_events_by_type();
-    println!("Event type counts:");
-    for (event_type, count) in counts.iter() {
-        println!("  {event_type}: {count}");
-    }
-
-    // Show filter wheel changes
-    let filter_changes = events.get_filterwheel_changes();
-    println!("\nFound {} filter wheel changes", filter_changes.len());
-
-    // Show image saves
-    let image_saves = events.get_image_saves();
-    println!("Found {} image saves", image_saves.len());
-
-    // Show connection events
-    let connections = events.get_connection_events();
-    println!("Found {} connection events", connections.len());
-}
-
-fn display_image_statistics(images: &ImageHistoryResponse) {
-    println!(
-        "Status: {}, Success: {}",
-        images.status_code, images.success
-    );
-
-    // Show session statistics
-    let stats = images.get_session_stats();
-    println!("{stats}");
-
-    // Show image type counts
-    let type_counts = images.count_images_by_type();
-    println!("\nImage type counts:");
-    for (image_type, count) in type_counts.iter() {
-        println!("  {image_type}: {count}");
-    }
-
-    // Show filter counts
-    let filter_counts = images.count_images_by_filter();
-    println!("\nFilter counts:");
-    for (filter, count) in filter_counts.iter() {
-        println!("  {filter}: {count}");
-    }
-
-    // Show light frames by filter
-    let light_frames = images.get_light_frames();
-    if !light_frames.is_empty() {
-        println!("\nLight frames by filter:");
-        let mut filter_lights = std::collections::HashMap::new();
-        for frame in light_frames {
-            *filter_lights.entry(&frame.filter).or_insert(0) += 1;
-        }
-        for (filter, count) in filter_lights.iter() {
-            println!("  {filter}: {count} light frames");
-        }
-    }
-
-    // Show calibration breakdown
-    let calibration = images.get_calibration_frames();
-    println!("\nFound {} calibration frames", calibration.len());
-
-    // Temperature range
-    if !images.response.is_empty() {
-        let temperatures: Vec<f64> = images.response.iter().map(|img| img.temperature).collect();
-        let min_temp = temperatures.iter().fold(f64::INFINITY, |a, &b| a.min(b));
-        let max_temp = temperatures
-            .iter()
-            .fold(f64::NEG_INFINITY, |a, &b| a.max(b));
-        println!("Temperature range: {min_temp:.1}°C to {max_temp:.1}°C");
-    }
-}
-
-fn display_last_images(images: &ImageHistoryResponse, count: usize) {
-    println!("\n=== Last {count} Images ===");
-
-    if images.response.is_empty() {
-        println!("No images available");
-        return;
-    }
-
-    // Get the last N images (images are typically in chronological order)
-    let last_images: Vec<_> = images
-        .response
-        .iter()
-        .enumerate()
-        .rev() // Reverse to get most recent first
-        .take(count)
-        .collect();
-
-    if last_images.is_empty() {
-        println!("No images to display");
-        return;
-    }
-
-    for (index, image) in last_images.iter().rev() {
-        // Reverse again to show in chronological order
-        println!("\nImage Index {index}: ");
-        println!("  Date: {}", image.date);
-        println!("  Type: {}", image.image_type);
-        println!("  Filter: {}", image.filter);
-        println!("  Exposure: {:.1}s", image.exposure_time);
-        println!("  Temperature: {:.1}°C", image.temperature);
-        println!("  Camera: {}", image.camera_name);
-        println!("  Telescope: {}", image.telescope_name);
-        println!("  Gain: {}, Offset: {}", image.gain, image.offset);
-        println!("  Stars: {}, HFR: {:.2}", image.stars, image.hfr);
-        println!(
-            "  Mean: {:.1}, Median: {:.1}, StDev: {:.1}",
-            image.mean, image.median, image.st_dev
-        );
-    }
-}
-
-fn display_last_events(events: &EventHistoryResponse, count: usize) {
-    println!("\n=== Last {count} Events ===");
-
-    if events.response.is_empty() {
-        println!("No events available");
-        return;
-    }
-
-    // Get the last N events (events are typically in chronological order)
-    let last_events: Vec<_> = events
-        .response
-        .iter()
-        .enumerate()
-        .rev() // Reverse to get most recent first
-        .take(count)
-        .collect();
-
-    if last_events.is_empty() {
-        println!("No events to display");
-        return;
-    }
-
-    for (index, event) in last_events.iter().rev() {
-        // Reverse again to show in chronological order
-        println!("\nEvent Index {index}: ");
-        println!("  Time: {}", event.time);
-        println!("  Event: {}", event.event);
-
-        // Display details if available
-        if let Some(ref details) = event.details {
-            match details {
-                EventDetails::FilterWheelChange { new, previous } => {
-                    println!(
-                        "  Details: Filter changed from {} to {}",
-                        previous.name, new.name
-                    );
-                }
-                EventDetails::TargetStart {
-                    target_name,
-                    project_name,
-                    coordinates,
-                    rotation,
-                    ..
-                } => {
-                    println!("  Details: Target started: {}", target_name);
-                    println!("    Project: {}", project_name);
-                    if let Some(s) = coordinates.display() {
-                        println!("    Coordinates: {}", s.replace('\n', " "));
-                    }
-                    println!("    Rotation: {}°", rotation);
-                }
-                EventDetails::WaitStart { wait_end_time } => {
-                    println!("  Details: Waiting until {}", wait_end_time);
-                }
-                EventDetails::AutofocusPointAdded { position, hfr } => {
-                    println!("  Details: Autofocus point — position {position}, HFR {hfr:.3}");
-                }
-                EventDetails::RotatorMoved { from, to } => {
-                    println!(
-                        "  Details: Rotator moved {from:.2}° → {to:.2}° (Δ {:+.2}°)",
-                        to - from
-                    );
-                }
-            }
-        }
-
-        // Display event type with emoji and description
-        let (emoji, description) = get_event_type_info(&event.event);
-        println!("  Type: {emoji} {description}");
-    }
-}
-
-fn get_event_type_info(event_name: &str) -> (&'static str, &'static str) {
-    if is_connection_event(event_name) {
-        return get_connection_event_info(event_name);
-    }
-
-    match event_name {
-        event_types::IMAGE_SAVE => ("📸", "Image captured and saved"),
-        event_types::IMAGE_PREPARED => ("🖼️", "Image prepared"),
-        event_types::API_CAPTURE_FINISHED => ("📷", "API capture finished"),
-        event_types::FILTERWHEEL_CHANGED => ("🔄", "Filter wheel position changed"),
-        event_types::GUIDER_START => ("🎯", "Guiding started"),
-        event_types::GUIDER_STOP => ("🛑", "Guiding stopped"),
-        event_types::GUIDER_DITHER => ("🎯", "Dithering for drizzling"),
-        event_types::SEQUENCE_STARTING => ("▶️", "Sequence starting"),
-        event_types::SEQUENCE_FINISHED => ("🏁", "Sequence finished"),
-        event_types::SEQUENCE_ENTITY_FAILED => ("❌", "Sequence entity failed"),
-        event_types::MOUNT_HOMED => ("🏠", "Mount homed"),
-        event_types::MOUNT_CENTER => ("🎯", "Mount centered"),
-        event_types::AUTOFOCUS_STARTING => ("🔍", "Auto-focus starting"),
-        event_types::AUTOFOCUS_FINISHED => ("✅", "Auto-focus finished"),
-        event_types::AUTOFOCUS_POINT_ADDED => ("📈", "Auto-focus point added"),
-        event_types::ERROR_AF => ("⚠️", "Auto-focus error"),
-        event_types::ERROR_PLATESOLVE => ("⚠️", "Plate-solve error"),
-        event_types::CAMERA_DOWNLOAD_TIMEOUT => ("⏱️", "Camera download timeout"),
-        event_types::TS_TARGETSTART | event_types::TS_NEWTARGETSTART => ("🎯", "Target started"),
-        event_types::TS_WAITSTART => ("⏳", "Sequence waiting"),
-        _ => ("📋", "System event"),
-    }
-}
-
-fn is_connection_event(event_name: &str) -> bool {
-    event_name.contains("CONNECTED") || event_name.contains("DISCONNECTED")
-}
-
-fn get_connection_event_info(event_name: &str) -> (&'static str, &'static str) {
-    if event_name.contains("DISCONNECTED") {
-        ("🔴", "Equipment disconnected")
-    } else if event_name.contains("CONNECTED") {
-        ("🟢", "Equipment connected")
-    } else {
-        ("📋", "Connection event")
-    }
-}
-
-#[cfg(windows)]
-async fn cmd_windows_service(
-    action: WindowsServiceAction,
-    _config_path: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
-    match action {
-        WindowsServiceAction::Install => {
-            println!("Installing Windows service...");
-            windows_service::install_service()?;
-        }
-        WindowsServiceAction::Uninstall => {
-            println!("Uninstalling Windows service...");
-            windows_service::uninstall_service()?;
-        }
-        WindowsServiceAction::Start => {
-            println!("Starting Windows service...");
-            windows_service::start_service()?;
-        }
-        WindowsServiceAction::Stop => {
-            println!("Stopping Windows service...");
-            windows_service::stop_service()?;
-        }
-        WindowsServiceAction::Status => {
-            println!("Checking Windows service status...");
-            windows_service::service_status()?;
-        }
-        WindowsServiceAction::Run => {
-            // This is called by the Windows Service Manager
-            // It should not be called directly by users
-            return windows_service::run_service()
-                .map_err(|e| format!("Service runtime error: {}", e).into());
-        }
-    }
-
     Ok(())
 }

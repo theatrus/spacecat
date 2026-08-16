@@ -1,6 +1,6 @@
 //! Native N.I.N.A. source over the plugin-owned current-user named pipe.
 
-use crate::api::CommandResponse;
+use crate::api_types::CommandResponse;
 use crate::autofocus::AutofocusResponse;
 use crate::camera::CameraInfoResponse;
 use crate::direct::protocol::{DirectMessage, QueryKind, QueryRequest};

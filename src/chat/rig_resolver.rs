@@ -119,19 +119,99 @@ impl RigResolver for StaticRigResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::ApiConfig;
-    use crate::source::AdvancedApiSource;
+    use crate::api_types::CommandResponse;
+    use crate::source::{RigCapabilities, RigCommand, RigSource, RigSourceError, RigSourceKind};
+    use async_trait::async_trait;
     use std::sync::Arc;
 
+    struct TestDirectSource;
+
+    fn unused<T>() -> Result<T, RigSourceError> {
+        Err(RigSourceError::Unavailable {
+            kind: RigSourceKind::NinaDirect,
+            reason: "test source".to_string(),
+        })
+    }
+
+    #[async_trait]
+    impl RigSource for TestDirectSource {
+        fn kind(&self) -> RigSourceKind {
+            RigSourceKind::NinaDirect
+        }
+        fn capabilities(&self) -> RigCapabilities {
+            RigCapabilities::none()
+        }
+        async fn get_event_history(
+            &self,
+        ) -> crate::source::RigSourceResult<crate::events::EventHistoryResponse> {
+            unused()
+        }
+        async fn get_all_image_history(
+            &self,
+        ) -> crate::source::RigSourceResult<crate::images::ImageHistoryResponse> {
+            unused()
+        }
+        async fn get_sequence(
+            &self,
+        ) -> crate::source::RigSourceResult<crate::sequence::SequenceResponse> {
+            unused()
+        }
+        async fn get_thumbnail(
+            &self,
+            _: u32,
+        ) -> crate::source::RigSourceResult<crate::images::ThumbnailResponse> {
+            unused()
+        }
+        async fn get_last_autofocus(
+            &self,
+        ) -> crate::source::RigSourceResult<crate::autofocus::AutofocusResponse> {
+            unused()
+        }
+        async fn get_mount_info(
+            &self,
+        ) -> crate::source::RigSourceResult<crate::mount::MountInfoResponse> {
+            unused()
+        }
+        async fn get_camera_info(
+            &self,
+        ) -> crate::source::RigSourceResult<crate::camera::CameraInfoResponse> {
+            unused()
+        }
+        async fn get_filterwheel_info(
+            &self,
+        ) -> crate::source::RigSourceResult<crate::filterwheel::FilterWheelInfoResponse> {
+            unused()
+        }
+        async fn get_guider_info(
+            &self,
+        ) -> crate::source::RigSourceResult<crate::guider::GuiderInfoResponse> {
+            unused()
+        }
+        async fn get_guider_graph(
+            &self,
+        ) -> crate::source::RigSourceResult<crate::guider::GuiderGraphResponse> {
+            unused()
+        }
+        async fn get_rotator_info(
+            &self,
+        ) -> crate::source::RigSourceResult<crate::rotator::RotatorInfoResponse> {
+            unused()
+        }
+        async fn get_focuser_info(
+            &self,
+        ) -> crate::source::RigSourceResult<crate::focuser::FocuserInfoResponse> {
+            unused()
+        }
+        async fn execute_command(
+            &self,
+            _: RigCommand,
+        ) -> crate::source::RigSourceResult<CommandResponse> {
+            unused()
+        }
+    }
+
     fn resolver() -> StaticRigResolver {
-        let source: SharedRigSource = Arc::new(
-            AdvancedApiSource::new(ApiConfig {
-                base_url: "http://127.0.0.1:1888".to_string(),
-                timeout_seconds: 5,
-                retry_attempts: 0,
-            })
-            .unwrap(),
-        );
+        let source: SharedRigSource = Arc::new(TestDirectSource);
         StaticRigResolver {
             rig_sources: HashMap::from([("c925".to_string(), source)]),
             channel_to_telescope: HashMap::from([(42, "c925".to_string())]),

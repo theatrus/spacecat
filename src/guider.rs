@@ -64,7 +64,7 @@ pub struct GuiderGraphResponse {
 }
 
 /// The guide graph data behind NINA's guiding chart, as returned by
-/// `/equipment/guider/graph`: the last n guide steps plus RMS statistics
+/// Direct guider history: the last n guide steps plus RMS statistics.
 /// and the axis ranges NINA itself uses to draw the graph.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -162,7 +162,7 @@ pub struct GuideGraphStep {
     #[serde(rename = "DECDuration", default, deserialize_with = "de_f64_tolerant")]
     pub dec_duration: f64,
     /// NINA's underlying value is a floating-point marker (`NaN` for an
-    /// ordinary sample and `0.01` for a dither). Advanced API installations
+    /// ordinary sample and `0.01` for a dither). Older Direct payloads
     /// have emitted both JSON strings and numbers, so preserve either form.
     #[serde(default)]
     pub dither: serde_json::Value,
@@ -203,7 +203,7 @@ impl GuideStepsHistory {
     }
 
     /// True when this step marks a dither (NINA sets `Dither` to a
-    /// finite non-zero number; older API payloads also use `"1"`).
+    /// finite non-zero number; older Direct payloads also use `"1"`).
     pub fn is_dither_step(step: &GuideGraphStep) -> bool {
         match &step.dither {
             serde_json::Value::Number(value) => value.as_f64().is_some_and(|value| value != 0.0),

@@ -55,10 +55,10 @@ body:
   - type: textarea
     id: config
     attributes:
-      label: Configuration
-      description: Your config.json (remove sensitive information like Discord webhook URLs)
+      label: Diagnostics and configuration
+      description: Relevant plugin diagnostics, Hub/runtime configuration, or Direct connection status. Remove every secret first.
       render: json
-      placeholder: Paste your config.json here (remove webhook URLs!)
+      placeholder: Paste relevant diagnostics or configuration with pairing tokens, webhook URLs, and chat credentials removed
 
   - type: textarea
     id: logs

@@ -1,6 +1,6 @@
 //! Shared serde deserializers for NINA's "unknown" payload shapes.
 //!
-//! NINA's Advanced API has two recurring ways of saying "this value isn't
+//! N.I.N.A. payloads have two recurring ways of saying "this value isn't
 //! available":
 //!
 //!   * the field comes back as an empty JSON array `[]` (e.g. filter
@@ -69,7 +69,7 @@ where
                 return i32::try_from(value).map_err(D::Error::custom);
             }
             // Native N.I.N.A. autofocus reports model focus positions as
-            // doubles (`4068.0`) while the Advanced API emits integers.
+            // doubles (`4068.0`) while older payloads emit integers.
             let value = n
                 .as_f64()
                 .filter(|value| value.is_finite() && value.fract() == 0.0)

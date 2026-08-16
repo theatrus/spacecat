@@ -22,40 +22,9 @@ mod tests {
         assert!(output.status.success());
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(stdout.contains("Chatstronomy"));
-        assert!(stdout.contains("chat-updater"));
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn test_windows_service_help() {
-        let output = chatstronomy()
-            .args(["windows-service", "--help"])
-            .output()
-            .expect("Failed to execute command");
-
-        // Should succeed and show Windows service commands
-        assert!(output.status.success());
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(stdout.contains("install"));
-        assert!(stdout.contains("uninstall"));
-        assert!(stdout.contains("start"));
-        assert!(stdout.contains("stop"));
-        assert!(stdout.contains("status"));
-    }
-
-    #[cfg(not(windows))]
-    #[test]
-    fn test_windows_service_unavailable() {
-        let output = chatstronomy()
-            .arg("--help")
-            .output()
-            .expect("Failed to execute command");
-
-        // Should succeed but Windows service commands should not be available
-        assert!(output.status.success());
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        // On non-Windows platforms, windows-service command should not appear
-        assert!(!stdout.contains("windows-service"));
+        assert!(stdout.contains("plugin-runtime"));
+        #[cfg(feature = "hub")]
+        assert!(stdout.contains("hub"));
     }
 
     #[test]
@@ -68,11 +37,8 @@ mod tests {
         assert!(output.status.success());
         let stdout = String::from_utf8_lossy(&output.stdout);
 
-        // Basic commands should always be available
-        assert!(stdout.contains("sequence"));
-        assert!(stdout.contains("events"));
-        assert!(stdout.contains("images"));
-        assert!(stdout.contains("chat-updater"));
-        assert!(stdout.contains("mount-info"));
+        assert!(stdout.contains("plugin-runtime"));
+        #[cfg(feature = "hub")]
+        assert!(stdout.contains("hub"));
     }
 }

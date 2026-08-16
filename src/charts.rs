@@ -1,10 +1,10 @@
 //! Renders NINA graph data as PNG charts for chat notifications:
 //!
-//! * the guide graph (`/equipment/guider/graph`) in the style of the
+//! * the Direct guide history graph in the style of the
 //!   PHD2/NINA guiding chart — RA/Dec error traces on the left axis,
 //!   signed correction-pulse bars on the right axis, dither markers,
 //!   and an RMS summary in the title;
-//! * the autofocus run (`/equipment/focuser/last-af`) — measured HFR
+//! * the Direct autofocus run — measured HFR
 //!   points with error bars plus initial/calculated position markers.
 //!
 //! Text uses an embedded Liberation Sans (SIL OFL, see

@@ -8,10 +8,6 @@ use thiserror::Error;
 /// Main error type for Chatstronomy operations
 #[derive(Error, Debug)]
 pub enum ChatstronomyError {
-    /// API-related errors
-    #[error("API error: {0}")]
-    Api(#[from] crate::api::ApiError),
-
     /// Observatory data-source errors
     #[error("Rig source error: {0}")]
     Source(#[from] crate::source::RigSourceError),
@@ -79,7 +75,7 @@ pub enum ChatError {
     },
 }
 
-/// Service wrapper and Windows service errors
+/// Runtime service-wrapper errors
 #[derive(Error, Debug)]
 pub enum ServiceError {
     /// Service initialization failed
@@ -93,11 +89,6 @@ pub enum ServiceError {
     /// Service shutdown error
     #[error("Service shutdown error: {reason}")]
     Shutdown { reason: String },
-
-    /// Windows service specific errors
-    #[cfg(windows)]
-    #[error("Windows service error: {0}")]
-    Windows(#[from] windows_service::Error),
 
     /// Tokio runtime errors
     #[error("Tokio runtime error: {0}")]

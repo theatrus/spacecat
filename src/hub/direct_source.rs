@@ -1,12 +1,12 @@
 //! [`RigSource`] over a live Direct connection.
 //!
 //! Every read becomes a query round trip to the connected rig; the payload
-//! is the JSON of the same response types the Advanced API client returns,
+//! is JSON for Chatstronomy's shared response types,
 //! so everything downstream (chat updater, bot commands, charts) works
 //! unchanged.
 
 use super::direct_server::{QUERY_TIMEOUT, RigConnection};
-use crate::api::CommandResponse;
+use crate::api_types::CommandResponse;
 use crate::autofocus::AutofocusResponse;
 use crate::camera::CameraInfoResponse;
 use crate::direct::protocol::QueryKind;

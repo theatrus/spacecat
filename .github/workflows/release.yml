@@ -1,297 +1,114 @@
 name: Release
 
-permissions: write-all
-
 on:
   push:
-    tags:
-      - 'v*.*.*'
-  # A dry run that builds and SIGNS the Windows artifacts without cutting a
-  # release. Signing is the part that cannot be reasoned about from the file --
-  # the federated credential subject, the environment binding and the five
-  # minute OIDC assertion only prove themselves by running -- and a tag is a
-  # poor place to discover any of them is wrong.
+    tags: ['v*']
   workflow_dispatch:
     inputs:
       version:
-        description: Optional version override (no leading v); must match Cargo.toml
+        description: Cargo package version to build
         required: false
-        default: ''
+
+permissions:
+  contents: write
+  id-token: write
 
 env:
   CARGO_TERM_COLOR: always
-  # Embedded in the binary by build.rs
   CHATSTRONOMY_GIT_SHA: ${{ github.sha }}
 
 jobs:
   create-release:
-    name: Create Release
-    # Never on a dispatch: it would publish a release named after a branch.
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
-    outputs:
-      release_id: ${{ steps.create_release.outputs.id }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
-        
-      - name: Create Release
-        id: create_release
-        uses: softprops/action-gh-release@v3
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: softprops/action-gh-release@v3
         with:
-          tag_name: ${{ github.ref_name }}
-          name: Chatstronomy ${{ github.ref_name }}
-          body: |
-            ## Chatstronomy Release ${{ github.ref_name }}
-            
-            ### Downloads
-            - **Linux x86_64**: chatstronomy-linux-x86_64
-            - **Linux aarch64**: chatstronomy-linux-aarch64
-            - **Windows x64**: chatstronomy-windows-x64.exe (native build)
-            - **N.I.N.A. plugin runtime**: chatstronomy-plugin-runtime-windows-x64.exe (rig-only build)
-            - **Plugin contract**: chatstronomy-runtime-manifest.json plus versioned protocol schemas and fixtures
-            - **Windows Installer**: Chatstronomy-${{ github.ref_name }}-x64.msi (includes service support)
-            - **RPM Package**: chatstronomy-*.rpm (Fedora/RHEL/CentOS with systemd service)
+          generate_release_notes: true
 
-            ### RPM Installation (Fedora/RHEL/CentOS)
-            
-            ```bash
-            # Download and install the RPM
-            wget https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/chatstronomy-*.rpm
-            sudo dnf install ./chatstronomy-*.rpm
-            
-            # Configure the service
-            sudo vim /etc/chatstronomy/config.json
-            
-            # Enable and start the service
-            sudo systemctl enable --now chatstronomy.service
-            ```
-            
-            See [CLAUDE.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/CLAUDE.md) for detailed documentation.
-          draft: false
-          prerelease: false
-
-  build-linux-x64:
-    name: Build Linux x86_64
-    needs: create-release
-    runs-on: ubuntu-latest
+  linux:
+    name: Linux ${{ matrix.arch }}
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: x64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo dependencies
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache Rust build
         uses: actions/cache@v6
         with:
           path: |
-            ~/.cargo/bin/
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-cargo-x64-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-x64-
-            ${{ runner.os }}-cargo-
-
-      - name: Build release binary
-        run: cargo build --release --verbose
-
-      - name: Strip binary
-        run: strip target/release/chatstronomy
-
-      - name: Prepare release asset
-        run: cp target/release/chatstronomy chatstronomy-linux-x86_64
-          
+          key: linux-${{ matrix.arch }}-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
+          restore-keys: linux-${{ matrix.arch }}-cargo-
+      - run: cargo test --all-features --locked
+      - run: cargo build --release --all-features --locked
+      - name: Package
+        run: tar -czf chatstronomy-linux-${{ matrix.arch }}.tar.gz -C target/release chatstronomy
       - name: Upload release asset
+        if: github.event_name == 'push'
         uses: softprops/action-gh-release@v3
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ github.ref_name }}
-          files: ./chatstronomy-linux-x86_64
-
-      - name: Get file info
-        run: |
-          ls -la chatstronomy-linux-x86_64
-          file chatstronomy-linux-x86_64
-
-  build-linux-arm64:
-    name: Build Linux ARM64
-    needs: create-release
-    runs-on: ubuntu-24.04-arm
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo dependencies
-        uses: actions/cache@v6
+          files: chatstronomy-linux-${{ matrix.arch }}.tar.gz
+      - name: Upload dispatch artifact
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v7
         with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: arm64-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
-          restore-keys: |
-            arm64-cargo-
+          name: chatstronomy-linux-${{ matrix.arch }}
+          path: chatstronomy-linux-${{ matrix.arch }}.tar.gz
 
-      - name: Build release binary
-        run: cargo build --release --verbose
-
-      - name: Strip binary
-        run: strip target/release/chatstronomy
-
-      - name: Prepare release asset
-        run: cp target/release/chatstronomy chatstronomy-linux-aarch64
-          
-      - name: Upload release asset
-        uses: softprops/action-gh-release@v3
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref_name }}
-          files: ./chatstronomy-linux-aarch64
-
-      - name: Get file info
-        run: |
-          ls -la chatstronomy-linux-aarch64
-          file chatstronomy-linux-aarch64
-
-  test:
-    name: Test Suite
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo dependencies
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-test-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-test-
-            ${{ runner.os }}-cargo-
-
-      - name: Run tests
-        run: cargo test --verbose
-
-      - name: Run clippy
-        run: cargo clippy -- -D warnings
-
-      - name: Check formatting
-        run: cargo fmt --check
-
-  build-windows:
-    name: Build Windows Binary and MSI Installer
-    needs: create-release
-    # A skipped `needs` skips the dependent job, so say plainly that a dispatch
-    # should still run: build and sign, just do not publish.
-    if: always() && (needs.create-release.result == 'success' || github.event_name == 'workflow_dispatch')
+  windows:
+    name: Signed Windows and plugin runtimes
     runs-on: windows-latest
-    # The Entra federated credential is bound to
-    # `repo:theatrus/chatstronomy:environment:release`, so this job must run in
-    # that environment or the OIDC token subject will not match and azure/login
-    # fails. Classic federated credentials require an exact subject match.
     environment: release
     env:
-      # Signing is reserved for a pushed tag or a deliberate manual run, so
-      # ordinary builds validate packaging without consuming signing quota. The
-      # variable check keeps forks building (unsigned) rather than failing:
-      # a fork has neither the variables nor the federated credential.
       SIGN_WINDOWS: >-
-        ${{ ((github.event_name == 'push' && github.ref_type == 'tag')
-        || github.event_name == 'workflow_dispatch')
-        && vars.AZURE_CLIENT_ID != ''
-        && 'true' || 'false' }}
+        ${{ vars.AZURE_CLIENT_ID != '' && 'true' || 'false' }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo dependencies
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache Rust build
         uses: actions/cache@v6
         with:
           path: |
-            ~/.cargo/bin/
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-cargo-msi-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-msi-
-            ${{ runner.os }}-cargo-
-
-      - name: Resolve and validate version
-        id: get_version
+          key: windows-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
+          restore-keys: windows-cargo-
+      - name: Resolve version
         shell: pwsh
         env:
           REQUESTED_VERSION: ${{ inputs.version }}
         run: |
           $metadata = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
-          $package = $metadata.packages | Where-Object name -eq 'chatstronomy' | Select-Object -First 1
-          if ($null -eq $package) { throw 'cargo metadata did not report the chatstronomy package' }
-
-          $packageVersion = [string] $package.version
-          $version = if ($env:GITHUB_EVENT_NAME -eq 'push') {
-            $env:GITHUB_REF_NAME.TrimStart('v')
-          } elseif (-not [string]::IsNullOrWhiteSpace($env:REQUESTED_VERSION)) {
-            $env:REQUESTED_VERSION
-          } else {
-            $packageVersion
-          }
-          if ($version -notmatch '^\d+\.\d+\.\d+$') {
-            throw "Expected a three-part version. Got: $version"
-          }
-          if ($version -ne $packageVersion) {
-            throw "Release version $version does not match Cargo.toml version $packageVersion"
-          }
+          $packageVersion = [string]($metadata.packages | Where-Object name -eq 'chatstronomy' | Select-Object -First 1).version
+          $version = if ($env:GITHUB_EVENT_NAME -eq 'push') { $env:GITHUB_REF_NAME.TrimStart('v') } elseif ($env:REQUESTED_VERSION) { $env:REQUESTED_VERSION } else { $packageVersion }
+          if ($version -ne $packageVersion) { throw "Release $version does not match Cargo.toml $packageVersion" }
           "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-
-      - name: Require signing for canonical Windows releases
+      - name: Require signing for canonical releases
         if: github.repository == 'theatrus/chatstronomy' && env.SIGN_WINDOWS != 'true'
         shell: pwsh
-        run: throw 'Official Chatstronomy Windows releases require the Azure signing configuration.'
-
-      - name: Build full Windows binary
-        run: cargo build --release --locked --verbose
-        env:
-          RUST_BACKTRACE: 1
-
-      # Sign the full build before it is copied to the standalone release asset.
-      # The signed copy is restored later as the MSI payload. azure/login sits
-      # immediately before signing because its OIDC assertion only lives for
-      # five minutes and the Rust build above can take longer than that.
-      - name: Authenticate to Azure (for full binary signing)
+        run: throw 'Official Windows releases require Azure trusted signing.'
+      - name: Build full Hub runtime
+        run: cargo build --release --all-features --locked
+      - name: Authenticate for full runtime signing
         if: env.SIGN_WINDOWS == 'true'
         uses: azure/login@v2
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Sign the full Windows binary
+      - name: Sign full runtime
         if: env.SIGN_WINDOWS == 'true'
         uses: azure/trusted-signing-action@v0
         with:
@@ -302,28 +119,18 @@ jobs:
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
-
-      - name: Preserve full Windows binary
-        shell: pwsh
+      - shell: pwsh
         run: Copy-Item target/release/chatstronomy.exe chatstronomy-windows-x64.exe
-
-      - name: Build N.I.N.A. plugin runtime
-        shell: pwsh
-        run: cargo build --release --locked --no-default-features --verbose
-
-      # The plugin runtime is a separate, lean feature build. It overwrites the
-      # target path used by the full build, so it needs its own signing pass.
-      # Copying it first and signing only one source path would leave either the
-      # plugin runtime or the full/MSI runtime unsigned.
-      - name: Authenticate to Azure (for plugin runtime signing)
+      - name: Build lean plugin runtime
+        run: cargo build --release --no-default-features --locked
+      - name: Authenticate for plugin runtime signing
         if: env.SIGN_WINDOWS == 'true'
         uses: azure/login@v2
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Sign the N.I.N.A. plugin runtime
+      - name: Sign plugin runtime
         if: env.SIGN_WINDOWS == 'true'
         uses: azure/trusted-signing-action@v0
         with:
@@ -334,159 +141,39 @@ jobs:
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
-
-      - name: Preserve N.I.N.A. plugin runtime
-        shell: pwsh
-        run: Copy-Item target/release/chatstronomy.exe chatstronomy-plugin-runtime-windows-x64.exe
-
-      - name: Verify signed runtime flavors
-        if: env.SIGN_WINDOWS == 'true'
-        shell: pwsh
+      - shell: pwsh
         run: |
-          foreach ($path in @(
-            'chatstronomy-windows-x64.exe',
-            'chatstronomy-plugin-runtime-windows-x64.exe')) {
-            $signature = Get-AuthenticodeSignature -LiteralPath $path
-            if ($signature.Status -ne 'Valid') {
-              throw "$path signature is $($signature.Status)"
-            }
-            Write-Output "OK: $path -> $($signature.SignerCertificate.Subject)"
-          }
-
-      - name: Package versioned plugin contracts
-        shell: pwsh
-        run: Compress-Archive -Path contracts -DestinationPath chatstronomy-plugin-contracts-v1.zip
-
-      - name: Generate runtime release manifest
-        shell: pwsh
-        run: |
+          Copy-Item target/release/chatstronomy.exe chatstronomy-plugin-runtime-windows-x64.exe
+          Compress-Archive -Path contracts -DestinationPath chatstronomy-plugin-contracts-v1.zip
           ./tools/New-ChatstronomyRuntimeManifest.ps1 `
             -PluginRuntimePath ./chatstronomy-plugin-runtime-windows-x64.exe `
             -FullRuntimePath ./chatstronomy-windows-x64.exe `
             -PluginContractsPath ./chatstronomy-plugin-contracts-v1.zip `
             -Tag "v$env:VERSION" `
             -Commit '${{ github.sha }}'
-          $checksum = (Get-FileHash -LiteralPath ./chatstronomy-runtime-manifest.json -Algorithm SHA256).Hash.ToLowerInvariant()
-          [IO.File]::WriteAllText(
-            'chatstronomy-runtime-manifest.json.sha256',
-            "$checksum  chatstronomy-runtime-manifest.json`n",
-            [Text.UTF8Encoding]::new($false))
-
-      - name: Upload Windows and plugin assets to release
-        if: github.event_name == 'push'
-        uses: softprops/action-gh-release@v3
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref_name }}
-          files: |
-            ./chatstronomy-windows-x64.exe
-            ./chatstronomy-plugin-runtime-windows-x64.exe
-            ./chatstronomy-plugin-contracts-v1.zip
-            ./chatstronomy-runtime-manifest.json
-            ./chatstronomy-runtime-manifest.json.sha256
-
-      - name: Restore full binary for MSI packaging
-        shell: pwsh
-        run: Copy-Item chatstronomy-windows-x64.exe target/release/chatstronomy.exe -Force
-
-      - name: Install WiX Toolset
-        run: |
-          # Download and install WiX Toolset v3.14
-          $wixUrl = "https://github.com/wixtoolset/wix3/releases/download/wix314rtm/wix314.exe"
-          $wixInstaller = "$env:TEMP\wix314.exe"
-          Invoke-WebRequest -Uri $wixUrl -OutFile $wixInstaller
-          Start-Process -FilePath $wixInstaller -ArgumentList "/install", "/quiet", "/norestart" -Wait
-          # Add WiX to PATH
-          $env:PATH += ";${env:ProgramFiles(x86)}\WiX Toolset v3.14\bin"
-          echo "${env:ProgramFiles(x86)}\WiX Toolset v3.14\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-
-      - name: Build MSI package
-        run: |
-          Set-Location installer
-          .\build-msi.ps1 -Version $env:VERSION -SkipBuild
-
-      # A second login: MSI packaging sits between this and the one above, and
-      # five minutes is not much of a budget.
-      - name: Authenticate to Azure (for MSI signing)
-        if: env.SIGN_WINDOWS == 'true'
-        uses: azure/login@v2
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Sign the MSI
-        if: env.SIGN_WINDOWS == 'true'
-        uses: azure/trusted-signing-action@v0
-        with:
-          endpoint: ${{ vars.SIGNING_ENDPOINT }}
-          trusted-signing-account-name: ${{ vars.SIGNING_ACCOUNT }}
-          certificate-profile-name: ${{ vars.SIGNING_PROFILE }}
-          files: ${{ github.workspace }}\installer\output\Chatstronomy-${{ env.VERSION }}-x64.msi
-          file-digest: SHA256
-          timestamp-rfc3161: http://timestamp.acs.microsoft.com
-          timestamp-digest: SHA256
-
-      # Checks the payload, not just the wrapper. A signed installer carrying an
-      # unsigned program is the failure mode worth catching here: it verifies
-      # perfectly at download and then shows Unknown Publisher on first run.
-      # `msiexec /a` does an administrative extract, which restores real
-      # filenames -- unpacking with 7z gives mangled ones and the check silently
-      # matches nothing.
-      - name: Verify the MSI and the program inside it
+      - name: Verify signatures
         if: env.SIGN_WINDOWS == 'true'
         shell: pwsh
         run: |
-          $msi = "$env:GITHUB_WORKSPACE\installer\output\Chatstronomy-$env:VERSION-x64.msi"
-          $sig = Get-AuthenticodeSignature -LiteralPath $msi
-          if ($sig.Status -ne 'Valid') { throw "MSI signature is $($sig.Status)" }
-          Write-Output "MSI: $($sig.SignerCertificate.Subject)"
-
-          $extract = Join-Path $env:RUNNER_TEMP 'msi-extract'
-          New-Item -ItemType Directory -Force -Path $extract | Out-Null
-          $p = Start-Process msiexec -ArgumentList @('/a', "`"$msi`"", '/qn', "TARGETDIR=`"$extract`"") -Wait -PassThru
-          if ($p.ExitCode -ne 0) { throw "msiexec /a failed with $($p.ExitCode)" }
-
-          $inner = Get-ChildItem -LiteralPath $extract -Recurse -Filter 'chatstronomy.exe'
-          if ($inner.Count -lt 1) { throw 'no chatstronomy.exe found inside the MSI' }
-          foreach ($f in $inner) {
-            $s = Get-AuthenticodeSignature -LiteralPath $f.FullName
-            if ($s.Status -ne 'Valid') { throw "$($f.Name) inside the MSI is $($s.Status)" }
-            Write-Output "payload OK: $($f.Name) -> $($s.SignerCertificate.Subject)"
+          foreach ($path in @('chatstronomy-windows-x64.exe','chatstronomy-plugin-runtime-windows-x64.exe')) {
+            if ((Get-AuthenticodeSignature -LiteralPath $path).Status -ne 'Valid') { throw "$path is not signed" }
           }
-
-      - name: Upload MSI to release
+      - name: Upload release assets
         if: github.event_name == 'push'
         uses: softprops/action-gh-release@v3
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ github.ref_name }}
-          files: ./installer/output/Chatstronomy-${{ steps.get_version.outputs.version }}-x64.msi
-
-      # A dispatch produces no release, so keep the signed artifacts where they
-      # can be downloaded and inspected -- otherwise the dry run proves the
-      # build succeeded and leaves nothing to verify by hand.
-      - name: Upload signed artifacts for inspection
+          files: |
+            chatstronomy-windows-x64.exe
+            chatstronomy-plugin-runtime-windows-x64.exe
+            chatstronomy-plugin-contracts-v1.zip
+            chatstronomy-runtime-manifest.json
+      - name: Upload dispatch artifacts
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v7
         with:
-          name: signed-windows-${{ steps.get_version.outputs.version }}
+          name: signed-windows-${{ env.VERSION }}
           path: |
             chatstronomy-windows-x64.exe
             chatstronomy-plugin-runtime-windows-x64.exe
             chatstronomy-plugin-contracts-v1.zip
             chatstronomy-runtime-manifest.json
-            chatstronomy-runtime-manifest.json.sha256
-            installer/output/*.msi
-
-      - name: Upload MSI as artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: windows-installer
-          path: ./installer/output/*.msi
-
-  # RPMs are owned by rpm.yml, which generates the vendored source archive,
-  # installs BuildRequires from the spec, smoke-tests the installed package,
-  # and attaches the binary RPM to tagged releases.

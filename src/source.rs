@@ -1,15 +1,12 @@
 //! Observatory data-source abstraction.
 //!
-//! Native [`RigSourceKind::NinaDirect`] is the supported Chatstronomy N.I.N.A.
-//! plugin transport. Deprecated [`RigSourceKind::AdvancedApi`] compatibility
-//! keeps existing standalone and plugin deployments operational while they
-//! migrate. Consumers such as the chat updater and Discord command handlers
-//! depend on [`RigSource`] rather than either transport.
+//! Native [`RigSourceKind::NinaDirect`] is the Chatstronomy N.I.N.A. plugin
+//! transport. Consumers such as the chat updater and Discord command handlers
+//! depend on [`RigSource`] rather than a particular Direct connection.
 
-use crate::api::{ApiError, ChatstronomyApiClient, CommandResponse};
+use crate::api_types::CommandResponse;
 use crate::autofocus::AutofocusResponse;
 use crate::camera::CameraInfoResponse;
-use crate::config::ApiConfig;
 use crate::events::EventHistoryResponse;
 use crate::filterwheel::FilterWheelInfoResponse;
 use crate::focuser::FocuserInfoResponse;
@@ -23,17 +20,10 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use thiserror::Error;
 
-pub(crate) const ADVANCED_API_DEPRECATION_NOTICE: &str = concat!(
-    "Advanced API mode is deprecated and retained only for existing installations. ",
-    "Migrate this rig to the Chatstronomy N.I.N.A. plugin's native Direct mode."
-);
-
 /// How a rig supplies N.I.N.A. data to Chatstronomy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RigSourceKind {
-    /// Deprecated compatibility for polling the separately installed Advanced API plugin.
-    AdvancedApi,
     /// Receive events and execute commands through the Chatstronomy N.I.N.A. plugin.
     NinaDirect,
 }
@@ -69,7 +59,7 @@ impl RigCapabilities {
         }
     }
 
-    pub const fn advanced_api() -> Self {
+    pub const fn all() -> Self {
         Self {
             event_history: true,
             image_history: true,
@@ -85,9 +75,6 @@ impl RigCapabilities {
 
 #[derive(Debug, Error)]
 pub enum RigSourceError {
-    #[error("Advanced API error: {0}")]
-    AdvancedApi(#[from] ApiError),
-
     #[error("{kind:?} source does not support {capability}")]
     Unsupported {
         kind: RigSourceKind,
@@ -103,9 +90,8 @@ pub type SharedRigSource = Arc<dyn RigSource>;
 
 /// Closed, transport-neutral write surface exposed to chat commands.
 ///
-/// Advanced API sources translate these operations to their legacy HTTP
-/// routes. Direct sources send the typed value to the N.I.N.A. plugin, which
-/// never needs to parse or authorize arbitrary endpoint strings.
+/// Direct sources send this typed value to the N.I.N.A. plugin, which never
+/// needs to parse or authorize arbitrary endpoint strings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RigCommand {
@@ -122,65 +108,6 @@ pub enum RigCommand {
     AbortExposure,
     StopSequence,
     StartSequence { skip_validation: bool },
-}
-
-impl RigCommand {
-    fn advanced_api_request(&self) -> (&'static str, Vec<(&'static str, String)>) {
-        match self {
-            Self::UnparkMount => ("/equipment/mount/unpark", Vec::new()),
-            Self::HomeMount => ("/equipment/mount/home", Vec::new()),
-            Self::ChangeFilter { filter_id } => (
-                "/equipment/filterwheel/change-filter",
-                vec![("filterId", filter_id.to_string())],
-            ),
-            Self::StartGuiding { calibrate } => (
-                "/equipment/guider/start",
-                vec![("calibrate", calibrate.to_string())],
-            ),
-            Self::StopGuiding => ("/equipment/guider/stop", Vec::new()),
-            Self::CoolCamera {
-                temperature,
-                minutes,
-            } => (
-                "/equipment/camera/cool",
-                vec![
-                    ("temperature", temperature.to_string()),
-                    ("minutes", minutes.to_string()),
-                ],
-            ),
-            Self::WarmCamera { minutes } => (
-                "/equipment/camera/warm",
-                vec![("minutes", minutes.to_string())],
-            ),
-            Self::StartAutofocus => (
-                "/equipment/focuser/auto-focus",
-                vec![("cancel", "false".to_string())],
-            ),
-            Self::CancelAutofocus => (
-                "/equipment/focuser/auto-focus",
-                vec![("cancel", "true".to_string())],
-            ),
-            Self::ParkMount => ("/equipment/mount/park", Vec::new()),
-            Self::AbortExposure => ("/equipment/camera/abort-exposure", Vec::new()),
-            Self::StopSequence => ("/sequence/stop", Vec::new()),
-            Self::StartSequence { skip_validation } => (
-                "/sequence/start",
-                vec![("skipValidation", skip_validation.to_string())],
-            ),
-        }
-    }
-
-    pub async fn execute_with_advanced_api(
-        &self,
-        client: &ChatstronomyApiClient,
-    ) -> Result<CommandResponse, ApiError> {
-        let (endpoint, params) = self.advanced_api_request();
-        let borrowed: Vec<(&str, &str)> = params
-            .iter()
-            .map(|(key, value)| (*key, value.as_str()))
-            .collect();
-        client.execute_command(endpoint, &borrowed).await
-    }
 }
 
 /// Source-neutral read and command surface used by Chatstronomy's runtime.
@@ -208,114 +135,12 @@ pub trait RigSource: Send + Sync {
     async fn execute_command(&self, command: RigCommand) -> RigSourceResult<CommandResponse>;
 }
 
-/// Existing Advanced API behavior exposed through [`RigSource`].
-#[derive(Debug, Clone)]
-pub struct AdvancedApiSource {
-    client: ChatstronomyApiClient,
-}
-
-impl AdvancedApiSource {
-    pub fn new(config: ApiConfig) -> Result<Self, ApiError> {
-        Ok(Self {
-            client: ChatstronomyApiClient::new(config)?,
-        })
-    }
-
-    pub fn from_client(client: ChatstronomyApiClient) -> Self {
-        Self { client }
-    }
-
-    pub fn client(&self) -> &ChatstronomyApiClient {
-        &self.client
-    }
-}
-
-#[async_trait]
-impl RigSource for AdvancedApiSource {
-    fn kind(&self) -> RigSourceKind {
-        RigSourceKind::AdvancedApi
-    }
-
-    fn capabilities(&self) -> RigCapabilities {
-        RigCapabilities::advanced_api()
-    }
-
-    async fn get_event_history(&self) -> RigSourceResult<EventHistoryResponse> {
-        Ok(self.client.get_event_history().await?)
-    }
-
-    async fn get_all_image_history(&self) -> RigSourceResult<ImageHistoryResponse> {
-        Ok(self.client.get_all_image_history().await?)
-    }
-
-    async fn get_sequence(&self) -> RigSourceResult<SequenceResponse> {
-        Ok(self.client.get_sequence().await?)
-    }
-
-    async fn get_thumbnail(&self, index: u32) -> RigSourceResult<ThumbnailResponse> {
-        Ok(self.client.get_thumbnail(index).await?)
-    }
-
-    async fn get_last_autofocus(&self) -> RigSourceResult<AutofocusResponse> {
-        Ok(self.client.get_last_autofocus().await?)
-    }
-
-    async fn get_mount_info(&self) -> RigSourceResult<MountInfoResponse> {
-        Ok(self.client.get_mount_info().await?)
-    }
-
-    async fn get_camera_info(&self) -> RigSourceResult<CameraInfoResponse> {
-        Ok(self.client.get_camera_info().await?)
-    }
-
-    async fn get_filterwheel_info(&self) -> RigSourceResult<FilterWheelInfoResponse> {
-        Ok(self.client.get_filterwheel_info().await?)
-    }
-
-    async fn get_guider_info(&self) -> RigSourceResult<GuiderInfoResponse> {
-        Ok(self.client.get_guider_info().await?)
-    }
-
-    async fn get_guider_graph(&self) -> RigSourceResult<GuiderGraphResponse> {
-        Ok(self.client.get_guider_graph().await?)
-    }
-
-    async fn get_rotator_info(&self) -> RigSourceResult<RotatorInfoResponse> {
-        Ok(self.client.get_rotator_info().await?)
-    }
-
-    async fn get_focuser_info(&self) -> RigSourceResult<FocuserInfoResponse> {
-        Ok(self.client.get_focuser_info().await?)
-    }
-
-    async fn execute_command(&self, command: RigCommand) -> RigSourceResult<CommandResponse> {
-        Ok(command.execute_with_advanced_api(&self.client).await?)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn advanced_api_source_advertises_existing_features() {
-        let source = AdvancedApiSource::new(ApiConfig {
-            base_url: "http://127.0.0.1:1888".to_string(),
-            timeout_seconds: 30,
-            retry_attempts: 3,
-        })
-        .unwrap();
-
-        assert_eq!(source.kind(), RigSourceKind::AdvancedApi);
-        assert_eq!(source.capabilities(), RigCapabilities::advanced_api());
-    }
-
-    #[test]
     fn source_kind_has_stable_wire_names() {
-        assert_eq!(
-            serde_json::to_string(&RigSourceKind::AdvancedApi).unwrap(),
-            r#""advanced_api""#
-        );
         assert_eq!(
             serde_json::to_string(&RigSourceKind::NinaDirect).unwrap(),
             r#""nina_direct""#

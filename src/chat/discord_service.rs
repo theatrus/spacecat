@@ -48,6 +48,25 @@ impl DiscordChatService {
         }
         embed
     }
+
+    fn with_first_image<'a>(
+        mut embed: Embed,
+        filenames: impl IntoIterator<Item = &'a str>,
+    ) -> Embed {
+        if let Some(filename) = filenames.into_iter().find(|filename| {
+            matches!(
+                filename
+                    .rsplit('.')
+                    .next()
+                    .map(str::to_ascii_lowercase)
+                    .as_deref(),
+                Some("jpg" | "jpeg" | "png" | "gif" | "webp")
+            )
+        }) {
+            embed = embed.image(&format!("attachment://{filename}"));
+        }
+        embed
+    }
 }
 
 #[async_trait]
@@ -76,7 +95,10 @@ impl ChatService for DiscordChatService {
         filename: &str,
     ) -> Result<(), ChatError> {
         let webhook = self.build_webhook(target)?;
-        let embed = Self::build_embed(message);
+        // Referencing the uploaded image from the embed makes Discord render
+        // the captured-frame preview at full embed width instead of as a small
+        // generic attachment tile.
+        let embed = Self::with_first_image(Self::build_embed(message), [filename]);
         webhook
             .execute_with_file(None, Some(embed), image_data, filename)
             .await
@@ -96,7 +118,15 @@ impl ChatService for DiscordChatService {
             return self.send_message(message, target).await;
         }
         let webhook = self.build_webhook(target)?;
-        let embed = Self::build_embed(message);
+        // Referencing the first uploaded image from the embed gives captured
+        // frames a full-width Discord preview. Remaining graph attachments are
+        // still uploaded and shown normally.
+        let embed = Self::with_first_image(
+            Self::build_embed(message),
+            attachments
+                .iter()
+                .map(|attachment| attachment.filename.as_str()),
+        );
         let files: Vec<(&[u8], &str)> = attachments
             .iter()
             .map(|a| (a.data.as_slice(), a.filename.as_str()))
@@ -121,5 +151,35 @@ impl ChatService for DiscordChatService {
             return false;
         }
         self.resolve_url(target).is_some()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn image_attachment_is_used_as_the_embed_preview() {
+        let message = ChatMessage::new("Captured image");
+        let embed = DiscordChatService::with_first_image(
+            DiscordChatService::build_embed(&message),
+            ["thumbnail_42.jpg", "guide.png"],
+        );
+
+        assert_eq!(
+            embed.image.as_ref().map(|image| image.url.as_str()),
+            Some("attachment://thumbnail_42.jpg")
+        );
+    }
+
+    #[test]
+    fn non_image_attachment_is_not_embedded() {
+        let message = ChatMessage::new("Diagnostics");
+        let embed = DiscordChatService::with_first_image(
+            DiscordChatService::build_embed(&message),
+            ["diagnostics.txt"],
+        );
+
+        assert!(embed.image.is_none());
     }
 }
