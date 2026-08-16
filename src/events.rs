@@ -36,17 +36,22 @@ pub enum EventDetails {
         #[serde(rename = "Previous")]
         previous: FilterInfo,
     },
+    /// Target Scheduler start. Only `TargetName` is guaranteed: the plugin
+    /// reads the rest from optional broker custom headers, and a target with
+    /// no coordinates, project, or end time omits them. `TargetName` stays
+    /// required because it is what distinguishes this variant from the other
+    /// untagged arms — do not make it optional.
     TargetStart {
-        #[serde(rename = "TargetName")]
+        #[serde(rename = "TargetName", deserialize_with = "de_string_tolerant")]
         target_name: String,
-        #[serde(rename = "ProjectName")]
-        project_name: String,
-        #[serde(rename = "Rotation")]
-        rotation: f64,
-        #[serde(rename = "TargetEndTime")]
-        target_end_time: String,
-        #[serde(rename = "Coordinates")]
-        coordinates: TargetCoordinates,
+        #[serde(rename = "ProjectName", default)]
+        project_name: Option<String>,
+        #[serde(rename = "Rotation", default)]
+        rotation: Option<f64>,
+        #[serde(rename = "TargetEndTime", default)]
+        target_end_time: Option<String>,
+        #[serde(rename = "Coordinates", default)]
+        coordinates: Option<TargetCoordinates>,
     },
     WaitStart {
         #[serde(rename = "WaitEndTime")]
@@ -426,9 +431,13 @@ mod tests {
         }) = event.details
         {
             assert_eq!(target_name, "Pickering Triangle");
-            assert_eq!(project_name, "Pickering Triangle");
-            assert_eq!(rotation, 90.0);
-            assert_eq!(target_end_time, "2025-08-17T04:10:06.5191486");
+            assert_eq!(project_name.as_deref(), Some("Pickering Triangle"));
+            assert_eq!(rotation, Some(90.0));
+            assert_eq!(
+                target_end_time.as_deref(),
+                Some("2025-08-17T04:10:06.5191486")
+            );
+            let coordinates = coordinates.expect("coordinates");
             assert_eq!(coordinates.ra, 20.822777777777777);
             assert_eq!(coordinates.dec, 31.415);
             assert_eq!(coordinates.ra_string, "20:49:22");
@@ -487,11 +496,88 @@ mod tests {
                 ..
             }) => {
                 assert_eq!(target_name, "Sunflower Galaxy");
-                assert_eq!(project_name, "Sunflower Galaxy");
+                assert_eq!(project_name.as_deref(), Some("Sunflower Galaxy"));
+                let coordinates = coordinates.expect("coordinates");
                 assert!(coordinates.is_unknown());
                 assert!(coordinates.ra_string.is_empty());
             }
             other => panic!("expected TargetStart, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_ts_targetstart_requires_only_target_name() {
+        let event_json = r#"{
+            "Time": "2026-08-16T20:00:00Z",
+            "Event": "TS-NEWTARGETSTART",
+            "TargetName": "North America Nebula"
+        }"#;
+
+        let event: Event = serde_json::from_str(event_json).unwrap();
+        match event.details {
+            Some(EventDetails::TargetStart {
+                target_name,
+                project_name,
+                coordinates,
+                rotation,
+                target_end_time,
+            }) => {
+                assert_eq!(target_name, "North America Nebula");
+                assert_eq!(project_name, None);
+                assert!(coordinates.is_none());
+                assert_eq!(rotation, None);
+                assert_eq!(target_end_time, None);
+            }
+            other => panic!("expected TargetStart, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_ts_targetstart_tolerates_explicit_nulls() {
+        // The plugin builds events from a dictionary and writes a missing
+        // Target Scheduler broker header through as a null rather than
+        // omitting the key. Both shapes have to survive.
+        let event_json = r#"{
+            "Time": "2026-08-16T20:00:00Z",
+            "Event": "TS-TARGETSTART",
+            "TargetName": "M31",
+            "ProjectName": null,
+            "Coordinates": null,
+            "Rotation": null,
+            "TargetEndTime": null
+        }"#;
+
+        let event: Event = serde_json::from_str(event_json).unwrap();
+        match event.details {
+            Some(EventDetails::TargetStart {
+                target_name,
+                coordinates,
+                rotation,
+                ..
+            }) => {
+                assert_eq!(target_name, "M31");
+                assert!(coordinates.is_none());
+                assert_eq!(rotation, None);
+            }
+            other => panic!("expected TargetStart, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn target_start_does_not_swallow_unrelated_events() {
+        // EventDetails is untagged, so variants are chosen by field shape.
+        // TargetName is the only remaining required field on TargetStart —
+        // if it ever becomes optional the variant matches every event.
+        for event_json in [
+            r#"{"Time": "t", "Event": "MOUNT-PARKED"}"#,
+            r#"{"Time": "t", "Event": "SEQUENCE-STARTING", "ChatEnabled": false}"#,
+            r#"{"Time": "t", "Event": "ROTATOR-MOVED", "From": 0.0, "To": 10.0}"#,
+        ] {
+            let event: Event = serde_json::from_str(event_json).unwrap();
+            assert!(
+                !matches!(event.details, Some(EventDetails::TargetStart { .. })),
+                "TargetStart greedily matched {event_json}"
+            );
         }
     }
 

@@ -10,8 +10,8 @@ use crate::sequence::{
     meridian_flip_time_formatted_with_clock,
 };
 use crate::source::SharedRigSource;
-use chrono::{DateTime, FixedOffset, Utc};
-use std::collections::{HashMap, HashSet};
+use chrono::{DateTime, FixedOffset, Local, NaiveDateTime, TimeZone, Utc};
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
@@ -202,10 +202,96 @@ enum OperationUpdate {
     Failed { attach_output: bool },
 }
 
+/// Insert-only dedup set with a bounded memory footprint.
+///
+/// The keys embed payload text — for `NINA-LOG` events, a whole log line — and
+/// a local updater lives for the entire N.I.N.A. session, so an unbounded set
+/// grows all night. Evicting the oldest key can at worst re-announce something
+/// older than the whole retained window, which the source histories have
+/// dropped long before.
+/// Eviction is least-recently-*seen*, not insertion order: a key that is still
+/// present in the source history gets re-observed on every poll, and dropping
+/// it would re-announce an event the user has already been told about. Ordering
+/// by a monotonic sequence number keeps both the touch and the eviction
+/// logarithmic, which matters when a single poll re-checks thousands of keys.
+#[derive(Debug)]
+struct BoundedSeenSet {
+    seen: HashMap<String, u64>,
+    order: BTreeMap<u64, String>,
+    next_seq: u64,
+    capacity: usize,
+}
+
+impl BoundedSeenSet {
+    fn new(capacity: usize) -> Self {
+        Self {
+            seen: HashMap::new(),
+            order: BTreeMap::new(),
+            next_seq: 0,
+            capacity: capacity.max(1),
+        }
+    }
+
+    /// Record `key`, returning true when it had already been recorded. A
+    /// repeat sighting refreshes the key's position so it outlives keys that
+    /// have genuinely fallen out of the source history.
+    fn check_and_insert(&mut self, key: String) -> bool {
+        let seq = self.next_seq;
+        self.next_seq += 1;
+
+        if let Some(previous) = self.seen.insert(key.clone(), seq) {
+            self.order.remove(&previous);
+            self.order.insert(seq, key);
+            return true;
+        }
+
+        self.order.insert(seq, key);
+        while self.seen.len() > self.capacity {
+            let Some((_, evicted)) = self.order.pop_first() else {
+                break;
+            };
+            self.seen.remove(&evicted);
+        }
+        false
+    }
+
+    /// Record a key without caring whether it was already present.
+    fn insert(&mut self, key: String) {
+        self.check_and_insert(key);
+    }
+
+    fn len(&self) -> usize {
+        self.seen.len()
+    }
+}
+
+/// Claim a plate-solve output for delivery, returning true the first time it is
+/// seen. An operation whose delivery is switched off must not claim a key:
+/// doing so burns it, so the image could never be posted if the user
+/// re-enabled that category before the next solve.
+///
+/// Takes the set directly rather than `&mut UpdaterState` so callers can hold a
+/// mutable borrow of a sibling field at the same time.
+fn claim_plate_solve_output(
+    seen: &mut BoundedSeenSet,
+    chat_enabled: bool,
+    key: Option<&String>,
+) -> bool {
+    if !chat_enabled {
+        return false;
+    }
+    key.is_some_and(|key| !seen.check_and_insert(key.clone()))
+}
+
+/// Ceiling for the event and image dedup sets. Comfortably above the largest
+/// history either side returns in one poll, so nothing is re-announced while
+/// it is still visible in the source history.
+const SEEN_SET_CAPACITY: usize = 20_000;
+
 /// State management for the chat updater
 struct UpdaterState {
-    events_seen: HashSet<String>,
-    images_seen: HashSet<String>,
+    events_seen: BoundedSeenSet,
+    images_seen: BoundedSeenSet,
     current_target: Option<TargetInfo>,
     meridian_flip_time: Option<f64>,
     sequence: Option<SequenceResponse>,
@@ -228,7 +314,7 @@ struct UpdaterState {
     /// Solve attempts already announced during this updater lifetime. NINA
     /// retains a Center item's last result when a sequence loop restarts, so
     /// operation-local state alone would resend the stale image.
-    plate_solve_outputs_seen: HashSet<String>,
+    plate_solve_outputs_seen: BoundedSeenSet,
     /// Fingerprint of the last live-status embed posted. Lets us skip the
     /// `upsert_status` call when nothing meaningful has changed since the
     /// previous poll cycle.
@@ -245,8 +331,8 @@ struct UpdaterState {
 impl UpdaterState {
     fn new() -> Self {
         Self {
-            events_seen: HashSet::new(),
-            images_seen: HashSet::new(),
+            events_seen: BoundedSeenSet::new(SEEN_SET_CAPACITY),
+            images_seen: BoundedSeenSet::new(SEEN_SET_CAPACITY),
             current_target: None,
             meridian_flip_time: None,
             sequence: None,
@@ -259,7 +345,7 @@ impl UpdaterState {
             wait_until: None,
             center_event_seen_at: None,
             sequence_operations: HashMap::new(),
-            plate_solve_outputs_seen: HashSet::new(),
+            plate_solve_outputs_seen: BoundedSeenSet::new(SEEN_SET_CAPACITY),
             last_status_fingerprint: None,
             connected: false,
             consecutive_failures: 0,
@@ -352,11 +438,11 @@ impl UpdaterState {
     }
 
     fn has_seen_event(&mut self, event: &Event) -> bool {
-        !self.events_seen.insert(Self::event_key(event))
+        self.events_seen.check_and_insert(Self::event_key(event))
     }
 
     fn has_seen_image(&mut self, image: &ImageMetadata) -> bool {
-        !self.images_seen.insert(Self::image_key(image))
+        self.images_seen.check_and_insert(Self::image_key(image))
     }
 }
 
@@ -790,9 +876,11 @@ impl ChatUpdater {
                         SequenceOperationKind::TimeWait { .. }
                     );
                     let output_key = plate_solve_output_key(next);
-                    let attach_output = output_key
-                        .as_ref()
-                        .is_some_and(|key| self.state.plate_solve_outputs_seen.insert(key.clone()));
+                    let attach_output = claim_plate_solve_output(
+                        &mut self.state.plate_solve_outputs_seen,
+                        next.chat_enabled,
+                        output_key.as_ref(),
+                    );
                     previous.last_output_key = output_key;
                     previous.operation = next.clone();
                     notifications.push((
@@ -841,10 +929,11 @@ impl ChatUpdater {
                 let output_key = plate_solve_output_key(&tracked.operation);
                 if output_key.is_some() && output_key != tracked.last_output_key {
                     tracked.last_output_key = output_key.clone();
-                    if output_key
-                        .as_ref()
-                        .is_some_and(|key| self.state.plate_solve_outputs_seen.insert(key.clone()))
-                    {
+                    if claim_plate_solve_output(
+                        &mut self.state.plate_solve_outputs_seen,
+                        tracked.operation.chat_enabled,
+                        output_key.as_ref(),
+                    ) {
                         notifications.push((tracked.clone(), OperationUpdate::Output));
                     }
                 }
@@ -875,9 +964,11 @@ impl ChatUpdater {
                     .unwrap_or(0);
             }
             let output_key = plate_solve_output_key(&tracked.operation);
-            let output_is_new = output_key
-                .as_ref()
-                .is_some_and(|key| self.state.plate_solve_outputs_seen.insert(key.clone()));
+            let output_is_new = claim_plate_solve_output(
+                &mut self.state.plate_solve_outputs_seen,
+                tracked.operation.chat_enabled,
+                output_key.as_ref(),
+            );
             let suppress_duplicate_wait = matches!(
                 tracked.operation.kind,
                 SequenceOperationKind::TimeWait { .. }
@@ -1270,9 +1361,9 @@ impl ChatUpdater {
                 let target_info = TargetInfo {
                     name: target_name.clone(),
                     source: TargetSource::TsTargetStart,
-                    coordinates: Some(coordinates.clone()),
-                    project: Some(project_name.clone()),
-                    rotation: Some(*rotation),
+                    coordinates: coordinates.clone(),
+                    project: project_name.clone(),
+                    rotation: *rotation,
                 };
 
                 if latest_ts_target.is_none()
@@ -1393,7 +1484,7 @@ impl ChatUpdater {
             event_types::SEQUENCE_FINISHED => self.state.sequence_running = false,
             event_types::TS_WAITSTART => {
                 if let Some(EventDetails::WaitStart { wait_end_time }) = &event.details
-                    && let Ok(parsed) = DateTime::parse_from_rfc3339(wait_end_time)
+                    && let Some(parsed) = parse_nina_timestamp(wait_end_time)
                 {
                     self.state.wait_until = Some(parsed);
                 }
@@ -1538,9 +1629,9 @@ impl ChatUpdater {
             let new_target = TargetInfo {
                 name: target_name.clone(),
                 source: TargetSource::TsTargetStart,
-                coordinates: Some(coordinates.clone()),
-                project: Some(project_name.clone()),
-                rotation: Some(*rotation),
+                coordinates: coordinates.clone(),
+                project: project_name.clone(),
+                rotation: *rotation,
             };
 
             let old_target = self.state.current_target.clone();
@@ -2328,7 +2419,7 @@ impl ChatUpdater {
                 if header.trim().is_empty() {
                     "🔔 N.I.N.A. notification".to_string()
                 } else {
-                    format!("🔔 N.I.N.A. · {}", truncate_chat_value(header))
+                    format!("🔔 N.I.N.A. · {}", truncate_chat_title(header))
                 },
             ),
             Some(EventDetails::NinaLog { level, .. }) => (
@@ -2661,14 +2752,46 @@ fn nina_level_color(level: &str) -> u32 {
     }
 }
 
-fn truncate_chat_value(value: &str) -> String {
-    const LIMIT: usize = 1_000;
-    if value.chars().count() <= LIMIT {
+/// Parse a timestamp N.I.N.A. put on the wire.
+///
+/// Most carry an offset and parse as RFC 3339. A `DateTime` with
+/// `DateTimeKind.Unspecified` serializes without one, and those used to be
+/// dropped silently — leaving the sequence "waiting until" state unset. Treat
+/// an offset-less stamp as observatory-local, which is what it is.
+fn parse_nina_timestamp(value: &str) -> Option<DateTime<FixedOffset>> {
+    if let Ok(parsed) = DateTime::parse_from_rfc3339(value) {
+        return Some(parsed);
+    }
+    let naive = NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S%.f")
+        .or_else(|_| NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S%.f"))
+        .ok()?;
+    Local
+        .from_local_datetime(&naive)
+        .earliest()
+        .map(|local| local.fixed_offset())
+}
+
+fn truncate_to(value: &str, limit: usize) -> String {
+    if value.chars().count() <= limit {
         return value.to_string();
     }
-    let mut truncated = value.chars().take(LIMIT - 1).collect::<String>();
+    let mut truncated = value.chars().take(limit - 1).collect::<String>();
     truncated.push('…');
     truncated
+}
+
+/// Embed *field values* cap at 1024 in Discord; stay under it.
+fn truncate_chat_value(value: &str) -> String {
+    truncate_to(value, 1_000)
+}
+
+/// Embed *titles* cap at 256 in Discord, and an over-long title fails the whole
+/// message with a 400 rather than being trimmed. Titles are built from
+/// remote-supplied text (notification headers, unknown event names), so they
+/// need their own, much smaller budget. The caller prepends `[telescope] `,
+/// so leave room for that too.
+fn truncate_chat_title(value: &str) -> String {
+    truncate_to(value, 180)
 }
 
 fn get_event_title(event: &str) -> String {
@@ -2681,7 +2804,8 @@ fn get_event_title(event: &str) -> String {
         event_types::ROTATOR_MOVED_MECHANICAL => "🧭 Rotator Moved (Mech.)".to_string(),
         event_types::NINA_NOTIFICATION => "🔔 N.I.N.A. notification".to_string(),
         event_types::NINA_LOG => "📝 N.I.N.A. log".to_string(),
-        _ => format!("📡 {}", event),
+        // The event name comes from the plugin, so it is not length-bounded.
+        _ => format!("📡 {}", truncate_chat_title(event)),
     }
 }
 
@@ -2697,6 +2821,79 @@ mod tests {
             chat_enabled: true,
             kind,
         }
+    }
+
+    #[test]
+    fn nina_timestamps_parse_with_and_without_an_offset() {
+        assert!(parse_nina_timestamp("2026-08-17T04:00:00-07:00").is_some());
+        // DateTimeKind.Unspecified serializes without an offset; these used to
+        // be dropped, leaving the sequence wait state unset.
+        assert!(parse_nina_timestamp("2026-08-17T04:00:00").is_some());
+        assert!(parse_nina_timestamp("2026-08-17T04:00:00.1234567").is_some());
+        assert!(parse_nina_timestamp("not a timestamp").is_none());
+    }
+
+    #[test]
+    fn chat_titles_stay_within_the_discord_limit() {
+        let header = "E".repeat(4_000);
+        let title = format!("🔔 N.I.N.A. · {}", truncate_chat_title(&header));
+        // Discord rejects the whole message when the title exceeds 256, and
+        // the caller still prepends "[telescope] ".
+        assert!(title.chars().count() < 256);
+        assert!(get_event_title(&"X".repeat(4_000)).chars().count() < 256);
+    }
+
+    #[test]
+    fn bounded_seen_set_evicts_the_oldest_key() {
+        let mut seen = BoundedSeenSet::new(2);
+        assert!(!seen.check_and_insert("first".to_string()));
+        assert!(!seen.check_and_insert("second".to_string()));
+        assert!(seen.check_and_insert("first".to_string()));
+        assert!(!seen.check_and_insert("third".to_string()));
+        assert_eq!(seen.len(), 2);
+        assert!(seen.check_and_insert("first".to_string()));
+        assert!(!seen.check_and_insert("second".to_string()));
+    }
+
+    #[test]
+    fn disabled_plate_solve_does_not_consume_its_delivery_key() {
+        let mut state = UpdaterState::new();
+        let key = "solve-1".to_string();
+        assert!(!claim_plate_solve_output(
+            &mut state.plate_solve_outputs_seen,
+            false,
+            Some(&key),
+        ));
+        assert!(claim_plate_solve_output(
+            &mut state.plate_solve_outputs_seen,
+            true,
+            Some(&key),
+        ));
+        assert!(!claim_plate_solve_output(
+            &mut state.plate_solve_outputs_seen,
+            true,
+            Some(&key),
+        ));
+    }
+
+    #[test]
+    fn nina_timestamp_accepts_offset_and_observatory_local_values() {
+        let offset = parse_nina_timestamp("2026-08-16T20:00:00-07:00").expect("offset time");
+        assert_eq!(offset.offset().local_minus_utc(), -7 * 60 * 60);
+
+        let local = parse_nina_timestamp("2026-08-16T20:00:00.1234567").expect("local time");
+        assert_eq!(
+            local.naive_local(),
+            NaiveDateTime::parse_from_str("2026-08-16T20:00:00.1234567", "%Y-%m-%dT%H:%M:%S%.f")
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn chat_titles_are_bounded_below_discords_limit() {
+        let title = truncate_chat_title(&"x".repeat(400));
+        assert_eq!(title.chars().count(), 180);
+        assert!(title.ends_with('…'));
     }
 
     #[test]

@@ -2,7 +2,7 @@
   "type": "client_hello",
   "payload": {
     "protocol_version": 1,
-    "payload_version": 2,
+    "payload_version": 3,
     "node_id": "363db028-9d79-4fdc-8940-1b1ff52b9e8d",
     "session_id": "7afcde18-b5a8-46fd-ad1f-ed54cf3bbc4e",
     "process_id": 4242,

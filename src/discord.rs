@@ -1,6 +1,79 @@
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::future::Future;
+use std::time::Duration;
+
+/// Discord rate-limits webhooks at roughly five requests per two seconds and
+/// answers a breach with 429 plus `Retry-After`. Treating that as a permanent
+/// failure silently drops the message, so honour the header and retry a
+/// bounded number of times. Transient 5xx responses get the same treatment.
+const MAX_SEND_ATTEMPTS: u32 = 4;
+const DEFAULT_RETRY_DELAY: Duration = Duration::from_secs(2);
+/// Never park a send task for longer than this, however large `Retry-After` is.
+const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
+
+/// How long to wait before retrying, or `None` when the response is final.
+fn retry_delay(response: &reqwest::Response) -> Option<Duration> {
+    retry_delay_for(
+        response.status(),
+        response
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok()),
+    )
+}
+
+fn retry_delay_for(status: reqwest::StatusCode, retry_after: Option<&str>) -> Option<Duration> {
+    if status.as_u16() == 429 {
+        let header = retry_after
+            .and_then(|value| value.parse::<f64>().ok())
+            .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
+            .map(|seconds| Duration::from_secs_f64(seconds.min(MAX_RETRY_DELAY.as_secs_f64())))
+            .unwrap_or(DEFAULT_RETRY_DELAY);
+        return Some(header);
+    }
+    if status.is_server_error() {
+        return Some(DEFAULT_RETRY_DELAY);
+    }
+    None
+}
+
+/// Run a webhook request, retrying rate-limited and transient failures.
+///
+/// The request is rebuilt per attempt because a multipart body cannot be
+/// cloned. The final failure is returned so the caller still sees the status.
+async fn send_with_retry<F, Fut>(mut build: F) -> Result<(), DiscordError>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = reqwest::Result<reqwest::Response>>,
+{
+    let mut attempt = 1;
+    loop {
+        let response = build().await?;
+        if response.status().is_success() {
+            return Ok(());
+        }
+
+        let delay = retry_delay(&response).filter(|_| attempt < MAX_SEND_ATTEMPTS);
+        let Some(delay) = delay else {
+            let status = response.status().as_u16();
+            let message = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(DiscordError::Http { status, message });
+        };
+
+        eprintln!(
+            "Discord returned {}; retrying in {:.1}s (attempt {attempt}/{MAX_SEND_ATTEMPTS})",
+            response.status().as_u16(),
+            delay.as_secs_f64()
+        );
+        tokio::time::sleep(delay).await;
+        attempt += 1;
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct DiscordWebhook {
@@ -219,27 +292,14 @@ impl DiscordWebhook {
             url = format!("{url}?{query_string}");
         }
 
-        let response = self
-            .client
-            .post(&url)
-            .header("Content-Type", "application/json")
-            .json(message)
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            let status = response.status().as_u16();
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(DiscordError::Http {
-                status,
-                message: error_text,
-            });
-        }
-
-        Ok(())
+        send_with_retry(|| {
+            self.client
+                .post(&url)
+                .header("Content-Type", "application/json")
+                .json(message)
+                .send()
+        })
+        .await
     }
 
     pub async fn execute_with_embed(
@@ -281,16 +341,6 @@ impl DiscordWebhook {
         embed: Option<Embed>,
         files: &[(&[u8], &str)],
     ) -> Result<(), DiscordError> {
-        let mut form = reqwest::multipart::Form::new();
-
-        // Discord's webhook API expects multipart part names files[0],
-        // files[1], ... for attachments
-        for (i, (file_data, filename)) in files.iter().enumerate() {
-            let file_part =
-                reqwest::multipart::Part::bytes(file_data.to_vec()).file_name(filename.to_string());
-            form = form.part(format!("files[{}]", i), file_part);
-        }
-
         // Create the payload
         let message = WebhookMessage {
             content: content.map(|s| s.to_string()),
@@ -306,30 +356,24 @@ impl DiscordWebhook {
             flags: None,
         };
 
-        // Add the payload as JSON
         let payload_json = serde_json::to_string(&message)?;
-        form = form.text("payload_json", payload_json);
 
-        let response = self
-            .client
-            .post(&self.webhook_url)
-            .multipart(form)
-            .send()
-            .await?;
+        // A multipart body cannot be cloned, so rebuild the whole form on each
+        // attempt rather than sharing one across retries.
+        send_with_retry(|| {
+            let mut form = reqwest::multipart::Form::new();
+            // Discord's webhook API expects multipart part names files[0],
+            // files[1], ... for attachments
+            for (i, (file_data, filename)) in files.iter().enumerate() {
+                let file_part = reqwest::multipart::Part::bytes(file_data.to_vec())
+                    .file_name(filename.to_string());
+                form = form.part(format!("files[{i}]"), file_part);
+            }
+            form = form.text("payload_json", payload_json.clone());
 
-        if !response.status().is_success() {
-            let status = response.status().as_u16();
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(DiscordError::Http {
-                status,
-                message: error_text,
-            });
-        }
-
-        Ok(())
+            self.client.post(&self.webhook_url).multipart(form).send()
+        })
+        .await
     }
 }
 
@@ -443,4 +487,37 @@ pub mod colors {
     pub const ORANGE: u32 = 0xFFA500;
     pub const CYAN: u32 = 0x00FFFF;
     pub const GRAY: u32 = 0x808080;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn discord_retry_delay_honors_rate_limits_and_transient_errors() {
+        assert_eq!(
+            retry_delay_for(reqwest::StatusCode::TOO_MANY_REQUESTS, Some("0.25")),
+            Some(Duration::from_millis(250))
+        );
+        assert_eq!(
+            retry_delay_for(reqwest::StatusCode::TOO_MANY_REQUESTS, Some("120")),
+            Some(MAX_RETRY_DELAY)
+        );
+        assert_eq!(
+            retry_delay_for(reqwest::StatusCode::TOO_MANY_REQUESTS, Some("1e300")),
+            Some(MAX_RETRY_DELAY)
+        );
+        assert_eq!(
+            retry_delay_for(reqwest::StatusCode::TOO_MANY_REQUESTS, Some("invalid")),
+            Some(DEFAULT_RETRY_DELAY)
+        );
+        assert_eq!(
+            retry_delay_for(reqwest::StatusCode::BAD_GATEWAY, None),
+            Some(DEFAULT_RETRY_DELAY)
+        );
+        assert_eq!(
+            retry_delay_for(reqwest::StatusCode::BAD_REQUEST, None),
+            None
+        );
+    }
 }

@@ -37,10 +37,13 @@ rendering, Discord slash commands, and Matrix/Discord delivery. It includes:
 - mount, camera, filter wheel, guider, rotator, and focuser snapshots;
 - typed commands such as park, guide, cool, autofocus, and sequence control.
 
-Direct v1 envelopes currently advertise additive payload contract v2. Older
-plugin payloads without `ChatEnabled` remain accepted and default to delivery
-enabled. The server labels unmarked payloads as legacy Direct v1; this is Direct
-protocol compatibility, not a second data-source mode.
+Direct v1 envelopes currently advertise additive payload contract v3. Version
+2 added sequence-operation reporting and Hub image attachments; version 3 adds
+`ChatEnabled`, explicit target names, N.I.N.A. logs, and N.I.N.A. popup
+notifications. Older plugin payloads without `ChatEnabled` remain accepted and
+default to delivery enabled. The server labels unmarked payloads as legacy
+Direct v1; this is Direct protocol compatibility, not a second data-source
+mode.
 
 ## Event delivery and state
 

@@ -25,7 +25,7 @@ over HTTP.
   autofocus data, and guiding samples.
 - `src/charts.rs`: renders autofocus and guider graphs for chat attachments.
 - `src/config.rs`: runtime chat and telescope configuration.
-- `contracts/direct-v1/`: versioned protocol schema and compatibility fixtures.
+- `contracts/direct/v1/`: versioned protocol schema and compatibility fixtures.
 
 There are two supported deployment paths:
 

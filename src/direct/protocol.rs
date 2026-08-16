@@ -17,7 +17,32 @@ pub const LEGACY_PAYLOAD_VERSION: u16 = 1;
 /// This is separate from [`PROTOCOL_VERSION`]: the envelope and handshake stay
 /// on Direct v1 while response objects gain optional Chatstronomy fields. A
 /// future incompatible envelope still requires a new Direct protocol version.
-pub const CURRENT_PAYLOAD_VERSION: u16 = 2;
+///
+/// | Version | Adds |
+/// |---------|------|
+/// | 1       | Direct v1 responses without a payload marker. |
+/// | 2       | Sequence operation reporting and Hub image attachments. |
+/// | 3       | `ChatEnabled` delivery flags, `TargetName`, and the `NINA-LOG` and `NINA-NOTIFICATION` event types. |
+///
+/// Peers negotiate the highest contract they both understand. Payload fields
+/// remain additive, so readers must continue to default fields absent from an
+/// older selected contract.
+pub const CURRENT_PAYLOAD_VERSION: u16 = 3;
+
+/// Payload contract that first carried the per-event delivery flags.
+pub const DELIVERY_FLAG_PAYLOAD_VERSION: u16 = 3;
+const _: () = assert!(DELIVERY_FLAG_PAYLOAD_VERSION > LEGACY_PAYLOAD_VERSION);
+const _: () = assert!(DELIVERY_FLAG_PAYLOAD_VERSION <= CURRENT_PAYLOAD_VERSION);
+
+/// Highest payload contract both peers understand.
+///
+/// A client advertising a newer contract than this build is clamped rather than
+/// refused: the additive fields it sends are ignored, which is exactly what the
+/// permissive serde defaults already do. Only a client below
+/// [`LEGACY_PAYLOAD_VERSION`] is rejected outright.
+pub fn negotiate_payload_version(client: u16) -> u16 {
+    client.min(CURRENT_PAYLOAD_VERSION)
+}
 
 const fn legacy_payload_version() -> u16 {
     LEGACY_PAYLOAD_VERSION
@@ -227,6 +252,34 @@ mod tests {
             nina_version: "3.2.0.9001".to_string(),
             capabilities: RigCapabilities::none(),
         }
+    }
+
+    #[test]
+    fn payload_negotiation_clamps_newer_clients_and_keeps_older_ones() {
+        assert_eq!(
+            negotiate_payload_version(LEGACY_PAYLOAD_VERSION),
+            LEGACY_PAYLOAD_VERSION
+        );
+        assert_eq!(
+            negotiate_payload_version(CURRENT_PAYLOAD_VERSION),
+            CURRENT_PAYLOAD_VERSION
+        );
+        // A plugin from a future release must degrade to this build's contract
+        // rather than be refused: its extra fields are additive.
+        assert_eq!(
+            negotiate_payload_version(CURRENT_PAYLOAD_VERSION + 7),
+            CURRENT_PAYLOAD_VERSION
+        );
+    }
+
+    #[test]
+    fn delivery_flags_require_the_payload_version_that_introduced_them() {
+        // Guards against bumping CURRENT_PAYLOAD_VERSION without deciding what
+        // the new contract means for the delivery flags.
+        assert!(
+            negotiate_payload_version(DELIVERY_FLAG_PAYLOAD_VERSION - 1)
+                < DELIVERY_FLAG_PAYLOAD_VERSION
+        );
     }
 
     #[test]
