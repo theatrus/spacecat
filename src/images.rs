@@ -50,6 +50,8 @@ pub struct ImageHistoryResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct ImageMetadata {
+    #[serde(default = "default_true")]
+    pub chat_enabled: bool,
     pub exposure_time: f64,
     pub image_type: String,
     pub filter: String,
@@ -68,6 +70,10 @@ pub struct ImageMetadata {
     #[serde(rename = "HFR")]
     pub hfr: f64,
     pub is_bayered: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 // Image type constants for easier matching
@@ -232,11 +238,13 @@ mod tests {
         assert_eq!(image.stars, 145);
         assert_eq!(image.hfr, 2.45);
         assert!(image.is_bayered);
+        assert!(image.chat_enabled);
     }
 
     #[test]
     fn test_image_methods() {
         let light_frame = ImageMetadata {
+            chat_enabled: true,
             exposure_time: 180.0,
             image_type: "LIGHT".to_string(),
             filter: "OIII".to_string(),
@@ -260,6 +268,7 @@ mod tests {
         assert!(!light_frame.is_calibration_frame());
 
         let flat_frame = ImageMetadata {
+            chat_enabled: true,
             exposure_time: 1.0,
             image_type: "FLAT".to_string(),
             filter: "L".to_string(),

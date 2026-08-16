@@ -6,7 +6,7 @@ use crate::events::{Event, EventDetails, FilterInfo, TargetCoordinates, event_ty
 use crate::images::ImageMetadata;
 use crate::sequence::{
     SequenceOperation, SequenceOperationKind, SequenceResponse, extract_current_target,
-    extract_meridian_flip_time, extract_sequence_operations,
+    extract_current_target_with_delivery, extract_meridian_flip_time, extract_sequence_operations,
     meridian_flip_time_formatted_with_clock,
 };
 use crate::source::SharedRigSource;
@@ -905,8 +905,10 @@ impl ChatUpdater {
 
         if announce && self.chat_manager.service_count() > 0 {
             for (operation, update) in notifications {
-                self.send_sequence_operation_update(&operation, update)
-                    .await;
+                if operation.operation.chat_enabled {
+                    self.send_sequence_operation_update(&operation, update)
+                        .await;
+                }
             }
         }
     }
@@ -1402,10 +1404,22 @@ impl ChatUpdater {
 
         match event.event.as_str() {
             event_types::TS_TARGETSTART | event_types::TS_NEWTARGETSTART => {
-                self.handle_ts_targetstart(event).await
+                self.handle_ts_targetstart(event).await;
+                return;
             }
+            event_types::FILTERWHEEL_CHANGED => {
+                self.handle_filterwheel_changed(event).await;
+                return;
+            }
+            _ => {}
+        }
+
+        if !event.chat_enabled {
+            return;
+        }
+
+        match event.event.as_str() {
             event_types::AUTOFOCUS_FINISHED => self.handle_autofocus_finished(event).await,
-            event_types::FILTERWHEEL_CHANGED => self.handle_filterwheel_changed(event).await,
             event_types::MOUNT_BEFORE_FLIP
             | event_types::MOUNT_AFTER_FLIP
             | event_types::MOUNT_PARKED
@@ -1464,7 +1478,7 @@ impl ChatUpdater {
             self.state.last_filter = Some(new.clone());
         }
 
-        if self.chat_manager.service_count() > 0 {
+        if event.chat_enabled && self.chat_manager.service_count() > 0 {
             self.send_filterwheel_change_notification(event, &previous, &new)
                 .await;
         }
@@ -1540,7 +1554,7 @@ impl ChatUpdater {
                 self.state.current_target = Some(new_target.clone());
                 println!("[TS-TARGETSTART] Target: {}", target_name);
 
-                if self.chat_manager.service_count() > 0 {
+                if event.chat_enabled && self.chat_manager.service_count() > 0 {
                     if let Some(old) = old_target {
                         self.send_target_change_notification(&old, &new_target)
                             .await;
@@ -1628,7 +1642,7 @@ impl ChatUpdater {
         }
         match self.source.get_sequence().await {
             Ok(sequence) => {
-                let new_sequence_target = extract_current_target(&sequence);
+                let new_sequence_target = extract_current_target_with_delivery(&sequence);
                 let new_meridian_flip_time = extract_meridian_flip_time(&sequence);
                 let operations = extract_sequence_operations(&sequence);
                 let camera = self.camera_snapshot_for(&operations).await;
@@ -1645,7 +1659,7 @@ impl ChatUpdater {
                     .as_ref()
                     .map(|t| t.source != TargetSource::TsTargetStart)
                     .unwrap_or(true)
-                    && let Some(target_name) = new_sequence_target
+                    && let Some((target_name, chat_enabled)) = new_sequence_target
                 {
                     let new_target = TargetInfo {
                         name: target_name.clone(),
@@ -1665,7 +1679,7 @@ impl ChatUpdater {
                         self.state.current_target = Some(new_target.clone());
                         println!("[SEQUENCE TARGET] {}", target_name);
 
-                        if self.chat_manager.service_count() > 0 {
+                        if chat_enabled && self.chat_manager.service_count() > 0 {
                             if let Some(old) = old_target {
                                 self.send_target_change_notification(&old, &new_target)
                                     .await;
@@ -1697,7 +1711,7 @@ impl ChatUpdater {
                     if !self.state.has_seen_image(image) {
                         self.print_new_image(image);
 
-                        if self.chat_manager.service_count() > 0 {
+                        if image.chat_enabled && self.chat_manager.service_count() > 0 {
                             self.handle_new_image(image, index).await;
                         }
                     }
@@ -2309,8 +2323,21 @@ impl ChatUpdater {
     }
 
     async fn send_generic_event_notification(&self, event: &Event) {
-        let color = get_event_color(&event.event);
-        let title = get_event_title(&event.event);
+        let (color, title) = match &event.details {
+            Some(EventDetails::NinaNotification { level, header, .. }) => (
+                nina_level_color(level),
+                if header.trim().is_empty() {
+                    "🔔 N.I.N.A. notification".to_string()
+                } else {
+                    format!("🔔 N.I.N.A. · {}", truncate_chat_value(header))
+                },
+            ),
+            Some(EventDetails::NinaLog { level, .. }) => (
+                nina_level_color(level),
+                format!("📝 N.I.N.A. log · {}", level.to_ascii_uppercase()),
+            ),
+            _ => (get_event_color(&event.event), get_event_title(&event.event)),
+        };
 
         let mut message =
             ChatMessage::new(&self.titled(title))
@@ -2351,6 +2378,35 @@ impl ChatUpdater {
                         .field("From", &format!("{from:.2}°"), true)
                         .field("To", &format!("{to:.2}°"), true)
                         .field("Δ", &format!("{:+.2}°", to - from), true);
+                }
+                EventDetails::NinaNotification {
+                    level,
+                    message: notification_message,
+                    ..
+                } => {
+                    message = message.field("Level", level, true).field(
+                        "Message",
+                        &truncate_chat_value(notification_message),
+                        false,
+                    );
+                }
+                EventDetails::NinaLog {
+                    level,
+                    source,
+                    member,
+                    line,
+                    message: log_message,
+                } => {
+                    let location = match (member.is_empty(), *line > 0) {
+                        (false, true) => format!("{source}:{member}:{line}"),
+                        (false, false) => format!("{source}:{member}"),
+                        (true, true) => format!("{source}:{line}"),
+                        (true, false) => source.clone(),
+                    };
+                    message = message
+                        .field("Level", level, true)
+                        .field("Source", &truncate_chat_value(&location), true)
+                        .field("Message", &truncate_chat_value(log_message), false);
                 }
             }
         }
@@ -2595,6 +2651,27 @@ fn get_event_color(event: &str) -> u32 {
     }
 }
 
+fn nina_level_color(level: &str) -> u32 {
+    match level.to_ascii_uppercase().as_str() {
+        "FATAL" | "ERROR" => colors::RED,
+        "WARN" | "WARNING" => colors::ORANGE,
+        "SUCCESS" => colors::GREEN,
+        "INFO" | "INFORMATION" => colors::BLUE,
+        "DEBUG" | "TRACE" | "VERBOSE" => colors::GRAY,
+        _ => colors::CYAN,
+    }
+}
+
+fn truncate_chat_value(value: &str) -> String {
+    const LIMIT: usize = 1_000;
+    if value.chars().count() <= LIMIT {
+        return value.to_string();
+    }
+    let mut truncated = value.chars().take(LIMIT - 1).collect::<String>();
+    truncated.push('…');
+    truncated
+}
+
 fn get_event_title(event: &str) -> String {
     match event {
         event_types::FILTERWHEEL_CHANGED => "🔄 Filter Changed".to_string(),
@@ -2603,6 +2680,8 @@ fn get_event_title(event: &str) -> String {
         event_types::AUTOFOCUS_POINT_ADDED => "📈 Autofocus Point".to_string(),
         event_types::ROTATOR_MOVED => "🧭 Rotator Moved".to_string(),
         event_types::ROTATOR_MOVED_MECHANICAL => "🧭 Rotator Moved (Mech.)".to_string(),
+        event_types::NINA_NOTIFICATION => "🔔 N.I.N.A. notification".to_string(),
+        event_types::NINA_LOG => "📝 N.I.N.A. log".to_string(),
         _ => format!("📡 {}", event),
     }
 }
@@ -2616,6 +2695,7 @@ mod tests {
             key: "1/0".to_string(),
             name: "Test operation".to_string(),
             status: "RUNNING".to_string(),
+            chat_enabled: true,
             kind,
         }
     }

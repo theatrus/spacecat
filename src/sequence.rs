@@ -177,6 +177,9 @@ pub struct SequenceOperation {
     pub key: String,
     pub name: String,
     pub status: String,
+    /// Whether this operation should produce chat updates. Missing wire
+    /// values default to true for older Direct and Advanced API payloads.
+    pub chat_enabled: bool,
     pub kind: SequenceOperationKind,
 }
 
@@ -305,6 +308,10 @@ pub fn extract_sequence_operations(sequence: &SequenceResponse) -> Vec<SequenceO
                 .unwrap_or_default()
                 .to_string();
             let explicit_kind = object.get("OperationKind").and_then(Value::as_str);
+            let chat_enabled = object
+                .get("ChatEnabled")
+                .and_then(Value::as_bool)
+                .unwrap_or(true);
 
             let is_cooling = explicit_kind == Some("camera_cooling")
                 || (object.contains_key("Temperature") && object.contains_key("MinCoolingTime"));
@@ -327,6 +334,7 @@ pub fn extract_sequence_operations(sequence: &SequenceResponse) -> Vec<SequenceO
                         key: key.clone(),
                         name: name.clone(),
                         status: status.clone(),
+                        chat_enabled,
                         kind: SequenceOperationKind::CameraCooling {
                             target_temperature,
                             minimum_duration: object
@@ -349,6 +357,7 @@ pub fn extract_sequence_operations(sequence: &SequenceResponse) -> Vec<SequenceO
                         key: key.clone(),
                         name: name.clone(),
                         status: status.clone(),
+                        chat_enabled,
                         kind: SequenceOperationKind::TimeWait {
                             target_time,
                             configured_duration,
@@ -360,6 +369,7 @@ pub fn extract_sequence_operations(sequence: &SequenceResponse) -> Vec<SequenceO
                     key: key.clone(),
                     name: name.clone(),
                     status: status.clone(),
+                    chat_enabled,
                     kind: SequenceOperationKind::MountCenter {
                         coordinates: object
                             .get("Coordinates")
@@ -376,6 +386,7 @@ pub fn extract_sequence_operations(sequence: &SequenceResponse) -> Vec<SequenceO
                     key: key.clone(),
                     name: name.clone(),
                     status: status.clone(),
+                    chat_enabled,
                     kind: SequenceOperationKind::MountSlew {
                         coordinates: object
                             .get("Coordinates")
@@ -607,7 +618,7 @@ impl Container {
 /// # Returns
 /// * `Some(String)` - The current target name without "_Container" suffix
 /// * `None` - If no active target is found
-pub fn extract_current_target(sequence: &SequenceResponse) -> Option<String> {
+pub fn extract_current_target_with_delivery(sequence: &SequenceResponse) -> Option<(String, bool)> {
     fn active_container_name(obj: &serde_json::Map<String, Value>) -> Option<&str> {
         let status = obj.get("Status")?.as_str()?;
         if status == "RUNNING" || status == "Active" {
@@ -625,7 +636,7 @@ pub fn extract_current_target(sequence: &SequenceResponse) -> Option<String> {
     // Native Direct plugins explicitly mark N.I.N.A. deep-sky-object
     // containers. Search the whole tree for those first so user-defined
     // wrappers can never be mistaken for the target.
-    fn search_explicit_targets(values: &[Value]) -> Option<String> {
+    fn search_explicit_targets(values: &[Value]) -> Option<(String, bool)> {
         for value in values {
             if let Some(obj) = value.as_object() {
                 if obj
@@ -633,9 +644,18 @@ pub fn extract_current_target(sequence: &SequenceResponse) -> Option<String> {
                     .and_then(Value::as_bool)
                     .unwrap_or(false)
                     && let Some(name) = active_container_name(obj)
-                    && let Some(target) = display_name(name)
+                    && let Some(target) = obj
+                        .get("TargetName")
+                        .and_then(Value::as_str)
+                        .filter(|value| !value.trim().is_empty())
+                        .map(ToString::to_string)
+                        .or_else(|| display_name(name))
                 {
-                    return Some(target);
+                    let chat_enabled = obj
+                        .get("ChatEnabled")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(true);
+                    return Some((target, chat_enabled));
                 }
 
                 if let Some(items) = obj.get("Items").and_then(Value::as_array)
@@ -650,7 +670,7 @@ pub fn extract_current_target(sequence: &SequenceResponse) -> Option<String> {
 
     // Older Direct plugins and Advanced API responses predate the explicit
     // marker. Preserve their container-name heuristic as a fallback.
-    fn search_legacy_containers(values: &[Value]) -> Option<String> {
+    fn search_legacy_containers(values: &[Value]) -> Option<(String, bool)> {
         for value in values {
             if let Some(obj) = value.as_object() {
                 if let Some(name) = active_container_name(obj)
@@ -658,7 +678,11 @@ pub fn extract_current_target(sequence: &SequenceResponse) -> Option<String> {
                     && !is_system_container(name)
                     && let Some(target) = display_name(name)
                 {
-                    return Some(target);
+                    let chat_enabled = obj
+                        .get("ChatEnabled")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(true);
+                    return Some((target, chat_enabled));
                 }
 
                 if let Some(items) = obj.get("Items").and_then(Value::as_array)
@@ -673,6 +697,12 @@ pub fn extract_current_target(sequence: &SequenceResponse) -> Option<String> {
 
     search_explicit_targets(&sequence.response)
         .or_else(|| search_legacy_containers(&sequence.response))
+}
+
+/// Extract just the current target name. Kept as the compatibility surface
+/// used by commands and older callers that do not need delivery policy.
+pub fn extract_current_target(sequence: &SequenceResponse) -> Option<String> {
+    extract_current_target_with_delivery(sequence).map(|(name, _)| name)
 }
 
 /// Extract the meridian flip time from a sequence response
@@ -819,6 +849,34 @@ mod tests {
         // The function should extract "Sh2 101" from "Sh2 101_Container" since it has RUNNING status
         let target = extract_current_target(&sequence);
         assert_eq!(target, Some("Sh2 101".to_string()));
+    }
+
+    #[test]
+    fn target_scheduler_container_uses_real_target_and_delivery_flag() {
+        let sequence: SequenceResponse = serde_json::from_value(serde_json::json!({
+            "Response": [{
+                "Name": "Sequential Instruction Set_Container",
+                "Status": "RUNNING",
+                "IsTargetContainer": true,
+                "TargetName": "NGC 7000",
+                "ChatEnabled": false,
+                "Items": []
+            }],
+            "Error": "",
+            "StatusCode": 200,
+            "Success": true,
+            "Type": "Direct"
+        }))
+        .unwrap();
+
+        assert_eq!(
+            extract_current_target_with_delivery(&sequence),
+            Some(("NGC 7000".to_string(), false))
+        );
+        assert_eq!(
+            extract_current_target(&sequence),
+            Some("NGC 7000".to_string())
+        );
     }
 
     #[test]
