@@ -64,10 +64,21 @@ where
 {
     let v = serde_json::Value::deserialize(d)?;
     match v {
-        serde_json::Value::Number(n) => n
-            .as_i64()
-            .ok_or_else(|| D::Error::custom("not an integer"))
-            .map(|x| x as i32),
+        serde_json::Value::Number(n) => {
+            if let Some(value) = n.as_i64() {
+                return i32::try_from(value).map_err(D::Error::custom);
+            }
+            // Native N.I.N.A. autofocus reports model focus positions as
+            // doubles (`4068.0`) while the Advanced API emits integers.
+            let value = n
+                .as_f64()
+                .filter(|value| value.is_finite() && value.fract() == 0.0)
+                .ok_or_else(|| D::Error::custom("not an integral i32"))?;
+            if value < i32::MIN as f64 || value > i32::MAX as f64 {
+                return Err(D::Error::custom("integer is outside the i32 range"));
+            }
+            Ok(value as i32)
+        }
         serde_json::Value::Array(a) if a.is_empty() => Ok(-1),
         other => Err(D::Error::custom(format!(
             "expected integer or []; got {other}"
@@ -131,7 +142,15 @@ mod tests {
     fn int_normal_and_empty_array() {
         let I(i) = serde_json::from_str("42").unwrap();
         assert_eq!(i, 42);
+        let I(i) = serde_json::from_str("42.0").unwrap();
+        assert_eq!(i, 42);
         let I(i) = serde_json::from_str("[]").unwrap();
         assert_eq!(i, -1);
+    }
+
+    #[test]
+    fn int_rejects_fractional_and_out_of_range_numbers() {
+        assert!(serde_json::from_str::<I>("42.5").is_err());
+        assert!(serde_json::from_str::<I>("2147483648").is_err());
     }
 }

@@ -307,12 +307,13 @@ mod windows_service_impl {
                         // drop backs off instead of hammering every endpoint.
                         let mut reconnect_delay = updater.reconnect_initial();
                         while !shutdown.load(std::sync::atomic::Ordering::SeqCst) {
-                            let seq_ok = updater.poll_sequence().await;
                             let events_ok = updater.poll_events().await;
+                            let seq_ok = updater.poll_sequence().await;
                             let images_ok = updater.poll_images().await;
                             let reachable = seq_ok || events_ok || images_ok;
                             updater.record_reachability(reachable).await;
                             if reachable {
+                                updater.refresh_status_message().await;
                                 reconnect_delay = updater.reconnect_initial();
                                 sleep(poll_interval).await;
                             } else {

@@ -135,6 +135,7 @@ pub enum QueryKind {
     Thumbnail { index: u32 },
     LastAutofocus,
     MountInfo,
+    CameraInfo,
     FilterwheelInfo,
     GuiderInfo,
     GuiderGraph,
@@ -248,6 +249,21 @@ mod tests {
         assert_eq!(value["payload"]["index"], 3);
         let back: DirectMessage = serde_json::from_value(value).unwrap();
         assert_eq!(back, message);
+    }
+
+    #[test]
+    fn camera_info_query_uses_shared_equipment_wire_name() {
+        let message = DirectMessage::Query(QueryRequest {
+            id: Uuid::new_v4(),
+            expires_at: None,
+            kind: QueryKind::CameraInfo,
+        });
+        let value = serde_json::to_value(&message).unwrap();
+        assert_eq!(value["payload"]["kind"], "camera_info");
+        assert_eq!(
+            serde_json::from_value::<DirectMessage>(value).unwrap(),
+            message
+        );
     }
 
     #[test]

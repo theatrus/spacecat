@@ -1,3 +1,5 @@
+use base64::Engine;
+use chrono::{DateTime as ChronoDateTime, FixedOffset};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -168,6 +170,380 @@ pub struct AltitudeCondition {
     pub name: String,
 }
 
+/// A long-running sequence operation that benefits from chat progress updates.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SequenceOperation {
+    /// Stable position within the sequence tree for correlating adjacent polls.
+    pub key: String,
+    pub name: String,
+    pub status: String,
+    pub kind: SequenceOperationKind,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum SequenceOperationKind {
+    CameraCooling {
+        target_temperature: f64,
+        minimum_duration: Option<chrono::Duration>,
+    },
+    TimeWait {
+        target_time: Option<ChronoDateTime<FixedOffset>>,
+        configured_duration: Option<chrono::Duration>,
+    },
+    MountSlew {
+        coordinates: Option<OperationCoordinates>,
+        /// Older Advanced API payloads expose coordinates but not the
+        /// concrete sequence-item type. A nearby MOUNT-CENTER event can
+        /// safely promote one of these otherwise-slew operations.
+        may_be_center: bool,
+    },
+    MountCenter {
+        coordinates: Option<OperationCoordinates>,
+        rotation: Option<f64>,
+        output: Option<Box<PlateSolveOutput>>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct OperationCoordinates {
+    pub ra_hours: Option<f64>,
+    pub ra_string: Option<String>,
+    pub dec_degrees: Option<f64>,
+    pub dec_string: Option<String>,
+    pub epoch: Option<String>,
+    pub altitude_degrees: Option<f64>,
+    pub azimuth_degrees: Option<f64>,
+}
+
+impl OperationCoordinates {
+    pub fn display(&self) -> String {
+        if self.altitude_degrees.is_some() || self.azimuth_degrees.is_some() {
+            return format!(
+                "Alt {} · Az {}",
+                self.altitude_degrees
+                    .map(|value| format!("{value:.2}°"))
+                    .unwrap_or_else(|| "--".to_string()),
+                self.azimuth_degrees
+                    .map(|value| format!("{value:.2}°"))
+                    .unwrap_or_else(|| "--".to_string())
+            );
+        }
+
+        let ra = self.ra_string.clone().unwrap_or_else(|| {
+            self.ra_hours
+                .map(|value| format!("{value:.5} h"))
+                .unwrap_or_else(|| "--".to_string())
+        });
+        let dec = self.dec_string.clone().unwrap_or_else(|| {
+            self.dec_degrees
+                .map(|value| format!("{value:.5}°"))
+                .unwrap_or_else(|| "--".to_string())
+        });
+        match self.epoch.as_deref() {
+            Some(epoch) => format!("RA {ra} · Dec {dec} ({epoch})"),
+            None => format!("RA {ra} · Dec {dec}"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlateSolveOutput {
+    pub solve_time: Option<String>,
+    pub success: Option<bool>,
+    pub coordinates: Option<OperationCoordinates>,
+    pub position_angle: Option<f64>,
+    pub pixel_scale: Option<f64>,
+    pub radius_degrees: Option<f64>,
+    pub separation_arcseconds: Option<f64>,
+    pub ra_error: Option<String>,
+    pub dec_error: Option<String>,
+    pub ra_pixel_error: Option<f64>,
+    pub dec_pixel_error: Option<f64>,
+    pub flipped: Option<bool>,
+    pub thumbnail: Option<Vec<u8>>,
+    pub thumbnail_media_type: Option<String>,
+}
+
+impl SequenceOperation {
+    pub fn is_active(&self) -> bool {
+        matches!(
+            self.status.to_ascii_uppercase().as_str(),
+            "RUNNING" | "ACTIVE"
+        )
+    }
+
+    pub fn is_failed(&self) -> bool {
+        matches!(
+            self.status.to_ascii_uppercase().as_str(),
+            "FAILED" | "ABORTED" | "CANCELLED" | "CANCELED"
+        )
+    }
+}
+
+/// Find chat-visible, long-running sequence items without depending on
+/// localized display names. Direct snapshots supply `OperationKind`; older
+/// plugin and Advanced API payloads are recognized from their stable fields.
+pub fn extract_sequence_operations(sequence: &SequenceResponse) -> Vec<SequenceOperation> {
+    fn visit_items(values: &[Value], parent: &str, output: &mut Vec<SequenceOperation>) {
+        for (index, value) in values.iter().enumerate() {
+            let Some(object) = value.as_object() else {
+                continue;
+            };
+            let key = if parent.is_empty() {
+                index.to_string()
+            } else {
+                format!("{parent}/{index}")
+            };
+            let name = object
+                .get("Name")
+                .and_then(Value::as_str)
+                .unwrap_or("Sequence operation")
+                .to_string();
+            let status = object
+                .get("Status")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let explicit_kind = object.get("OperationKind").and_then(Value::as_str);
+
+            let is_cooling = explicit_kind == Some("camera_cooling")
+                || (object.contains_key("Temperature") && object.contains_key("MinCoolingTime"));
+            let is_wait = explicit_kind == Some("time_wait")
+                || object.contains_key("CalculatedWaitDuration")
+                || object.contains_key("Delay");
+            let has_coordinates =
+                object.contains_key("Coordinates") && !name.ends_with("_Container");
+            let lower_name = name.to_ascii_lowercase();
+            let name_is_center = lower_name.contains("center")
+                || lower_name.contains("centr")
+                || lower_name.contains("zentrier");
+            let is_center = explicit_kind == Some("mount_center")
+                || (has_coordinates && (object.contains_key("Rotation") || name_is_center));
+            let is_slew = explicit_kind == Some("mount_slew") || (has_coordinates && !is_center);
+
+            if is_cooling {
+                if let Some(target_temperature) = object.get("Temperature").and_then(value_as_f64) {
+                    output.push(SequenceOperation {
+                        key: key.clone(),
+                        name: name.clone(),
+                        status: status.clone(),
+                        kind: SequenceOperationKind::CameraCooling {
+                            target_temperature,
+                            minimum_duration: object
+                                .get("MinCoolingTime")
+                                .and_then(parse_minutes_or_timespan),
+                        },
+                    });
+                }
+            } else if is_wait {
+                let configured_duration = object
+                    .get("CalculatedWaitDuration")
+                    .and_then(parse_duration_value)
+                    .or_else(|| object.get("Delay").and_then(parse_duration_value));
+                let target_time = object
+                    .get("TargetTime")
+                    .and_then(Value::as_str)
+                    .and_then(parse_target_time);
+                if configured_duration.is_some() || target_time.is_some() {
+                    output.push(SequenceOperation {
+                        key: key.clone(),
+                        name: name.clone(),
+                        status: status.clone(),
+                        kind: SequenceOperationKind::TimeWait {
+                            target_time,
+                            configured_duration,
+                        },
+                    });
+                }
+            } else if is_center {
+                output.push(SequenceOperation {
+                    key: key.clone(),
+                    name: name.clone(),
+                    status: status.clone(),
+                    kind: SequenceOperationKind::MountCenter {
+                        coordinates: object
+                            .get("Coordinates")
+                            .and_then(parse_operation_coordinates),
+                        rotation: object.get("Rotation").and_then(value_as_f64),
+                        output: object
+                            .get("PlateSolveOutput")
+                            .and_then(parse_plate_solve_output)
+                            .map(Box::new),
+                    },
+                });
+            } else if is_slew {
+                output.push(SequenceOperation {
+                    key: key.clone(),
+                    name: name.clone(),
+                    status: status.clone(),
+                    kind: SequenceOperationKind::MountSlew {
+                        coordinates: object
+                            .get("Coordinates")
+                            .and_then(parse_operation_coordinates),
+                        may_be_center: explicit_kind.is_none(),
+                    },
+                });
+            }
+
+            if let Some(items) = object.get("Items").and_then(Value::as_array) {
+                visit_items(items, &key, output);
+            }
+        }
+    }
+
+    let mut operations = Vec::new();
+    visit_items(&sequence.response, "", &mut operations);
+    operations
+}
+
+fn parse_operation_coordinates(value: &Value) -> Option<OperationCoordinates> {
+    let object = value.as_object()?;
+    let angle = |name: &str| {
+        object.get(name).and_then(|value| {
+            value_as_f64(value).or_else(|| value.get("Degree").and_then(value_as_f64))
+        })
+    };
+    let coordinates = OperationCoordinates {
+        ra_hours: object.get("RA").and_then(value_as_f64),
+        ra_string: object
+            .get("RAString")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        dec_degrees: object.get("Dec").and_then(value_as_f64),
+        dec_string: object
+            .get("DecString")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        epoch: object.get("Epoch").map(|value| {
+            value
+                .as_str()
+                .map(str::to_string)
+                .unwrap_or_else(|| value.to_string())
+        }),
+        altitude_degrees: angle("Altitude"),
+        azimuth_degrees: angle("Azimuth"),
+    };
+    (coordinates.ra_hours.is_some()
+        || coordinates.dec_degrees.is_some()
+        || coordinates.altitude_degrees.is_some()
+        || coordinates.azimuth_degrees.is_some()
+        || coordinates.ra_string.is_some()
+        || coordinates.dec_string.is_some())
+    .then_some(coordinates)
+}
+
+fn parse_plate_solve_output(value: &Value) -> Option<PlateSolveOutput> {
+    const MAX_THUMBNAIL_BASE64_LEN: usize = 8 * 1024 * 1024;
+    let object = value.as_object()?;
+    let thumbnail = object
+        .get("ThumbnailBase64")
+        .and_then(Value::as_str)
+        .filter(|encoded| encoded.len() <= MAX_THUMBNAIL_BASE64_LEN)
+        .and_then(|encoded| {
+            base64::engine::general_purpose::STANDARD
+                .decode(encoded)
+                .ok()
+        });
+    let output = PlateSolveOutput {
+        solve_time: object
+            .get("SolveTime")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        success: object.get("Success").and_then(Value::as_bool),
+        coordinates: object
+            .get("Coordinates")
+            .and_then(parse_operation_coordinates),
+        position_angle: object.get("PositionAngle").and_then(value_as_f64),
+        pixel_scale: object.get("PixelScale").and_then(value_as_f64),
+        radius_degrees: object.get("RadiusDegrees").and_then(value_as_f64),
+        separation_arcseconds: object.get("SeparationArcseconds").and_then(value_as_f64),
+        ra_error: object
+            .get("RaError")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        dec_error: object
+            .get("DecError")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        ra_pixel_error: object.get("RaPixelError").and_then(value_as_f64),
+        dec_pixel_error: object.get("DecPixelError").and_then(value_as_f64),
+        flipped: object.get("Flipped").and_then(Value::as_bool),
+        thumbnail,
+        thumbnail_media_type: object
+            .get("ThumbnailMediaType")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+    };
+    (output.solve_time.is_some()
+        || output.success.is_some()
+        || output.coordinates.is_some()
+        || output.thumbnail.is_some())
+    .then_some(output)
+}
+
+fn value_as_f64(value: &Value) -> Option<f64> {
+    value
+        .as_f64()
+        .or_else(|| value.as_str()?.parse::<f64>().ok())
+        .filter(|value| value.is_finite())
+}
+
+fn parse_target_time(value: &str) -> Option<ChronoDateTime<FixedOffset>> {
+    ChronoDateTime::parse_from_rfc3339(value).ok()
+}
+
+fn parse_duration_value(value: &Value) -> Option<chrono::Duration> {
+    if let Some(seconds) = value_as_f64(value) {
+        return duration_from_seconds(seconds);
+    }
+    parse_timespan(value.as_str()?)
+}
+
+fn parse_minutes_or_timespan(value: &Value) -> Option<chrono::Duration> {
+    if let Some(minutes) = value_as_f64(value) {
+        return duration_from_seconds(minutes * 60.0);
+    }
+    parse_timespan(value.as_str()?)
+}
+
+fn duration_from_seconds(seconds: f64) -> Option<chrono::Duration> {
+    if !seconds.is_finite() || seconds < 0.0 {
+        return None;
+    }
+    let milliseconds = (seconds * 1000.0).round();
+    if milliseconds > i64::MAX as f64 {
+        return None;
+    }
+    chrono::Duration::try_milliseconds(milliseconds as i64)
+}
+
+/// Parse the invariant TimeSpan strings emitted by System.Text.Json and
+/// Newtonsoft.Json: `[d.]hh:mm:ss[.fffffff]`.
+fn parse_timespan(value: &str) -> Option<chrono::Duration> {
+    let (days, clock) = match value.split_once('.') {
+        Some((head, tail)) if !head.contains(':') => (head.parse::<i64>().ok()?, tail),
+        _ => (0, value),
+    };
+    let mut fields = clock.split(':');
+    let hours = fields.next()?.parse::<i64>().ok()?;
+    let minutes = fields.next()?.parse::<i64>().ok()?;
+    let seconds = fields.next()?.parse::<f64>().ok()?;
+    if fields.next().is_some()
+        || hours < 0
+        || !(0..60).contains(&minutes)
+        || !(0.0..60.0).contains(&seconds)
+    {
+        return None;
+    }
+    let whole_seconds = days
+        .checked_mul(24)?
+        .checked_add(hours)?
+        .checked_mul(60)?
+        .checked_add(minutes)?
+        .checked_mul(60)?;
+    duration_from_seconds(whole_seconds as f64 + seconds)
+}
+
 impl SequenceResponse {
     /// Get global triggers from the first item if it exists
     pub fn get_global_triggers(&self) -> Option<GlobalTriggers> {
@@ -220,9 +596,10 @@ impl Container {
 
 /// Extract the current target name from a sequence response
 ///
-/// This function looks for active or running containers that represent observation targets.
-/// Target containers are identified by having "_Container" suffix in their names.
-/// The suffix is removed from the returned target name.
+/// Native Direct targets are identified by their explicit `IsTargetContainer`
+/// marker. Older Direct and Advanced API payloads fall back to active containers
+/// with a `_Container` suffix after known N.I.N.A. infrastructure wrappers are
+/// excluded. The suffix is removed from the returned target name.
 ///
 /// # Arguments
 /// * `sequence` - The sequence response to analyze
@@ -231,40 +608,71 @@ impl Container {
 /// * `Some(String)` - The current target name without "_Container" suffix
 /// * `None` - If no active target is found
 pub fn extract_current_target(sequence: &SequenceResponse) -> Option<String> {
-    // Recursively search through all JSON objects for active target containers
-    fn search_containers(values: &[Value]) -> Option<String> {
+    fn active_container_name(obj: &serde_json::Map<String, Value>) -> Option<&str> {
+        let status = obj.get("Status")?.as_str()?;
+        if status == "RUNNING" || status == "Active" {
+            obj.get("Name")?.as_str()
+        } else {
+            None
+        }
+    }
+
+    fn display_name(name: &str) -> Option<String> {
+        let target_name = name.strip_suffix("_Container").unwrap_or(name);
+        (!target_name.is_empty()).then(|| target_name.to_string())
+    }
+
+    // Native Direct plugins explicitly mark N.I.N.A. deep-sky-object
+    // containers. Search the whole tree for those first so user-defined
+    // wrappers can never be mistaken for the target.
+    fn search_explicit_targets(values: &[Value]) -> Option<String> {
         for value in values {
             if let Some(obj) = value.as_object() {
-                // Try to extract data directly from the JSON object
-                if let (Some(name), Some(status)) = (
-                    obj.get("Name").and_then(|v| v.as_str()),
-                    obj.get("Status").and_then(|v| v.as_str()),
-                ) {
-                    if (status == "RUNNING" || status == "Active")
-                        && name.ends_with("_Container")
-                        && !is_system_container(name)
-                    {
-                        // Remove the "_Container" suffix to get the target name
-                        let target_name = name.strip_suffix("_Container").unwrap_or(name);
+                if obj
+                    .get("IsTargetContainer")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                    && let Some(name) = active_container_name(obj)
+                    && let Some(target) = display_name(name)
+                {
+                    return Some(target);
+                }
 
-                        if !target_name.is_empty() {
-                            return Some(target_name.to_string());
-                        }
-                    }
-
-                    // Also search nested items
-                    if let Some(items) = obj.get("Items").and_then(|v| v.as_array())
-                        && let Some(nested_target) = search_containers(items)
-                    {
-                        return Some(nested_target);
-                    }
+                if let Some(items) = obj.get("Items").and_then(Value::as_array)
+                    && let Some(target) = search_explicit_targets(items)
+                {
+                    return Some(target);
                 }
             }
         }
         None
     }
 
-    search_containers(&sequence.response)
+    // Older Direct plugins and Advanced API responses predate the explicit
+    // marker. Preserve their container-name heuristic as a fallback.
+    fn search_legacy_containers(values: &[Value]) -> Option<String> {
+        for value in values {
+            if let Some(obj) = value.as_object() {
+                if let Some(name) = active_container_name(obj)
+                    && name.ends_with("_Container")
+                    && !is_system_container(name)
+                    && let Some(target) = display_name(name)
+                {
+                    return Some(target);
+                }
+
+                if let Some(items) = obj.get("Items").and_then(Value::as_array)
+                    && let Some(target) = search_legacy_containers(items)
+                {
+                    return Some(target);
+                }
+            }
+        }
+        None
+    }
+
+    search_explicit_targets(&sequence.response)
+        .or_else(|| search_legacy_containers(&sequence.response))
 }
 
 /// Extract the meridian flip time from a sequence response
@@ -343,6 +751,7 @@ fn is_system_container(name: &str) -> bool {
         "Basic Sequence End_Container",
         "Target Imaging Instructions_Container",
         "Parallel End of Sequence Instructions_Container",
+        "Sequential Instruction Set_Container",
     ];
 
     system_containers
@@ -493,10 +902,69 @@ mod tests {
         assert!(is_system_container("Targets_Container"));
         assert!(is_system_container("Basic Sequence Startup_Container"));
         assert!(is_system_container("Target Imaging Instructions_Container"));
+        assert!(is_system_container("Sequential Instruction Set_Container"));
 
         assert!(!is_system_container("Sh2 101_Container"));
         assert!(!is_system_container("Triangulum Pinwheel_Container"));
         assert!(!is_system_container("M31_Container"));
+    }
+
+    #[test]
+    fn test_extract_current_target_skips_sequential_instruction_wrapper() {
+        let sequence: SequenceResponse = serde_json::from_value(serde_json::json!({
+            "Response": [
+                { "GlobalTriggers": [] },
+                {
+                    "Name": "Sequential Instruction Set_Container",
+                    "Status": "RUNNING",
+                    "Items": [
+                        {
+                            "Name": "NGC 7331_Container",
+                            "Status": "RUNNING",
+                            "Items": []
+                        }
+                    ]
+                }
+            ],
+            "Error": "",
+            "StatusCode": 200,
+            "Success": true,
+            "Type": "API"
+        }))
+        .unwrap();
+
+        assert_eq!(
+            extract_current_target(&sequence),
+            Some("NGC 7331".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_current_target_prefers_explicit_target_over_custom_wrapper() {
+        let sequence: SequenceResponse = serde_json::from_value(serde_json::json!({
+            "Response": [
+                { "GlobalTriggers": [] },
+                {
+                    "Name": "Custom Observatory Wrapper_Container",
+                    "Status": "RUNNING",
+                    "Items": [
+                        {
+                            "Name": "M42_Container",
+                            "Status": "RUNNING",
+                            "IsTargetContainer": true,
+                            "Items": []
+                        }
+                    ]
+                }
+            ],
+            "Error": "",
+            "StatusCode": 200,
+            "Success": true,
+            "Type": "API"
+        }))
+        .unwrap();
+
+        assert_eq!(extract_current_target(&sequence), Some("M42".to_string()));
     }
 
     #[test]
@@ -609,6 +1077,217 @@ mod tests {
         let flip_time = extract_meridian_flip_time(&sequence);
 
         assert!(flip_time.is_none());
+    }
+
+    #[test]
+    fn extracts_direct_cooling_and_wait_operations_recursively() {
+        let sequence: SequenceResponse = serde_json::from_value(serde_json::json!({
+            "Response": [
+                {"GlobalTriggers": []},
+                {
+                    "Name": "Startup_Container",
+                    "Status": "RUNNING",
+                    "Items": [
+                        {
+                            "Name": "Cool camera",
+                            "Status": "RUNNING",
+                            "OperationKind": "camera_cooling",
+                            "Temperature": -10.0,
+                            "MinCoolingTime": "00:15:00"
+                        },
+                        {
+                            "Name": "Wait for time span",
+                            "Status": "RUNNING",
+                            "OperationKind": "time_wait",
+                            "Delay": 300,
+                            "CalculatedWaitDuration": "00:05:00"
+                        }
+                    ]
+                }
+            ],
+            "Error": "",
+            "StatusCode": 200,
+            "Success": true,
+            "Type": "API"
+        }))
+        .unwrap();
+
+        let operations = extract_sequence_operations(&sequence);
+        assert_eq!(operations.len(), 2);
+        assert!(operations.iter().all(SequenceOperation::is_active));
+        assert!(matches!(
+            operations[0].kind,
+            SequenceOperationKind::CameraCooling {
+                target_temperature: -10.0,
+                minimum_duration: Some(duration)
+            } if duration == chrono::Duration::minutes(15)
+        ));
+        assert!(matches!(
+            operations[1].kind,
+            SequenceOperationKind::TimeWait {
+                target_time: None,
+                configured_duration: Some(duration)
+            } if duration == chrono::Duration::minutes(5)
+        ));
+    }
+
+    #[test]
+    fn recognizes_advanced_api_fields_but_ignores_timed_conditions() {
+        let sequence: SequenceResponse = serde_json::from_value(serde_json::json!({
+            "Response": [{
+                "Name": "Target_Container",
+                "Status": "RUNNING",
+                "Items": [{
+                    "Name": "CoolCamera",
+                    "Status": "RUNNING",
+                    "Temperature": "-15",
+                    "MinCoolingTime": 10
+                }, {
+                    "Name": "WaitForTime",
+                    "Status": "RUNNING",
+                    "CalculatedWaitDuration": "00:01:30.5000000",
+                    "TargetTime": "2026-08-16T01:02:03-07:00"
+                }, {
+                    "Name": "Attendre une durée",
+                    "Status": "RUNNING",
+                    "Delay": 45
+                }],
+                "Conditions": [{
+                    "Name": "Time span condition",
+                    "Status": "RUNNING",
+                    "RemainingTime": "00:30:00",
+                    "TargetTime": "2026-08-16T02:00:00-07:00"
+                }]
+            }],
+            "Error": "",
+            "StatusCode": 200,
+            "Success": true,
+            "Type": "API"
+        }))
+        .unwrap();
+
+        let operations = extract_sequence_operations(&sequence);
+        assert_eq!(operations.len(), 3);
+        assert!(matches!(
+            operations[0].kind,
+            SequenceOperationKind::CameraCooling {
+                minimum_duration: Some(duration),
+                ..
+            } if duration == chrono::Duration::minutes(10)
+        ));
+        assert!(matches!(
+            operations[1].kind,
+            SequenceOperationKind::TimeWait {
+                target_time: Some(_),
+                configured_duration: Some(duration)
+            } if duration == chrono::Duration::milliseconds(90_500)
+        ));
+        assert!(matches!(
+            operations[2].kind,
+            SequenceOperationKind::TimeWait {
+                target_time: None,
+                configured_duration: Some(duration)
+            } if duration == chrono::Duration::seconds(45)
+        ));
+    }
+
+    #[test]
+    fn extracts_slew_center_and_direct_plate_solve_output() {
+        let sequence: SequenceResponse = serde_json::from_value(serde_json::json!({
+            "Response": [{
+                "Name": "Target_Container",
+                "Status": "RUNNING",
+                "Items": [{
+                    "Name": "Slew to target",
+                    "Status": "RUNNING",
+                    "OperationKind": "mount_slew",
+                    "Coordinates": {
+                        "RA": 12.5,
+                        "RAString": "12:30:00",
+                        "Dec": 42.25,
+                        "DecString": "+42:15:00",
+                        "Epoch": "J2000"
+                    }
+                }, {
+                    "Name": "Center and rotate",
+                    "Status": "RUNNING",
+                    "OperationKind": "mount_center",
+                    "Coordinates": { "RA": 12.5, "Dec": 42.25 },
+                    "Rotation": 91.5,
+                    "PlateSolveOutput": {
+                        "SolveTime": "2026-08-16T06:45:00Z",
+                        "Success": true,
+                        "Coordinates": {
+                            "RA": 12.5001,
+                            "RAString": "12:30:00.4",
+                            "Dec": 42.2502,
+                            "DecString": "+42:15:00.7",
+                            "Epoch": "J2000"
+                        },
+                        "PositionAngle": 91.45,
+                        "PixelScale": 1.25,
+                        "SeparationArcseconds": 2.4,
+                        "ThumbnailBase64": "AQID",
+                        "ThumbnailMediaType": "image/jpeg"
+                    }
+                }]
+            }],
+            "Error": "",
+            "StatusCode": 200,
+            "Success": true,
+            "Type": "API"
+        }))
+        .unwrap();
+
+        let operations = extract_sequence_operations(&sequence);
+        assert_eq!(operations.len(), 2);
+        assert!(matches!(
+            &operations[0].kind,
+            SequenceOperationKind::MountSlew {
+                coordinates: Some(coordinates),
+                may_be_center: false,
+            } if coordinates.ra_string.as_deref() == Some("12:30:00")
+        ));
+        assert!(matches!(
+            &operations[1].kind,
+            SequenceOperationKind::MountCenter {
+                rotation: Some(rotation),
+                output: Some(output),
+                ..
+            } if (*rotation - 91.5).abs() < f64::EPSILON
+                && output.success == Some(true)
+                && output.separation_arcseconds == Some(2.4)
+                && output.thumbnail.as_deref() == Some(&[1, 2, 3][..])
+        ));
+    }
+
+    #[test]
+    fn advanced_api_coordinate_items_remain_center_promotable() {
+        let sequence: SequenceResponse = serde_json::from_value(serde_json::json!({
+            "Response": [{
+                "Name": "Custom renamed operation",
+                "Status": "RUNNING",
+                "Coordinates": {
+                    "Altitude": { "Degree": 50.5 },
+                    "Azimuth": { "Degree": 182.25 }
+                }
+            }],
+            "Error": "",
+            "StatusCode": 200,
+            "Success": true,
+            "Type": "API"
+        }))
+        .unwrap();
+
+        let operations = extract_sequence_operations(&sequence);
+        assert!(matches!(
+            &operations[0].kind,
+            SequenceOperationKind::MountSlew {
+                coordinates: Some(coordinates),
+                may_be_center: true,
+            } if coordinates.altitude_degrees == Some(50.5)
+                && coordinates.azimuth_degrees == Some(182.25)
+        ));
     }
 
     #[test]

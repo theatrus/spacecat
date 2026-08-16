@@ -8,6 +8,7 @@
 use super::direct_server::{QUERY_TIMEOUT, RigConnection};
 use crate::api::CommandResponse;
 use crate::autofocus::AutofocusResponse;
+use crate::camera::CameraInfoResponse;
 use crate::direct::protocol::QueryKind;
 use crate::events::EventHistoryResponse;
 use crate::filterwheel::FilterWheelInfoResponse;
@@ -90,6 +91,10 @@ impl RigSource for DirectRigSource {
 
     async fn get_mount_info(&self) -> RigSourceResult<MountInfoResponse> {
         self.query_as(QueryKind::MountInfo).await
+    }
+
+    async fn get_camera_info(&self) -> RigSourceResult<CameraInfoResponse> {
+        self.query_as(QueryKind::CameraInfo).await
     }
 
     async fn get_filterwheel_info(&self) -> RigSourceResult<FilterWheelInfoResponse> {

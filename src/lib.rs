@@ -3,6 +3,7 @@
 pub mod api;
 pub mod artifact_contract;
 pub mod autofocus;
+pub mod camera;
 pub mod charts;
 pub mod chat;
 pub mod chat_updater;

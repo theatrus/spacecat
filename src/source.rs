@@ -8,6 +8,7 @@
 
 use crate::api::{ApiError, ChatstronomyApiClient, CommandResponse};
 use crate::autofocus::AutofocusResponse;
+use crate::camera::CameraInfoResponse;
 use crate::config::ApiConfig;
 use crate::events::EventHistoryResponse;
 use crate::filterwheel::FilterWheelInfoResponse;
@@ -193,6 +194,7 @@ pub trait RigSource: Send + Sync {
     async fn get_thumbnail(&self, index: u32) -> RigSourceResult<ThumbnailResponse>;
     async fn get_last_autofocus(&self) -> RigSourceResult<AutofocusResponse>;
     async fn get_mount_info(&self) -> RigSourceResult<MountInfoResponse>;
+    async fn get_camera_info(&self) -> RigSourceResult<CameraInfoResponse>;
     async fn get_filterwheel_info(&self) -> RigSourceResult<FilterWheelInfoResponse>;
     async fn get_guider_info(&self) -> RigSourceResult<GuiderInfoResponse>;
     async fn get_guider_graph(&self) -> RigSourceResult<GuiderGraphResponse>;
@@ -255,6 +257,10 @@ impl RigSource for AdvancedApiSource {
 
     async fn get_mount_info(&self) -> RigSourceResult<MountInfoResponse> {
         Ok(self.client.get_mount_info().await?)
+    }
+
+    async fn get_camera_info(&self) -> RigSourceResult<CameraInfoResponse> {
+        Ok(self.client.get_camera_info().await?)
     }
 
     async fn get_filterwheel_info(&self) -> RigSourceResult<FilterWheelInfoResponse> {

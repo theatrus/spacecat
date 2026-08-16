@@ -181,6 +181,7 @@
                 "sequence",
                 "last_autofocus",
                 "mount_info",
+                "camera_info",
                 "filterwheel_info",
                 "guider_info",
                 "guider_graph",

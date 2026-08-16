@@ -453,16 +453,21 @@ function renderGuildCard(g) {
   if (g.registered) badges.push('<span class="badge good">registered</span>');
   if (g.bot_installed === true) badges.push('<span class="badge good">bot installed</span>');
   if (g.bot_installed === false) badges.push('<span class="badge bad">bot not installed</span>');
-  let action = "";
+  const actions = [];
   if (g.bot_installed === false && g.install_url) {
-    action = '<a href="' + esc(g.install_url) + '" target="_blank" rel="noopener">' +
-      '<button class="primary">Add bot to server</button></a>';
-  } else if (!g.registered) {
-    action = '<button class="primary b-register">Set up this server</button>';
+    actions.push('<a href="' + esc(g.install_url) + '" target="_blank" rel="noopener">' +
+      '<button class="primary">Add bot to server</button></a>');
+  } else if (g.bot_installed === true && g.install_url) {
+    actions.push('<a href="' + esc(g.install_url) + '" target="_blank" rel="noopener">' +
+      '<button title="Re-authorize View Channel, Send Messages, Embed Links, and Attach Files">' +
+      'Review bot permissions</button></a>');
+  }
+  if (!g.registered) {
+    actions.push('<button class="primary b-register">Set up this server</button>');
   }
   card.innerHTML =
     '<div class="head"><h2>' + esc(g.name) + "</h2>" +
-    '<div class="badges">' + badges.join("") + action + "</div></div>" +
+    '<div class="badges">' + badges.join("") + actions.join("") + "</div></div>" +
     '<div class="attachments"></div>';
   app.appendChild(card);
   const registerBtn = card.querySelector(".b-register");
@@ -692,6 +697,12 @@ mod tests {
         ] {
             assert!(INDEX_HTML.contains(needle), "missing {needle}");
         }
+    }
+
+    #[test]
+    fn installed_bots_can_reauthorize_attachment_permissions() {
+        assert!(INDEX_HTML.contains("Review bot permissions"));
+        assert!(INDEX_HTML.contains("Attach Files"));
     }
 
     #[test]

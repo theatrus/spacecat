@@ -1,4 +1,5 @@
 use crate::autofocus::AutofocusResponse;
+use crate::camera::CameraInfoResponse;
 use crate::config::ApiConfig;
 use crate::events::EventHistoryResponse;
 use crate::filterwheel::FilterWheelInfoResponse;
@@ -188,6 +189,12 @@ impl ChatstronomyApiClient {
         params: &[(&str, &str)],
     ) -> Result<SequenceResponse, ApiError> {
         self.generic_request_with_retry("/sequence/json", params)
+            .await
+    }
+
+    /// Fetch the live camera state, including cooling temperature and power.
+    pub async fn get_camera_info(&self) -> Result<CameraInfoResponse, ApiError> {
+        self.generic_request_with_retry("/equipment/camera/info", &[])
             .await
     }
 
