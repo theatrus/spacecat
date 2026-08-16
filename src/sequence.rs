@@ -596,9 +596,10 @@ impl Container {
 
 /// Extract the current target name from a sequence response
 ///
-/// This function looks for active or running containers that represent observation targets.
-/// Target containers are identified by having "_Container" suffix in their names.
-/// The suffix is removed from the returned target name.
+/// Native Direct targets are identified by their explicit `IsTargetContainer`
+/// marker. Older Direct and Advanced API payloads fall back to active containers
+/// with a `_Container` suffix after known N.I.N.A. infrastructure wrappers are
+/// excluded. The suffix is removed from the returned target name.
 ///
 /// # Arguments
 /// * `sequence` - The sequence response to analyze
@@ -607,40 +608,71 @@ impl Container {
 /// * `Some(String)` - The current target name without "_Container" suffix
 /// * `None` - If no active target is found
 pub fn extract_current_target(sequence: &SequenceResponse) -> Option<String> {
-    // Recursively search through all JSON objects for active target containers
-    fn search_containers(values: &[Value]) -> Option<String> {
+    fn active_container_name(obj: &serde_json::Map<String, Value>) -> Option<&str> {
+        let status = obj.get("Status")?.as_str()?;
+        if status == "RUNNING" || status == "Active" {
+            obj.get("Name")?.as_str()
+        } else {
+            None
+        }
+    }
+
+    fn display_name(name: &str) -> Option<String> {
+        let target_name = name.strip_suffix("_Container").unwrap_or(name);
+        (!target_name.is_empty()).then(|| target_name.to_string())
+    }
+
+    // Native Direct plugins explicitly mark N.I.N.A. deep-sky-object
+    // containers. Search the whole tree for those first so user-defined
+    // wrappers can never be mistaken for the target.
+    fn search_explicit_targets(values: &[Value]) -> Option<String> {
         for value in values {
             if let Some(obj) = value.as_object() {
-                // Try to extract data directly from the JSON object
-                if let (Some(name), Some(status)) = (
-                    obj.get("Name").and_then(|v| v.as_str()),
-                    obj.get("Status").and_then(|v| v.as_str()),
-                ) {
-                    if (status == "RUNNING" || status == "Active")
-                        && name.ends_with("_Container")
-                        && !is_system_container(name)
-                    {
-                        // Remove the "_Container" suffix to get the target name
-                        let target_name = name.strip_suffix("_Container").unwrap_or(name);
+                if obj
+                    .get("IsTargetContainer")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                    && let Some(name) = active_container_name(obj)
+                    && let Some(target) = display_name(name)
+                {
+                    return Some(target);
+                }
 
-                        if !target_name.is_empty() {
-                            return Some(target_name.to_string());
-                        }
-                    }
-
-                    // Also search nested items
-                    if let Some(items) = obj.get("Items").and_then(|v| v.as_array())
-                        && let Some(nested_target) = search_containers(items)
-                    {
-                        return Some(nested_target);
-                    }
+                if let Some(items) = obj.get("Items").and_then(Value::as_array)
+                    && let Some(target) = search_explicit_targets(items)
+                {
+                    return Some(target);
                 }
             }
         }
         None
     }
 
-    search_containers(&sequence.response)
+    // Older Direct plugins and Advanced API responses predate the explicit
+    // marker. Preserve their container-name heuristic as a fallback.
+    fn search_legacy_containers(values: &[Value]) -> Option<String> {
+        for value in values {
+            if let Some(obj) = value.as_object() {
+                if let Some(name) = active_container_name(obj)
+                    && name.ends_with("_Container")
+                    && !is_system_container(name)
+                    && let Some(target) = display_name(name)
+                {
+                    return Some(target);
+                }
+
+                if let Some(items) = obj.get("Items").and_then(Value::as_array)
+                    && let Some(target) = search_legacy_containers(items)
+                {
+                    return Some(target);
+                }
+            }
+        }
+        None
+    }
+
+    search_explicit_targets(&sequence.response)
+        .or_else(|| search_legacy_containers(&sequence.response))
 }
 
 /// Extract the meridian flip time from a sequence response
@@ -719,6 +751,7 @@ fn is_system_container(name: &str) -> bool {
         "Basic Sequence End_Container",
         "Target Imaging Instructions_Container",
         "Parallel End of Sequence Instructions_Container",
+        "Sequential Instruction Set_Container",
     ];
 
     system_containers
@@ -869,10 +902,69 @@ mod tests {
         assert!(is_system_container("Targets_Container"));
         assert!(is_system_container("Basic Sequence Startup_Container"));
         assert!(is_system_container("Target Imaging Instructions_Container"));
+        assert!(is_system_container("Sequential Instruction Set_Container"));
 
         assert!(!is_system_container("Sh2 101_Container"));
         assert!(!is_system_container("Triangulum Pinwheel_Container"));
         assert!(!is_system_container("M31_Container"));
+    }
+
+    #[test]
+    fn test_extract_current_target_skips_sequential_instruction_wrapper() {
+        let sequence: SequenceResponse = serde_json::from_value(serde_json::json!({
+            "Response": [
+                { "GlobalTriggers": [] },
+                {
+                    "Name": "Sequential Instruction Set_Container",
+                    "Status": "RUNNING",
+                    "Items": [
+                        {
+                            "Name": "NGC 7331_Container",
+                            "Status": "RUNNING",
+                            "Items": []
+                        }
+                    ]
+                }
+            ],
+            "Error": "",
+            "StatusCode": 200,
+            "Success": true,
+            "Type": "API"
+        }))
+        .unwrap();
+
+        assert_eq!(
+            extract_current_target(&sequence),
+            Some("NGC 7331".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_current_target_prefers_explicit_target_over_custom_wrapper() {
+        let sequence: SequenceResponse = serde_json::from_value(serde_json::json!({
+            "Response": [
+                { "GlobalTriggers": [] },
+                {
+                    "Name": "Custom Observatory Wrapper_Container",
+                    "Status": "RUNNING",
+                    "Items": [
+                        {
+                            "Name": "M42_Container",
+                            "Status": "RUNNING",
+                            "IsTargetContainer": true,
+                            "Items": []
+                        }
+                    ]
+                }
+            ],
+            "Error": "",
+            "StatusCode": 200,
+            "Success": true,
+            "Type": "API"
+        }))
+        .unwrap();
+
+        assert_eq!(extract_current_target(&sequence), Some("M42".to_string()));
     }
 
     #[test]
