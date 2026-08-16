@@ -533,6 +533,55 @@ mod tests {
     }
 
     #[test]
+    fn test_ts_targetstart_tolerates_explicit_nulls() {
+        // The plugin builds events from a dictionary and writes a missing
+        // Target Scheduler broker header through as a null rather than
+        // omitting the key. Both shapes have to survive.
+        let event_json = r#"{
+            "Time": "2026-08-16T20:00:00Z",
+            "Event": "TS-TARGETSTART",
+            "TargetName": "M31",
+            "ProjectName": null,
+            "Coordinates": null,
+            "Rotation": null,
+            "TargetEndTime": null
+        }"#;
+
+        let event: Event = serde_json::from_str(event_json).unwrap();
+        match event.details {
+            Some(EventDetails::TargetStart {
+                target_name,
+                coordinates,
+                rotation,
+                ..
+            }) => {
+                assert_eq!(target_name, "M31");
+                assert!(coordinates.is_none());
+                assert_eq!(rotation, None);
+            }
+            other => panic!("expected TargetStart, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn target_start_does_not_swallow_unrelated_events() {
+        // EventDetails is untagged, so variants are chosen by field shape.
+        // TargetName is the only remaining required field on TargetStart —
+        // if it ever becomes optional the variant matches every event.
+        for event_json in [
+            r#"{"Time": "t", "Event": "MOUNT-PARKED"}"#,
+            r#"{"Time": "t", "Event": "SEQUENCE-STARTING", "ChatEnabled": false}"#,
+            r#"{"Time": "t", "Event": "ROTATOR-MOVED", "From": 0.0, "To": 10.0}"#,
+        ] {
+            let event: Event = serde_json::from_str(event_json).unwrap();
+            assert!(
+                !matches!(event.details, Some(EventDetails::TargetStart { .. })),
+                "TargetStart greedily matched {event_json}"
+            );
+        }
+    }
+
+    #[test]
     fn test_rotator_moved_event() {
         let event_json = r#"{
             "To": 104.04,

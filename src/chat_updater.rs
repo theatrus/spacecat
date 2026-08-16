@@ -2824,6 +2824,26 @@ mod tests {
     }
 
     #[test]
+    fn nina_timestamps_parse_with_and_without_an_offset() {
+        assert!(parse_nina_timestamp("2026-08-17T04:00:00-07:00").is_some());
+        // DateTimeKind.Unspecified serializes without an offset; these used to
+        // be dropped, leaving the sequence wait state unset.
+        assert!(parse_nina_timestamp("2026-08-17T04:00:00").is_some());
+        assert!(parse_nina_timestamp("2026-08-17T04:00:00.1234567").is_some());
+        assert!(parse_nina_timestamp("not a timestamp").is_none());
+    }
+
+    #[test]
+    fn chat_titles_stay_within_the_discord_limit() {
+        let header = "E".repeat(4_000);
+        let title = format!("🔔 N.I.N.A. · {}", truncate_chat_title(&header));
+        // Discord rejects the whole message when the title exceeds 256, and
+        // the caller still prepends "[telescope] ".
+        assert!(title.chars().count() < 256);
+        assert!(get_event_title(&"X".repeat(4_000)).chars().count() < 256);
+    }
+
+    #[test]
     fn bounded_seen_set_evicts_the_oldest_key() {
         let mut seen = BoundedSeenSet::new(2);
         assert!(!seen.check_and_insert("first".to_string()));
