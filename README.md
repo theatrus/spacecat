@@ -15,12 +15,13 @@ imaging rigs with Discord and Matrix. It posts events, images, autofocus and
 guider graphs, and live status, and can expose an allowlisted set of bot slash
 commands for control.
 
-For the easiest Windows installation, use the separate
-[`chatstronomy-nina-plugin`](https://github.com/theatrus/chatstronomy-nina-plugin).
-It reads N.I.N.A. natively with no Advanced API requirement, supervises a
-bundled local runtime, or connects outbound to a central Chatstronomy hub. This
-repository owns that Rust runtime, the standalone Advanced API polling mode,
-Discord and Matrix bots, and the hosted hub.
+The recommended Windows setup is the separate
+[`chatstronomy-nina-plugin`](https://github.com/theatrus/chatstronomy-nina-plugin)
+paired with [Chatstronomy Hub](https://hub.chatstronomy.com/). It reads N.I.N.A.
+natively with no Advanced API requirement and connects outbound to the central
+bot. A supervised local runtime and standalone Advanced API polling remain
+available for self-hosted installations. This repository owns those Rust
+runtimes, the Discord and Matrix bots, and the hosted Hub.
 
 The name is bilingual: *chat* describes the destination in English and means
 “cat” in French. The logo expresses the same idea as a Unix pipeline:
@@ -34,8 +35,8 @@ systems—with per-telescope channels, webhooks, and rooms.
 
 | Mode | N.I.N.A. data | Chat connection | Best for |
 |---|---|---|---|
+| Plugin + hosted Hub (recommended) | Native Direct data over outbound authenticated WSS | Central bot at [`hub.chatstronomy.com`](https://hub.chatstronomy.com/) | The simplest setup and several N.I.N.A. instances on different systems sharing one bot |
 | Plugin + local runtime | Native Direct pipe (recommended) or Advanced API polling | Discord webhook, your Discord application, Matrix over HTTPS, or Discord plus Matrix | One Windows imaging computer with no central service |
-| Plugin + hosted hub | Native Direct data over outbound authenticated WSS | Central bot at `https://hub.chatstronomy.com/` | Several N.I.N.A. instances on different systems sharing one bot |
 | Standalone backend | Advanced API over HTTP(S) | Locally managed Discord and/or Matrix credentials | Existing multi-rig deployments, Windows services, and Linux/systemd |
 
 The plugin and backend share versioned Direct/runtime protocols and the native
@@ -53,16 +54,20 @@ really.
 
 ### Installation
 
-> **N.I.N.A. plugin development builds are available now.** Download the latest
-> successful `main` package or build it from source in the
-> [plugin repository](https://github.com/theatrus/chatstronomy-nina-plugin#install-a-development-build).
-> Exit N.I.N.A., extract the inner plugin ZIP into
-> `%LOCALAPPDATA%\NINA\Plugins\3.0.0\Chatstronomy`, restart N.I.N.A., then open
-> **Plugins > Installed > Chatstronomy**. Development packages use the signed,
-> release-pinned Rust runtime but an unsigned test `Chatstronomy.dll`; official
-> tagged packages sign and verify both. See the
-> [N.I.N.A. integration architecture](docs/NINA_PLUGIN_ARCHITECTURE.md) for the
-> protocol and topology details.
+> **Recommended: install the N.I.N.A. plugin and pair it with the Hub.** In
+> N.I.N.A., open **Plugins > Available**, install **Chatstronomy** from the
+> built-in official repository once its listing is published, and restart. For
+> the current development build, first add
+> `https://raw.githubusercontent.com/theatrus/chatstronomy-nina-plugin/main/registry`
+> under **Options > General > Plugin Repositories**; N.I.N.A. supports this
+> alongside the official repository. Then open
+> [Chatstronomy Hub](https://hub.chatstronomy.com/), create a one-time pairing
+> code, and choose **Chatstronomy.com — hosted bot** in the installed plugin.
+> See the [plugin installation guide](https://github.com/theatrus/chatstronomy-nina-plugin#install-from-nina)
+> and [N.I.N.A. integration architecture](docs/NINA_PLUGIN_ARCHITECTURE.md) for
+> local Direct and Advanced API alternatives.
+
+The remaining installation options are for the standalone backend.
 
 #### Option 1: RPM Package (Recommended for Fedora/RHEL/CentOS)
 
