@@ -245,16 +245,18 @@ jobs:
       - name: Resolve and validate version
         id: get_version
         shell: pwsh
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
         run: |
           $metadata = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
           $package = $metadata.packages | Where-Object name -eq 'chatstronomy' | Select-Object -First 1
           if ($null -eq $package) { throw 'cargo metadata did not report the chatstronomy package' }
 
           $packageVersion = [string] $package.version
-          $version = if ('${{ github.event_name }}' -eq 'push') {
-            '${{ github.ref_name }}'.TrimStart('v')
-          } elseif (-not [string]::IsNullOrWhiteSpace('${{ inputs.version }}')) {
-            '${{ inputs.version }}'
+          $version = if ($env:GITHUB_EVENT_NAME -eq 'push') {
+            $env:GITHUB_REF_NAME.TrimStart('v')
+          } elseif (-not [string]::IsNullOrWhiteSpace($env:REQUESTED_VERSION)) {
+            $env:REQUESTED_VERSION
           } else {
             $packageVersion
           }
@@ -266,6 +268,11 @@ jobs:
           }
           "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Require signing for canonical Windows releases
+        if: github.repository == 'theatrus/chatstronomy' && env.SIGN_WINDOWS != 'true'
+        shell: pwsh
+        run: throw 'Official Chatstronomy Windows releases require the Azure signing configuration.'
 
       - name: Build full Windows binary
         run: cargo build --release --locked --verbose

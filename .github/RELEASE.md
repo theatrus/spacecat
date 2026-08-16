@@ -19,6 +19,12 @@ Each release includes:
 - **chatstronomy-plugin-contracts-v1.zip**: Versioned Direct protocol schema and fixtures
 - **chatstronomy-runtime-manifest.json**: Release identity, protocol versions, asset names, sizes, and SHA-256 hashes
 
+Both Windows executables are Authenticode-signed as StackFoundry LLC before the
+runtime manifest records their hashes. The full signed build is restored as the
+MSI payload; the separately signed lean build is consumed unchanged by the
+standalone N.I.N.A. plugin repository, which signs its own C# DLL before
+archiving.
+
 The N.I.N.A. plugin repository pins an exact Chatstronomy release and manifest
 checksum. It never downloads `latest` or builds the Rust runtime from a backend
 branch.
