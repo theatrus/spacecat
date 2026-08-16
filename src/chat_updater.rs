@@ -167,6 +167,12 @@ pub struct ChatUpdater {
     /// Telescope name — used to prefix chat message titles and console logs
     /// so users running multiple telescopes can tell rigs apart.
     telescope_name: String,
+    /// Post lifecycle messages (startup welcome, offline/back-online
+    /// alerts) to chat. True for self-hosted mode, where this updater's
+    /// lifetime IS the process lifetime. The hub sets false: its updaters
+    /// restart on every deploy, rig reconnect, and config change, and it
+    /// announces scope presence from the connection layer instead.
+    announce_lifecycle: bool,
 }
 
 impl ChatUpdater {
@@ -185,6 +191,7 @@ impl ChatUpdater {
             reconnect_initial: DEFAULT_RECONNECT_INITIAL,
             reconnect_max: DEFAULT_RECONNECT_MAX,
             telescope_name,
+            announce_lifecycle: true,
         }
     }
 
@@ -209,6 +216,14 @@ impl ChatUpdater {
     pub fn with_reconnect_backoff(mut self, initial_seconds: u64, max_seconds: u64) -> Self {
         self.reconnect_initial = Duration::from_secs(initial_seconds);
         self.reconnect_max = Duration::from_secs(max_seconds);
+        self
+    }
+
+    /// Enable or disable lifecycle chat messages (startup welcome,
+    /// offline/back-online alerts). Event and image notifications are not
+    /// affected.
+    pub fn with_lifecycle_announcements(mut self, announce: bool) -> Self {
+        self.announce_lifecycle = announce;
         self
     }
 
@@ -314,6 +329,9 @@ impl ChatUpdater {
 
     /// Post an offline/back-online connectivity alert to chat.
     async fn send_connectivity_notification(&self, online: bool) {
+        if !self.announce_lifecycle {
+            return;
+        }
         let message = if online {
             ChatMessage::new(&self.titled("✅ Telescope back online"))
                 .color(colors::GREEN)
@@ -478,7 +496,7 @@ impl ChatUpdater {
         println!("[{n}] Now monitoring for new events and images.");
 
         // Send welcome message to chat services
-        if self.chat_manager.service_count() > 0 {
+        if self.announce_lifecycle && self.chat_manager.service_count() > 0 {
             self.send_welcome_message().await;
         }
 
