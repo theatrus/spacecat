@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use thiserror::Error;
 
-pub const ADVANCED_API_DEPRECATION_NOTICE: &str = concat!(
+pub(crate) const ADVANCED_API_DEPRECATION_NOTICE: &str = concat!(
     "Advanced API mode is deprecated and retained only for existing installations. ",
     "Migrate this rig to the Chatstronomy N.I.N.A. plugin's native Direct mode."
 );
