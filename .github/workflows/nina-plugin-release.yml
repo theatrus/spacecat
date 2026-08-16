@@ -13,6 +13,13 @@ on:
 
 permissions:
   contents: write
+  # Required for azure/login's OIDC exchange. Without it the runner never
+  # populates ACTIONS_ID_TOKEN_REQUEST_URL and the login fails with "Unable to
+  # get ACTIONS_ID_TOKEN_REQUEST_URL env variable" -- which points at auth-type
+  # rather than at the missing permission. release.yml gets this implicitly from
+  # `permissions: write-all`; this workflow scopes its permissions, so it has to
+  # ask.
+  id-token: write
 
 env:
   DOTNET_CLI_TELEMETRY_OPTOUT: true
