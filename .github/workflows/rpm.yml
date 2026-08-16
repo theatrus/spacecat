@@ -49,6 +49,15 @@ jobs:
       - name: Mark checkout as a safe git directory
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
+      - name: Verify Cargo and RPM versions match
+        run: |
+          cargo_version="$(awk -F '"' '/^version = / { print $2; exit }' Cargo.toml)"
+          rpm_version="$(rpmspec -q --queryformat '%{VERSION}\n' packaging/rpm/chatstronomy.spec | head -n1)"
+          if [[ "$cargo_version" != "$rpm_version" ]]; then
+            echo "::error::Cargo.toml version $cargo_version does not match RPM version $rpm_version"
+            exit 1
+          fi
+
       - name: Cache RPM Rust compiler outputs
         uses: actions/cache@v6
         with:

@@ -6,7 +6,7 @@
 %global debug_package %{nil}
 
 Name:           chatstronomy
-Version:        0.3.0
+Version:        0.3.1
 Release:        1%{?dist}
 Summary:        Chatstronomy - Astronomical Observation System
 
@@ -114,6 +114,10 @@ install -Dpm0640 packaging/rpm/chatstronomy-default.json \
 %attr(0640,root,chatstronomy) %config(noreplace) %{_sysconfdir}/%{name}/config.json
 
 %changelog
+* Sun Aug 16 2026 Yann Ramin <github@theatr.us> - 0.3.1-1
+- Report cooling, waits, slews, and centering with plate-solve output
+- Restore Hub image attachments and enlarge native N.I.N.A. chat previews
+
 * Thu Jul 02 2026 Yann Ramin <github@theatr.us> - 0.2.1-1
 - Fix `cargo fmt` violations that broke CI linting on main
 
