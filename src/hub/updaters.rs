@@ -2,9 +2,9 @@
 //!
 //! A reconcile loop compares live `/v1/direct` connections against running
 //! `ChatUpdater` tasks: a connected telescope with a routed channel gets an
-//! updater; a disconnected or replaced one has its updater stopped. Session
-//! IDs distinguish a reconnect (new updater against the fresh connection)
-//! from steady state.
+//! updater; a disconnected or replaced one has its updater stopped. The
+//! server-issued connection ID distinguishes a reconnect from steady state;
+//! the client session ID deliberately survives reconnects.
 
 use super::db::Db;
 use super::direct_server::RigConnections;
@@ -45,7 +45,7 @@ pub struct PresenceEvent {
 }
 
 struct RunningUpdater {
-    session_id: Uuid,
+    connection_id: Uuid,
     /// The config the updater was built with. A change in the database
     /// (destinations added or removed, cooldown adjusted) restarts the
     /// updater, which otherwise freezes its config at construction.
@@ -218,7 +218,7 @@ impl UpdaterManager {
             let connection_current = self
                 .connections
                 .get(*telescope_id)
-                .is_some_and(|c| c.session_id == updater.session_id);
+                .is_some_and(|connection| connection.connection_id == updater.connection_id);
             let config_current = matches!(
                 self.db.get_telescope(*telescope_id),
                 Ok(Some(row)) if row.image_cooldown_seconds == updater.image_cooldown_seconds
@@ -250,7 +250,7 @@ impl UpdaterManager {
                 continue;
             }
 
-            let session_id = connection.session_id;
+            let connection_id = connection.connection_id;
             let source = Arc::new(DirectRigSource::new(connection));
             let target = ChatTarget {
                 discord_webhook_url: None,
@@ -274,7 +274,7 @@ impl UpdaterManager {
             running.insert(
                 telescope_id,
                 RunningUpdater {
-                    session_id,
+                    connection_id,
                     channels,
                     image_cooldown_seconds: telescope.image_cooldown_seconds,
                     handle,
@@ -360,8 +360,8 @@ mod tests {
         assert_eq!(manager.reconcile_once(), (0, 0));
 
         // Connection drops.
-        let session = connections.get(id).unwrap().session_id;
-        connections.remove_if_current(id, session);
+        let connection_id = connections.get(id).unwrap().connection_id;
+        connections.remove_if_current(id, connection_id);
         assert_eq!(manager.reconcile_once(), (0, 1));
         assert_eq!(manager.running_count(), 0);
     }
@@ -399,8 +399,8 @@ mod tests {
         assert!(manager.presence_events().is_empty());
 
         // A real disconnect (grace elapsed) announces once.
-        let session = connections.get(id).unwrap().session_id;
-        connections.remove_if_current(id, session);
+        let connection_id = connections.get(id).unwrap().connection_id;
+        connections.remove_if_current(id, connection_id);
         let events = manager.presence_events();
         assert_eq!(events.len(), 1);
         assert!(!events[0].online);
@@ -422,8 +422,8 @@ mod tests {
         db.add_channel_route(id, 100, 42, "obs", "g", 1).unwrap();
         connect(&connections, id);
         assert!(manager.presence_events().is_empty());
-        let session = connections.get(id).unwrap().session_id;
-        connections.remove_if_current(id, session);
+        let connection_id = connections.get(id).unwrap().connection_id;
+        connections.remove_if_current(id, connection_id);
         assert!(manager.presence_events().is_empty());
         connect(&connections, id);
         assert!(manager.presence_events().is_empty());
@@ -465,7 +465,7 @@ mod tests {
         connect(&connections, id);
         assert_eq!(manager.reconcile_once(), (1, 0));
 
-        // A new session takes the slot (rig reconnected).
+        // A new WebSocket generation takes the slot (rig reconnected).
         connect(&connections, id);
         assert_eq!(manager.reconcile_once(), (1, 1));
         assert_eq!(manager.running_count(), 1);
