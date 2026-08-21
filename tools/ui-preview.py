@@ -3,12 +3,14 @@
 
 Extracts INDEX_HTML from src/hub/web_ui.rs and injects a fetch() stub
 before the page script, so the real markup/CSS/JS runs against fixture
-data — no server, no login. Variants: full, empty, loggedout, token
+data — no server, no login. Variants: full, delivery, needs-server, empty,
+long-name, loggedout, token
 (token = full plus an auto-click on the second telescope's "Connect rig"
 so the pairing box is visible in the screenshot).
 
 Usage:
     python3 tools/ui-preview.py full
+    python3 tools/ui-preview.py delivery
     npx -y playwright install chromium   # once
     npx -y playwright screenshot --viewport-size "1280,900" --full-page \
         --wait-for-timeout 1200 target/ui-preview/preview-full.html out.png
@@ -102,10 +104,21 @@ attachments_2000 = {
 }
 
 variant = sys.argv[1] if len(sys.argv) > 1 else "full"
-if variant == "empty":
+if variant == "needs-server":
+    telescopes = {"telescopes": [telescopes["telescopes"][1]]}
+    guilds = {
+        "bot_configured": True,
+        "guilds": [
+            {"id": "3000", "name": "New Server", "registered": False,
+             "bot_installed": False, "install_url": "https://example.com"},
+        ],
+    }
+elif variant == "empty":
     telescopes = {"telescopes": []}
     attachments_1000 = {"attachments": []}
     attachments_2000 = {"attachments": []}
+elif variant == "long-name":
+    session["user"]["username"] = "observatory-operator-with-a-long-discord-name"
 elif variant == "loggedout":
     session = {"authenticated": False}
 
@@ -127,6 +140,10 @@ if variant == "token":
                     "  const rows = document.querySelectorAll('.telescope');\n"
                     "  if (rows[1]) rows[1].querySelector('.b-token').click();\n"
                     "}, 500);</script>\n")
+elif variant == "delivery":
+    click_script = ("<script>setTimeout(() => {\n"
+                    "  document.querySelector('#tab-delivery').click();\n"
+                    "}, 500);</script>\n")
 
 stub = """<script>
 const FIXTURES = %s;
@@ -142,12 +159,12 @@ window.fetch = async (path, opts) => {
 </script>
 """ % json.dumps(fixtures)
 
-src = open(SRC).read()
+src = open(SRC, encoding="utf-8").read()
 start = src.index('r#"') + 3
 end = src.index('"#;', start)
 html = src[start:end]
 html = html.replace("<script>", stub + "<script>", 1) + click_script
 os.makedirs(OUT_DIR, exist_ok=True)
 out = OUT_DIR + "preview-" + variant + ".html"
-open(out, "w").write(html)
+open(out, "w", encoding="utf-8").write(html)
 print(out)
