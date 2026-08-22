@@ -103,7 +103,7 @@ jobs:
         run: cargo build --release --all-features --locked
       - name: Authenticate for full runtime signing
         if: env.SIGN_WINDOWS == 'true'
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
@@ -125,7 +125,7 @@ jobs:
         run: cargo build --release --no-default-features --locked
       - name: Authenticate for plugin runtime signing
         if: env.SIGN_WINDOWS == 'true'
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
