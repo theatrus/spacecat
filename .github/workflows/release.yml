@@ -110,7 +110,7 @@ jobs:
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       - name: Sign full runtime
         if: env.SIGN_WINDOWS == 'true'
-        uses: azure/trusted-signing-action@v0
+        uses: azure/trusted-signing-action@v2
         with:
           endpoint: ${{ vars.SIGNING_ENDPOINT }}
           trusted-signing-account-name: ${{ vars.SIGNING_ACCOUNT }}
@@ -132,7 +132,7 @@ jobs:
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       - name: Sign plugin runtime
         if: env.SIGN_WINDOWS == 'true'
-        uses: azure/trusted-signing-action@v0
+        uses: azure/trusted-signing-action@v2
         with:
           endpoint: ${{ vars.SIGNING_ENDPOINT }}
           trusted-signing-account-name: ${{ vars.SIGNING_ACCOUNT }}
