@@ -22,12 +22,16 @@ pub const INDEX_HTML: &str = r#"<!doctype html>
 <link rel="icon" href="/favicon.ico" type="image/x-icon">
 <style>
   :root {
-    --bg: #0b0e14; --panel: #141922; --panel2: #1a2130; --border: #2a3245;
+    --bg: #0b0e14; --panel: #141922; --panel2: #1a2130; --control: #222938;
+    --border: #2a3245; --control-border: #2a3245; --chip-on: #1b2740;
     --text: #e6edf3; --muted: #8b96a8; --accent: #58a6ff; --accent2: #1f6feb;
     --good: #3fb950; --bad: #f85149; --warn: #d29922; --radius: 10px;
     --telescope-wash: #0c1b2a; --telescope-active: #15304a; --telescope-edge: #3975ad;
     --delivery-wash: #1d142b; --delivery-active: #302044; --delivery-edge: #725ca1;
-    --delivery-accent: #c4a7ff;
+    --delivery-accent: #c4a7ff; --delivery-accent2: #6f42c1;
+    --delivery-bg: #100c16; --delivery-panel: #17131f; --delivery-panel2: #241c30;
+    --delivery-control: #2a2038; --delivery-border: #493968;
+    --delivery-control-border: #8068ad;
     --ctl-h: 2.2rem;
   }
   * { box-sizing: border-box; }
@@ -69,7 +73,7 @@ pub const INDEX_HTML: &str = r#"<!doctype html>
     color: var(--text); background: var(--tab-active); border-color: var(--tab-edge);
     box-shadow: inset 0 -3px 0 var(--tab-accent);
   }
-  .tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .tab:focus-visible { outline: 2px solid var(--tab-accent); outline-offset: 2px; }
   .tab-count {
     min-width: 1.45rem; padding: .05rem .4rem; border-radius: 999px;
     background: var(--bg); color: var(--muted); font-size: .72rem;
@@ -80,7 +84,14 @@ pub const INDEX_HTML: &str = r#"<!doctype html>
     border-radius: var(--radius);
   }
   #panel-telescopes { --view-wash: var(--telescope-wash); --view-edge: #284665; }
-  #panel-delivery { --view-wash: var(--delivery-wash); --view-edge: #493968; }
+  #panel-delivery {
+    --view-wash: var(--delivery-wash); --view-edge: #493968;
+    --accent: var(--delivery-accent); --accent2: var(--delivery-accent2);
+    --bg: var(--delivery-bg); --panel: var(--delivery-panel); --panel2: var(--delivery-panel2);
+    --control: var(--delivery-control); --border: var(--delivery-border);
+    --control-border: var(--delivery-control-border);
+    --chip-on: color-mix(in srgb, var(--accent) 15%, var(--panel2));
+  }
   .tab-panel > :last-child { margin-bottom: 0; }
   .tab-panel[hidden] { display: none; }
 
@@ -119,14 +130,18 @@ pub const INDEX_HTML: &str = r#"<!doctype html>
   .badge.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 60%, transparent); }
 
   button {
-    height: var(--ctl-h); background: #222938; color: var(--text);
-    border: 1px solid var(--border); border-radius: 7px; padding: 0 .9rem;
+    height: var(--ctl-h); background: var(--control); color: var(--text);
+    border: 1px solid var(--control-border); border-radius: 7px; padding: 0 .9rem;
     cursor: pointer; font: inherit; font-size: .85rem;
     transition: border-color .12s, background .12s;
   }
   button:hover { border-color: var(--accent); }
+  button:focus-visible, input:focus-visible, select:focus-visible,
+  a:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 2px;
+  }
   button:disabled { cursor: not-allowed; opacity: .55; }
-  button:disabled:hover { border-color: var(--border); }
+  button:disabled:hover { border-color: var(--control-border); }
   button.primary { background: var(--accent2); border-color: var(--accent2); }
   button.primary:hover { filter: brightness(1.1); }
   button.subtle { background: transparent; color: var(--muted); }
@@ -135,7 +150,7 @@ pub const INDEX_HTML: &str = r#"<!doctype html>
 
   input, select {
     height: var(--ctl-h); background: var(--bg); color: var(--text);
-    border: 1px solid var(--border); border-radius: 7px; padding: 0 .55rem;
+    border: 1px solid var(--control-border); border-radius: 7px; padding: 0 .55rem;
     font: inherit; font-size: .88rem;
   }
   select.pick { width: 230px; max-width: 100%; }
@@ -145,12 +160,14 @@ pub const INDEX_HTML: &str = r#"<!doctype html>
   .chips { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
   .chip {
     display: inline-flex; align-items: center; gap: .35rem; height: 1.75rem;
-    border: 1px solid var(--border); border-radius: 999px;
+    border: 1px solid var(--control-border); border-radius: 999px;
     padding: 0 .7rem; cursor: pointer; font-size: .82rem; color: var(--muted);
     user-select: none;
   }
   .chip input { display: none; }
-  .chip.on { color: var(--text); border-color: var(--accent); background: #1b2740; }
+  .chip.on {
+    color: var(--text); border-color: var(--accent); background: var(--chip-on);
+  }
   .chip .rm {
     background: none; border: none; padding: 0 0 0 .1rem; height: auto;
     color: var(--muted); cursor: pointer; font-size: .8rem;
@@ -886,10 +903,29 @@ mod tests {
             "--telescope-active:",
             "--delivery-active:",
             "#panel-telescopes { --view-wash:",
-            "#panel-delivery { --view-wash:",
+            "#panel-delivery {",
         ] {
             assert!(INDEX_HTML.contains(needle), "missing {needle}");
         }
+    }
+
+    #[test]
+    fn page_scopes_delivery_controls_to_the_delivery_chroma() {
+        for needle in [
+            "--delivery-accent2:",
+            "--accent: var(--delivery-accent)",
+            "--accent2: var(--delivery-accent2)",
+            "--panel: var(--delivery-panel)",
+            "--panel2: var(--delivery-panel2)",
+            "--control: var(--delivery-control)",
+            "--border: var(--delivery-border)",
+            "--control-border: var(--delivery-control-border)",
+            "--chip-on: color-mix(in srgb, var(--accent) 15%, var(--panel2))",
+        ] {
+            assert!(INDEX_HTML.contains(needle), "missing {needle}");
+        }
+        assert!(INDEX_HTML.contains("--chip-on: #1b2740"));
+        assert!(INDEX_HTML.contains("background: var(--chip-on)"));
     }
 
     #[test]
