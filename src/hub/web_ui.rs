@@ -9,17 +9,25 @@
 //! labeled sections; every control row uses .controls with fixed control
 //! heights so things line up.
 
+/// The same multi-resolution Chatstronomy artwork used by the desktop app.
+/// Embedding it keeps the Hub deployable as a single binary.
+pub const FAVICON_ICO: &[u8] = include_bytes!("../../assets/branding/chatstronomy.ico");
+
 pub const INDEX_HTML: &str = r#"<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Chatstronomy hub</title>
+<link rel="icon" href="/favicon.ico" type="image/x-icon">
 <style>
   :root {
     --bg: #0b0e14; --panel: #141922; --panel2: #1a2130; --border: #2a3245;
     --text: #e6edf3; --muted: #8b96a8; --accent: #58a6ff; --accent2: #1f6feb;
     --good: #3fb950; --bad: #f85149; --warn: #d29922; --radius: 10px;
+    --telescope-wash: #0c1b2a; --telescope-active: #15304a; --telescope-edge: #3975ad;
+    --delivery-wash: #1d142b; --delivery-active: #302044; --delivery-edge: #725ca1;
+    --delivery-accent: #c4a7ff;
     --ctl-h: 2.2rem;
   }
   * { box-sizing: border-box; }
@@ -39,24 +47,41 @@ pub const INDEX_HTML: &str = r#"<!doctype html>
   a:hover { text-decoration: underline; }
 
   .tabs {
+    position: sticky; top: 0; z-index: 5; isolation: isolate;
     display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .35rem;
-    padding: .35rem; margin-bottom: 1rem; background: var(--panel);
+    padding: .35rem; margin-bottom: .75rem; background: var(--panel);
     border: 1px solid var(--border); border-radius: var(--radius);
+    box-shadow: 0 .55rem 1.2rem rgb(0 0 0 / 35%);
   }
   .tab {
+    --tab-active: var(--telescope-active); --tab-edge: var(--telescope-edge);
+    --tab-accent: var(--accent);
     display: flex; align-items: center; justify-content: center; gap: .5rem;
-    min-height: 2.65rem; height: auto; background: transparent;
-    border-color: transparent; color: var(--muted); font-weight: 600;
+    min-height: 2.65rem; height: auto; background: #0e131c;
+    border-color: var(--border); color: var(--muted); font-weight: 600;
   }
-  .tab:hover { color: var(--text); border-color: var(--border); }
+  #tab-delivery {
+    --tab-active: var(--delivery-active); --tab-edge: var(--delivery-edge);
+    --tab-accent: var(--delivery-accent);
+  }
+  .tab:hover { color: var(--text); border-color: var(--tab-edge); }
   .tab[aria-selected="true"] {
-    color: var(--text); background: var(--panel2); border-color: var(--border);
+    color: var(--text); background: var(--tab-active); border-color: var(--tab-edge);
+    box-shadow: inset 0 -3px 0 var(--tab-accent);
   }
   .tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .tab-count {
     min-width: 1.45rem; padding: .05rem .4rem; border-radius: 999px;
     background: var(--bg); color: var(--muted); font-size: .72rem;
   }
+  .tab[aria-selected="true"] .tab-count { color: var(--tab-accent); }
+  .tab-panel {
+    padding: .8rem; background: var(--view-wash); border: 1px solid var(--view-edge);
+    border-radius: var(--radius);
+  }
+  #panel-telescopes { --view-wash: var(--telescope-wash); --view-edge: #284665; }
+  #panel-delivery { --view-wash: var(--delivery-wash); --view-edge: #493968; }
+  .tab-panel > :last-child { margin-bottom: 0; }
   .tab-panel[hidden] { display: none; }
 
   /* Card anatomy: .head (title left, .badges right), then .section blocks. */
@@ -199,6 +224,11 @@ pub const INDEX_HTML: &str = r#"<!doctype html>
   .sr-only {
     position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
     overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+  }
+  @media (max-width: 520px) {
+    .tabs { gap: .25rem; padding: .3rem; }
+    .tab { gap: .3rem; padding-inline: .35rem; line-height: 1.25; }
+    .tab-panel { padding: .4rem; }
   }
 </style>
 </head>
@@ -847,6 +877,27 @@ mod tests {
         }
         assert_eq!(INDEX_HTML.matches("class=\"tab\" role=\"tab\"").count(), 2);
         assert_eq!(INDEX_HTML.matches("role=\"tabpanel\"").count(), 2);
+    }
+
+    #[test]
+    fn page_keeps_distinct_tab_workspaces_visible_while_scrolling() {
+        for needle in [
+            "position: sticky; top: 0",
+            "--telescope-active:",
+            "--delivery-active:",
+            "#panel-telescopes { --view-wash:",
+            "#panel-delivery { --view-wash:",
+        ] {
+            assert!(INDEX_HTML.contains(needle), "missing {needle}");
+        }
+    }
+
+    #[test]
+    fn page_links_the_hub_favicon() {
+        assert!(
+            INDEX_HTML.contains("<link rel=\"icon\" href=\"/favicon.ico\" type=\"image/x-icon\">")
+        );
+        assert!(FAVICON_ICO.starts_with(&[0, 0, 1, 0]));
     }
 
     #[test]
