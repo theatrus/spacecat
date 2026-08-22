@@ -11,7 +11,7 @@ use super::guild_check::{CachedGuildChecker, GuildChecker, SerenityGuildChecker}
 use super::store::{GuildSnapshot, SessionRow, UserRow};
 use super::tenants::TelescopeRow;
 use axum::extract::{Path, Query, State};
-use axum::http::header::{COOKIE, SET_COOKIE};
+use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, COOKIE, SET_COOKIE};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{delete, get, post};
@@ -145,6 +145,7 @@ pub fn client_ip(
 pub fn router(state: HubState) -> Router {
     Router::new()
         .route("/", get(index))
+        .route("/favicon.ico", get(favicon))
         .route("/healthz", get(healthz))
         .route("/login", get(login))
         .route("/oauth/callback", get(oauth_callback))
@@ -211,6 +212,16 @@ pub fn router(state: HubState) -> Router {
 
 async fn index() -> Html<&'static str> {
     Html(super::web_ui::INDEX_HTML)
+}
+
+async fn favicon() -> impl IntoResponse {
+    (
+        [
+            (CONTENT_TYPE, "image/x-icon"),
+            (CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        super::web_ui::FAVICON_ICO,
+    )
 }
 
 /// Liveness and readiness in one: proves the process is up and the database
@@ -1686,6 +1697,24 @@ mod tests {
         let response = reqwest::get(&base).await.unwrap();
         assert_eq!(response.status(), 200);
         assert!(response.text().await.unwrap().contains("Chatstronomy hub"));
+    }
+
+    #[tokio::test]
+    async fn favicon_serves_the_embedded_branding() {
+        let base = spawn_test_hub().await;
+        let response = reqwest::get(format!("{base}/favicon.ico")).await.unwrap();
+        assert_eq!(response.status(), 200);
+        assert_eq!(
+            response.headers().get("content-type").unwrap(),
+            "image/x-icon"
+        );
+        assert_eq!(
+            response.headers().get("cache-control").unwrap(),
+            "public, max-age=86400"
+        );
+        let body = response.bytes().await.unwrap();
+        assert_eq!(body.as_ref(), super::super::web_ui::FAVICON_ICO);
+        assert!(body.starts_with(&[0, 0, 1, 0]));
     }
 
     #[tokio::test]
