@@ -33,10 +33,6 @@ pub const INDEX_HTML: &str = r#"<!doctype html>
     gap: .45rem .75rem; margin-bottom: 1.25rem;
   }
   header h1 { font-size: 1.25rem; margin: 0; flex: 1; letter-spacing: .01em; }
-  header h1 span {
-    display: inline-block; color: var(--muted); font-weight: normal;
-    font-size: .9rem; white-space: nowrap;
-  }
   #whoami { min-width: 0; margin-left: auto; overflow-wrap: anywhere; text-align: right; }
   .avatar { width: 28px; height: 28px; border-radius: 50%; vertical-align: middle; }
   a { color: var(--accent); text-decoration: none; }
@@ -209,7 +205,7 @@ pub const INDEX_HTML: &str = r#"<!doctype html>
 <body>
 <div class="wrap">
   <header>
-    <h1>Chatstronomy hub <span>· space | cat</span></h1>
+    <h1>Chatstronomy hub</h1>
     <span id="whoami"></span>
   </header>
   <div id="app"><p class="hint">Loading…</p></div>
@@ -815,6 +811,8 @@ mod tests {
         ] {
             assert!(INDEX_HTML.contains(needle), "missing {needle}");
         }
+        assert!(INDEX_HTML.contains("<h1>Chatstronomy hub</h1>"));
+        assert!(!INDEX_HTML.to_ascii_lowercase().contains("space | cat"));
     }
 
     #[test]
