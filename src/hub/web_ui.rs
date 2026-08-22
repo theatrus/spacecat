@@ -1,9 +1,9 @@
 //! The hub's management page: one inline HTML document, no build pipeline.
 //!
-//! Structure mirrors the data model: "My telescopes" (user-owned rigs) on
-//! top, then one card per server with its attachments. Every control
-//! applies immediately — there are no save buttons — and channels/roles are
-//! always picked from Discord data, never typed.
+//! Structure mirrors the data model in two views: user-owned telescopes and
+//! Discord delivery (servers, attachments, channels, and permissions). Every
+//! control applies immediately — there are no save buttons — and
+//! channels/roles are always picked from Discord data, never typed.
 //!
 //! Layout discipline: every card is head (title left, badges right) plus
 //! labeled sections; every control row uses .controls with fixed control
@@ -28,12 +28,40 @@ pub const INDEX_HTML: &str = r#"<!doctype html>
     font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
   }
   .wrap { max-width: 820px; margin: 0 auto; padding: 1.5rem 1rem 4rem; }
-  header { display: flex; align-items: center; gap: .75rem; margin-bottom: 1.25rem; }
+  header {
+    display: flex; align-items: center; flex-wrap: wrap;
+    gap: .45rem .75rem; margin-bottom: 1.25rem;
+  }
   header h1 { font-size: 1.25rem; margin: 0; flex: 1; letter-spacing: .01em; }
-  header h1 span { color: var(--muted); font-weight: normal; font-size: .9rem; }
+  header h1 span {
+    display: inline-block; color: var(--muted); font-weight: normal;
+    font-size: .9rem; white-space: nowrap;
+  }
+  #whoami { min-width: 0; margin-left: auto; overflow-wrap: anywhere; text-align: right; }
   .avatar { width: 28px; height: 28px; border-radius: 50%; vertical-align: middle; }
   a { color: var(--accent); text-decoration: none; }
   a:hover { text-decoration: underline; }
+
+  .tabs {
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .35rem;
+    padding: .35rem; margin-bottom: 1rem; background: var(--panel);
+    border: 1px solid var(--border); border-radius: var(--radius);
+  }
+  .tab {
+    display: flex; align-items: center; justify-content: center; gap: .5rem;
+    min-height: 2.65rem; height: auto; background: transparent;
+    border-color: transparent; color: var(--muted); font-weight: 600;
+  }
+  .tab:hover { color: var(--text); border-color: var(--border); }
+  .tab[aria-selected="true"] {
+    color: var(--text); background: var(--panel2); border-color: var(--border);
+  }
+  .tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .tab-count {
+    min-width: 1.45rem; padding: .05rem .4rem; border-radius: 999px;
+    background: var(--bg); color: var(--muted); font-size: .72rem;
+  }
+  .tab-panel[hidden] { display: none; }
 
   /* Card anatomy: .head (title left, .badges right), then .section blocks. */
   .card {
@@ -76,6 +104,8 @@ pub const INDEX_HTML: &str = r#"<!doctype html>
     transition: border-color .12s, background .12s;
   }
   button:hover { border-color: var(--accent); }
+  button:disabled { cursor: not-allowed; opacity: .55; }
+  button:disabled:hover { border-color: var(--border); }
   button.primary { background: var(--accent2); border-color: var(--accent2); }
   button.primary:hover { filter: brightness(1.1); }
   button.subtle { background: transparent; color: var(--muted); }
@@ -133,12 +163,14 @@ pub const INDEX_HTML: &str = r#"<!doctype html>
   label .ico { width: 1.2em; height: 1.2em; vertical-align: -0.28em; }
   .hint { color: var(--muted); font-size: .8rem; }
   .next {
-    display: flex; gap: .55rem; align-items: center; margin-top: .8rem;
+    display: flex; gap: .55rem; align-items: center; flex-wrap: wrap; margin-top: .8rem;
     border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
     background: color-mix(in srgb, var(--accent) 10%, transparent);
     border-radius: 8px; padding: .5rem .8rem; font-size: .85rem;
   }
   .next .step { color: var(--accent); font-weight: 600; white-space: nowrap; }
+  .next .next-copy { flex: 1; min-width: 14rem; }
+  .next .b-open-delivery { margin-left: auto; }
   .footer-links {
     display: flex; gap: 1rem; justify-content: flex-end; margin-top: .7rem;
   }
@@ -168,6 +200,10 @@ pub const INDEX_HTML: &str = r#"<!doctype html>
     background: var(--panel2); border: 1px solid var(--border);
     border-radius: 8px; padding: .55rem 1.1rem; display: none; z-index: 10;
   }
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+  }
 </style>
 </head>
 <body>
@@ -179,10 +215,14 @@ pub const INDEX_HTML: &str = r#"<!doctype html>
   <div id="app"><p class="hint">Loading…</p></div>
 </div>
 <div id="toast"></div>
+<div id="announcer" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
 <script>
 "use strict";
 let CSRF = null;
 let GUILDS = [];
+let ACTIVE_TAB = "telescopes";
+let RENDER_GENERATION = 0;
+const TAB_ORDER = ["telescopes", "delivery"];
 
 const app = document.getElementById("app");
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
@@ -190,10 +230,13 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
 
 function toast(msg) {
   const el = document.getElementById("toast");
+  const announcer = document.getElementById("announcer");
   el.textContent = msg;
   el.style.display = "block";
   clearTimeout(el._t);
   el._t = setTimeout(() => { el.style.display = "none"; }, 3500);
+  announcer.textContent = "";
+  requestAnimationFrame(() => { announcer.textContent = msg; });
 }
 
 async function api(path, opts = {}) {
@@ -230,14 +273,71 @@ async function boot() {
   await renderAll();
 }
 
-async function renderAll() {
-  app.innerHTML = '<p class="hint">Loading…</p>';
+function setActiveTab(name, focus = false) {
+  if (!TAB_ORDER.includes(name)) name = "telescopes";
+  ACTIVE_TAB = name;
+  const tabs = [...app.querySelectorAll('[role="tab"]')];
+  for (const tab of tabs) {
+    const active = tab.dataset.tab === name;
+    tab.setAttribute("aria-selected", String(active));
+    tab.tabIndex = active ? 0 : -1;
+    const panel = document.getElementById(tab.getAttribute("aria-controls"));
+    if (panel) panel.hidden = !active;
+    if (active && focus) tab.focus();
+  }
+}
+
+function bindTabs() {
+  const tabs = [...app.querySelectorAll('[role="tab"]')];
+  tabs.forEach((tab, index) => {
+    tab.onclick = () => setActiveTab(tab.dataset.tab);
+    tab.onkeydown = (ev) => {
+      let next = null;
+      if (ev.key === "ArrowRight") next = (index + 1) % tabs.length;
+      if (ev.key === "ArrowLeft") next = (index - 1 + tabs.length) % tabs.length;
+      if (ev.key === "Home") next = 0;
+      if (ev.key === "End") next = tabs.length - 1;
+      if (next === null) return;
+      ev.preventDefault();
+      setActiveTab(tabs[next].dataset.tab, true);
+    };
+  });
+  setActiveTab(ACTIVE_TAB);
+}
+
+async function renderAll(tab = ACTIVE_TAB, focusAttachmentId = null) {
+  const generation = ++RENDER_GENERATION;
+  ACTIVE_TAB = TAB_ORDER.includes(tab) ? tab : "telescopes";
+  const hadShell = Boolean(app.querySelector(".tabs"));
+  const previousScrollY = window.scrollY;
+  app.setAttribute("aria-busy", "true");
+  if (!hadShell) app.innerHTML = '<p class="hint">Loading…</p>';
   let guilds, mine;
   try {
     [guilds, mine] = await Promise.all([api("/api/guilds"), api("/api/telescopes")]);
-  } catch (e) { app.innerHTML = '<p class="error">' + esc(e.message) + "</p>"; return; }
+  } catch (e) {
+    if (generation !== RENDER_GENERATION) return;
+    app.removeAttribute("aria-busy");
+    if (hadShell) toast("Could not refresh: " + e.message);
+    else app.innerHTML = '<p class="error">' + esc(e.message) + "</p>";
+    return;
+  }
+  if (generation !== RENDER_GENERATION) return;
   GUILDS = guilds.guilds;
-  app.innerHTML = "";
+  app.innerHTML =
+    '<div class="tabs" role="tablist" aria-label="Hub settings">' +
+    '<button type="button" class="tab" role="tab" id="tab-telescopes" ' +
+    'aria-controls="panel-telescopes" data-tab="telescopes">Telescopes ' +
+    '<span class="tab-count">' + mine.telescopes.length + "</span></button>" +
+    '<button type="button" class="tab" role="tab" id="tab-delivery" ' +
+    'aria-controls="panel-delivery" data-tab="delivery">Discord delivery ' +
+    '<span class="tab-count">' + GUILDS.length + "</span></button></div>" +
+    '<section class="tab-panel" id="panel-telescopes" role="tabpanel" ' +
+    'aria-labelledby="tab-telescopes"></section>' +
+    '<section class="tab-panel" id="panel-delivery" role="tabpanel" ' +
+    'aria-labelledby="tab-delivery"></section>';
+  const telescopePanel = document.getElementById("panel-telescopes");
+  const deliveryPanel = document.getElementById("panel-delivery");
   if (guilds.bot_configured === false) {
     const banner = document.createElement("div");
     banner.className = "banner";
@@ -245,18 +345,32 @@ async function renderAll() {
       "Channel and role pickers, install checks, notifications, and slash commands " +
       "are all disabled until the hub operator sets <code>discord.bot_token</code> " +
       "and restarts the hub.";
-    app.appendChild(banner);
+    deliveryPanel.appendChild(banner);
   }
-  renderMyTelescopes(mine.telescopes);
-  for (const g of GUILDS) {
-    renderGuildCard(g);
-  }
+  renderMyTelescopes(mine.telescopes, telescopePanel);
+  const attachmentRenders = GUILDS.map((g) => renderGuildCard(g, deliveryPanel));
   if (!GUILDS.length) {
     const note = document.createElement("div");
     note.className = "card";
     note.innerHTML = "<p>No servers where you hold <b>Manage Server</b>. " +
       "Ask a server admin, or check your Discord permissions.</p>";
-    app.appendChild(note);
+    deliveryPanel.appendChild(note);
+  }
+  bindTabs();
+  await Promise.all(attachmentRenders);
+  if (generation !== RENDER_GENERATION) return;
+  app.removeAttribute("aria-busy");
+  if (hadShell) window.scrollTo(0, previousScrollY);
+  if (focusAttachmentId !== null) {
+    const row = [...app.querySelectorAll(".attachment")]
+      .find((candidate) => candidate.dataset.id === String(focusAttachmentId));
+    let control = row && row.querySelector(".b-addchan:not(:disabled)");
+    if (!control && row) {
+      const routes = [...row.querySelectorAll(".rm-route")];
+      control = routes[routes.length - 1];
+    }
+    if (!control) control = document.getElementById("tab-delivery");
+    if (control) control.focus({ preventScroll: true });
   }
 }
 
@@ -268,20 +382,32 @@ function attachTargets(t) {
   return GUILDS.filter((g) => g.registered && !attached.has(g.id));
 }
 
-function nextStep(t) {
+function nextStep(t, targets) {
   // One contextual cue per telescope: the single most useful next action.
-  const hasChannels = t.attachments.some((a) => a.channels.length);
+  const hasChannels = t.attachments.some(
+    (a) => Array.isArray(a.channels) && a.channels.length > 0
+  );
   if (!t.attachments.length) {
+    if (!targets.length) {
+      return '<div class="next"><span class="step">Next</span>' +
+        '<span class="next-copy">Set up a Discord server first, then return here to ' +
+        'attach this telescope.</span><button type="button" class="b-open-delivery">' +
+        "Open Discord delivery</button></div>";
+    }
     return '<div class="next"><span class="step">Next</span>' +
-      "Attach this telescope to a server below, then pick its channels.</div>";
+      '<span class="next-copy">Attach this telescope to a server here, then choose ' +
+      "its channels in Discord delivery.</span></div>";
   }
   if (!hasChannels) {
     return '<div class="next"><span class="step">Next</span>' +
-      "Add channels on the server card below so the feed has somewhere to post.</div>";
+      '<span class="next-copy">Choose at least one Discord channel so this telescope ' +
+      'has somewhere to post.</span><button type="button" class="b-open-delivery">' +
+      "Open Discord delivery</button></div>";
   }
   if (!t.connected) {
     return '<div class="next"><span class="step">Next</span>' +
-      "Connect your rig: get a pairing token and paste it into the N.I.N.A. plugin.</div>";
+      '<span class="next-copy">Connect your rig: get a pairing token and paste it into ' +
+      "the N.I.N.A. plugin.</span></div>";
   }
   return "";
 }
@@ -292,7 +418,7 @@ function rigBadge(connected) {
     : '<span class="badge warn">rig offline</span>';
 }
 
-function renderMyTelescopes(telescopes) {
+function renderMyTelescopes(telescopes, target) {
   const card = document.createElement("div");
   card.className = "card";
   let html = '<div class="head"><h2>' + ico("telescope") + "My telescopes</h2>" +
@@ -323,7 +449,7 @@ function renderMyTelescopes(telescopes) {
       '<div class="badges">' + rigBadge(t.connected) +
       '<button class="' + (t.connected ? "subtle " : "") + 'b-token">' + ico("key") + "Connect rig…</button>" + '' +
       '<button class="subtle b-share">' + ico("share") + "Share…</button></div></div>" + '' +
-      nextStep(t) +
+      nextStep(t, targets) +
       '<div class="token-out"></div>' +
       '<div class="section"><label>' + ico("globe") + "Servers</label>" + '' + servers + attachControls + "</div>" +
       '<div class="section"><label>' + ico("clock") + "Image cooldown</label>" + '' +
@@ -339,7 +465,7 @@ function renderMyTelescopes(telescopes) {
     '<input class="name new-name" placeholder="telescope name (e.g. c925)">' +
     '<button class="primary b-create">Add telescope</button></div>';
   card.innerHTML = html;
-  app.appendChild(card);
+  target.appendChild(card);
 
   card.querySelector(".b-create").onclick = async () => {
     const name = card.querySelector(".new-name").value.trim();
@@ -347,12 +473,16 @@ function renderMyTelescopes(telescopes) {
     try {
       await api("/api/telescopes", { method: "POST", body: JSON.stringify({ name }) });
       toast("Telescope added");
-      renderAll();
+      renderAll("telescopes");
     } catch (e) { toast(e.message); }
   };
 
   card.querySelectorAll(".telescope").forEach((row) => {
     const id = row.dataset.id;
+    const openDelivery = row.querySelector(".b-open-delivery");
+    if (openDelivery) {
+      openDelivery.onclick = () => setActiveTab("delivery", true);
+    }
     row.querySelector(".f-cooldown").onchange = async (ev) => {
       const body = { image_cooldown_seconds: parseInt(ev.target.value, 10) || 0 };
       try {
@@ -367,8 +497,8 @@ function renderMyTelescopes(telescopes) {
         try {
           await api("/api/telescopes/" + id + "/attach",
             { method: "POST", body: JSON.stringify({ guild_id: guild }) });
-          toast("Attached — pick channels on the server card below");
-          renderAll();
+          toast("Attached — choose a channel in Discord delivery");
+          renderAll("delivery");
         } catch (e) { toast(e.message); }
       };
     }
@@ -398,7 +528,7 @@ function renderMyTelescopes(telescopes) {
         await api("/api/telescopes/" + id + "/credentials", { method: "DELETE" });
         await api("/api/telescopes/" + id + "/pairing-tokens", { method: "DELETE" });
         toast("Rig access reset");
-        renderAll();
+        renderAll("telescopes");
       } catch (e) { toast(e.message); }
     };
     row.querySelector(".b-delete").onclick = async () => {
@@ -407,7 +537,7 @@ function renderMyTelescopes(telescopes) {
       try {
         await api("/api/telescopes/" + id, { method: "DELETE" });
         toast("Telescope deleted");
-        renderAll();
+        renderAll("telescopes");
       } catch (e) { toast(e.message); }
     };
   });
@@ -445,7 +575,7 @@ function showToken(row, icon, title, value, hint) {
 
 // ---------- Server cards ----------
 
-function renderGuildCard(g) {
+function renderGuildCard(g, target) {
   const card = document.createElement("div");
   card.className = "card";
   const badges = [];
@@ -468,18 +598,18 @@ function renderGuildCard(g) {
     '<div class="head"><h2>' + esc(g.name) + "</h2>" +
     '<div class="badges">' + badges.join("") + actions.join("") + "</div></div>" +
     '<div class="attachments"></div>';
-  app.appendChild(card);
+  target.appendChild(card);
   const registerBtn = card.querySelector(".b-register");
   if (registerBtn) {
     registerBtn.onclick = async () => {
       try {
         await api("/api/guilds/" + g.id + "/register", { method: "POST" });
         toast("Server registered");
-        renderAll();
+        renderAll("delivery");
       } catch (e) { toast(e.message); }
     };
   }
-  if (g.registered) renderAttachments(g, card.querySelector(".attachments"));
+  if (g.registered) return renderAttachments(g, card.querySelector(".attachments"));
 }
 
 const POLICY_OPTIONS = [
@@ -509,11 +639,11 @@ function channelChips(a) {
     return '<span class="hint">No channels yet — this telescope is not posting here.</span>';
   }
   return '<div class="chips">' + a.channels.map((route) => {
-    const name = route.channel_name ? '#' + esc(route.channel_name)
-                                    : "channel " + esc(route.channel_id);
-    return '<span class="chip on">' + name +
+    const name = route.channel_name ? '#' + route.channel_name : "channel " + route.channel_id;
+    return '<span class="chip on">' + esc(name) +
       ' <button type="button" class="rm rm-route" data-route="' + route.route_id +
-      '" title="Remove channel">✕</button></span>';
+      '" aria-label="Remove ' + esc(name) + ' from delivery" title="Remove channel">' +
+      "✕</button></span>";
   }).join("") + "</div>";
 }
 
@@ -540,6 +670,7 @@ async function renderAttachments(g, el) {
   const usedChannels = data.attachments.flatMap((a) => a.channels.map((r) => r.channel_id));
   let html = "";
   for (const a of data.attachments) {
+    const canAddChannel = options.channels.some((c) => !usedChannels.includes(c.id));
     const badges =
       rigBadge(a.connected) +
       (a.can_command ? '<span class="badge good">can command</span>'
@@ -566,7 +697,8 @@ async function renderAttachments(g, el) {
       '<div class="section"><label># Channels — where this telescope posts</label>' +
       channelChips(a) +
       '<div class="controls">' + channelPicker(options, usedChannels, "f-addchan") +
-      '<button class="b-addchan">Add channel</button></div></div>' +
+      '<button class="b-addchan"' + (canAddChannel ? "" : " disabled") +
+      ">Add channel</button></div></div>" +
       commands +
       "</div>";
   }
@@ -592,7 +724,7 @@ async function renderAttachments(g, el) {
       const out = await api("/api/guilds/" + g.id + "/subscribe",
         { method: "POST", body: JSON.stringify({ code, channel_id: channelBox.value }) });
       toast("Subscribed to " + out.telescope_name);
-      renderAll();
+      renderAll("delivery");
     } catch (e) { toast(e.message); }
   };
 
@@ -631,7 +763,7 @@ async function renderAttachments(g, el) {
         await api("/api/attachments/" + id + "/channels",
           { method: "POST", body: JSON.stringify({ channel_id: box.value }) });
         toast("Channel added");
-        renderAttachments(g, el);
+        renderAll("delivery", id);
       } catch (e) { toast(e.message); }
     };
     row.querySelectorAll(".rm-route").forEach((btn) => {
@@ -640,7 +772,7 @@ async function renderAttachments(g, el) {
           await api("/api/attachments/" + id + "/channels/" + btn.dataset.route,
             { method: "DELETE" });
           toast("Channel removed");
-          renderAttachments(g, el);
+          renderAll("delivery", id);
         } catch (e) { toast(e.message); }
       };
     });
@@ -649,7 +781,7 @@ async function renderAttachments(g, el) {
       try {
         await api("/api/attachments/" + id, { method: "DELETE" });
         toast("Detached");
-        renderAll();
+        renderAll("delivery");
       } catch (e) { toast(e.message); }
     };
   });
@@ -696,6 +828,59 @@ mod tests {
         ] {
             assert!(INDEX_HTML.contains(needle), "missing {needle}");
         }
+    }
+
+    #[test]
+    fn page_uses_accessible_telescope_and_delivery_tabs() {
+        for needle in [
+            "Hub settings",
+            "tab-telescopes",
+            "panel-telescopes",
+            "tab-delivery",
+            "panel-delivery",
+            "Discord delivery",
+            "aria-selected",
+            "ArrowRight",
+            "ArrowLeft",
+            "Home",
+            "End",
+        ] {
+            assert!(INDEX_HTML.contains(needle), "missing {needle}");
+        }
+        assert_eq!(INDEX_HTML.matches("class=\"tab\" role=\"tab\"").count(), 2);
+        assert_eq!(INDEX_HTML.matches("role=\"tabpanel\"").count(), 2);
+    }
+
+    #[test]
+    fn channel_onboarding_uses_routes_and_refreshes_both_views() {
+        assert!(INDEX_HTML.contains("Array.isArray(a.channels) && a.channels.length > 0"));
+        assert!(INDEX_HTML.contains("if (!targets.length)"));
+        assert!(INDEX_HTML.contains("Set up a Discord server first"));
+        assert!(INDEX_HTML.contains("b-open-delivery"));
+        assert!(INDEX_HTML.contains("let RENDER_GENERATION = 0"));
+        assert!(
+            INDEX_HTML
+                .matches("generation !== RENDER_GENERATION")
+                .count()
+                >= 2
+        );
+        assert!(INDEX_HTML.contains(".b-addchan:not(:disabled)"));
+        assert!(INDEX_HTML.contains("canAddChannel ? \"\" : \" disabled\""));
+        assert!(INDEX_HTML.contains("aria-label=\"Remove "));
+        assert!(
+            INDEX_HTML.contains("toast(\"Channel added\");\n        renderAll(\"delivery\", id);")
+        );
+        assert!(
+            INDEX_HTML
+                .contains("toast(\"Channel removed\");\n          renderAll(\"delivery\", id);")
+        );
+    }
+
+    #[test]
+    fn mutation_status_is_announced_accessibly() {
+        assert!(INDEX_HTML.contains("role=\"status\""));
+        assert!(INDEX_HTML.contains("aria-live=\"polite\""));
+        assert!(INDEX_HTML.contains("announcer.textContent = msg"));
     }
 
     #[test]
